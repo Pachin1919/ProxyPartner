@@ -297,6 +297,53 @@ class Bootstrap(unittest.TestCase):
         self.assertEqual(read(state)["tasks"]["T00"]["head_sha"], integration)
         self.assertEqual(self.process("project", "T00")["phase"], "done")
 
+    def test_fast_forward_dependency_requires_matching_integration_projection(self):
+        self.start()
+        sha = self.candidate()
+        self.verified(sha)
+        self.cli("project")
+        state_path = self.root / "workflow/state.json"
+        candidate_entry = read(state_path)["tasks"]["T00"]
+        self.attach("coord")
+        git(self.root, "merge", "--ff-only", sha)
+        self.assertEqual(head(self.root), sha)
+        self.assertEqual(self.event("result", session="coord", sha=sha)["phase"], "verify_integration")
+
+        owner2 = self.root.parent / "owner2"
+        git(self.root, "worktree", "add", "-b", "fixture-owner2", str(owner2))
+        task = read(self.root / "workflow/tasks.json")["tasks"][1]
+        downstream = self.store / "t01.json"
+        write_json(downstream, {
+            **read(self.manifest), "task": "T01", "run": "downstream", "base_sha": sha,
+            "owner_worktree": str(owner2), "owner_branch": "fixture-owner2",
+            "allowed_paths": [task["scope"][0]],
+            "acceptance_commands": dict.fromkeys(task["required_checks"], "offline fixture"),
+        })
+        stale = read(state_path)
+        stale["tasks"]["T00"] = {**candidate_entry, "status": "done"}
+        write_json(state_path, stale)
+        self.assertIn("requires a terminal checkpoint", self.process("start", str(downstream), ok=False))
+        self.process("project", "T00")
+        self.assertEqual(read(state_path)["tasks"]["T00"]["status"], "verifying")
+
+        self.attach("integration-verify")
+        rel, log = self.verification(sha, session="integration-verify")
+        self.assertEqual(self.event("result", session="integration-verify", worktree=str(self.verifier),
+                                    receipt=rel, failure=None)["phase"], "done")
+        write_json(state_path, stale)
+        self.assertIn("projection does not match", self.process("start", str(downstream), ok=False))
+
+        self.process("project", "T00")
+        self.assertEqual(read(state_path)["tasks"]["T00"], {
+            "status": "done", "owner_run": "owner", "head_sha": sha, "receipt_path": rel,
+        })
+        log.write_text("tampered after projection", encoding="utf-8")
+        self.assertIn("evidence changed", self.process("start", str(downstream), ok=False))
+        log.write_text("synthetic check", encoding="utf-8")
+        result = self.process("start", str(downstream))
+        self.assertEqual(result["phase"], "owner")
+        self.assertEqual(result["dispatch"]["task"], "T01")
+
     def test_sol_model_policy_rejects_fallback_and_remote_operation(self):
         self.start()
         self.event("claim")

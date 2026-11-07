@@ -30,7 +30,7 @@ $python = "$venv\Scripts\python.exe"
 | persistent-resume | test_persistent_resume_real_subprocess |
 | dispatch-reconcile | test_dispatch_reconcile_owner_and_integration |
 | sha-evidence-gate | test_sha_evidence_gate |
-| state-projection | test_state_projection_rechecks_receipt_after_process_exit |
+| state-projection | test_state_projection_rechecks_receipt_after_process_exit、test_fast_forward_dependency_requires_matching_integration_projection |
 | sol-model-policy | test_sol_model_policy_*，另做一次有明确授权的真实 Sol 文件交接 |
 
 真实交接由统筹在隔离的验证仓库中使用以下文件协议，保存本次派工的模型、会话 ID、简报、恢复前后输出和回执。可从本目录用上述 Python 执行以下命令建立隔离夹具，交给真实 Sol 会话的是一次有范围的夹具任务。
@@ -73,6 +73,6 @@ $cli = 'F:\PachinStudio\ProxyPartner\runs\worktrees\langgraph-bootstrap\tools\or
 
 claim 后中断时，status 显示 reconcile。统筹先按原 dispatch.id 查实际会话或 Git 状态，再 attach 已有结果，或者在确认未启动后提交 not_started。集成要保留候选历史，允许快进或内容树与已验候选相同的本地合并提交。集成复验要求使用新的验收会话，以便即使快进 SHA 相同也能区分两份回执。候选或集成验证失败由原实现路径修复，限额按策略累计。replan 提升逻辑 cycle 并保留原根因和总轮次，在同一 SQLite thread 内恢复整条任务链。
 
-project 由统筹显式执行，原子更新现有 state.json 契约。遇到中断先用 status 核对，随后可重新 project。只有受检集成提交及其原始证据仍匹配时才输出 done。当前每次只接受一项活动任务，符合首条闭环的串行约束。所有 CLI 进程共用一个系统锁；统筹操作期间须保持唯一状态写入者。仓库工作树、流程配置或证据不匹配时会停在核对，保留原 SQLite 检查点。创建 runs/orchestrator/STOP 可禁止后续 CLI 调用。上限退出或流程版本不匹配需要统筹裁决，保持原数据库与回执。
+project 由统筹显式执行，原子更新现有 state.json 契约。遇到中断先用 status 核对，随后可重新 project。start 派发依赖任务前，核对上游的 done 投影、SQLite 终态检查点及该检查点记录的集成复验回执。快进集成时也须核对独立的集成回执。当前每次只接受一项活动任务，符合首条闭环的串行约束。所有 CLI 进程共用一个系统锁；统筹操作期间须保持唯一状态写入者。仓库工作树、流程配置或证据不匹配时会停在核对，保留原 SQLite 检查点。创建 runs/orchestrator/STOP 可禁止后续 CLI 调用。上限退出或流程版本不匹配需要统筹裁决，保持原数据库与回执。
 
 所用接口来自 LangGraph 官方的 [Graph API](https://docs.langchain.com/oss/python/langgraph/graph-api)、[持久化](https://docs.langchain.com/oss/python/langgraph/persistence) 和 [Interrupts](https://docs.langchain.com/oss/python/langgraph/interrupts)。应用代码无上游复制。
