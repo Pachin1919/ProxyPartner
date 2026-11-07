@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "targets": [
+    {
+      "id": "google",
+      "kind": "web",
+      "url": "https://www.google.com/"
+    },
+    {
+      "id": "youtube",
+      "kind": "web",
+      "url": "https://www.youtube.com/"
+    },
+    {
+      "id": "openai_api",
+      "kind": "api",
+      "url": "https://api.openai.com/v1/models"
+    },
+    {
+      "id": "chatgpt_web",
+      "kind": "web",
+      "url": "https://chatgpt.com/"
+    },
+    {
+      "id": "anthropic_api",
+      "kind": "api",
+      "url": "https://api.anthropic.com/v1/models",
+      "anthropic_version": "2026-10-21"
+    }
+  ]
+}
