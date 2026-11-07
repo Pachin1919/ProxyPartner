@@ -1,0 +1,10 @@
+flowchart TD
+  ready["读取检查点与实际Git；选择ready任务"] --> owner["唯一执行者；最小实现"]
+  owner --> verifier["独立验证当前SHA与资源预算"]
+  verifier --> result{"检查通过？"}
+  result -->|否| repair["返工；两轮无进展则重新规划"]
+  repair --> verifier
+  result -->|是| integrate["集成后复验；证据与检查点"]
+  integrate --> more{"还有ready任务与会话预算？"}
+  more -->|是| ready
+  more -->|否| pause["保存状态；停止"]

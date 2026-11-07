@@ -1,0 +1,8 @@
+name = "probe"
+description = "ProxyPartner Lite probe"
+model = "gpt-6.1-sol"
+sandbox_mode = "workspace-write"
+developer_instructions = """
+Read AGENTS.md, assigned brief and only relevant specifications. Implement bounded one-node Go dialing with existing mature protocol code. No hub/listener/TUN, subscription download or host switching. All process memory counts. Preserve cancellation and route uncertainty.
+One writer per worktree; independent verifier run. Do not change budgets, user files, global settings or remote repositories without authorization. Save commands, exit codes, SHA and artifact hashes.
+"""

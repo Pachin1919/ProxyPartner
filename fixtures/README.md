@@ -1,0 +1,1 @@
+All values here are synthetic test fixtures. TEST-NET IP addresses do not identify the user. Do not merge fixture observations into a real database or publish fixture performance as product performance.

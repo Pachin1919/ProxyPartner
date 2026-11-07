@@ -1,0 +1,6 @@
+# Project settings; verify loading in the actual Codex host before a task cycle.
+model = "gpt-6.1-sol"
+
+[agents]
+max_concurrent_threads_per_session = 3
+default_subagent_model = "gpt-6.1-sol"

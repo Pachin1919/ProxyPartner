@@ -1,0 +1,28 @@
+digraph G {
+graph [fontname="Noto Sans CJK SC", bgcolor="white", pad="0.3", nodesep="0.3", ranksep="0.45"]; node [shape=box, style="rounded", fontname="Noto Sans CJK SC", fontsize=12, margin="0.18,0.12"]; edge [fontname="Noto Sans CJK SC", fontsize=10];
+rankdir=TB; label="ProxyPartner Lite · 运行数据流（不接管代理）"; labelloc=t;
+host [label="已有 Clash Verge / Mihomo
+继续负责代理、订阅、路由"];
+read [label="C# 自动发现本机管道 / 回退loopback
+只读节点与历史；不重新填订阅"];
+normalize [label="有界流解析 → 类型投影 → 去重
+保留源时间、目标、方法和网络环境"];
+sql [shape=cylinder,label="SQLite · 批次写入
+有限历史、汇总与定期清理"];
+score [label="按网站独立评分 → 权重 → 关键目标惩罚
+只推荐，不切换节点"];
+ui [label="原生虚拟表格 + 托盘
+隐藏时不绘制；当前节点摘要"];
+missing [shape=diamond,label="缺数据且用户启用补测？"];
+config [label="只读宿主最终单节点配置
+权限/配置/路径/预算均可验证"];
+go [label="Go worker · 一次一个节点
+指定目标与IP echo；结束退出"];
+unknown [label="保持未知 / 覆盖不足
+不填零，不伪造"];
+host -> read -> normalize -> sql -> score -> ui;
+normalize -> missing;
+missing -> config [label="是"]; missing -> unknown [label="否"];
+config -> go [label="通过"]; config -> unknown [label="不满足"];
+go -> normalize [label="JSONL / stdio"];
+}

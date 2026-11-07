@@ -1,0 +1,16 @@
+{
+  "status": "PASS",
+  "local_markdown_links_checked": true,
+  "missing_local_links": [],
+  "task_count": 12,
+  "task_edges": 12,
+  "all_product_tasks_pending": true,
+  "source_entries": 24,
+  "diagram_groups": 4,
+  "runtime_binaries_bundled": false,
+  "font_files_bundled": false,
+  "upstream_full_source_files_bundled": false,
+  "powershell_runtime_validation": "NOT_EXECUTED",
+  "windows_product_and_memory_validation": "NOT_EXECUTED",
+  "note": "This audit checks the kit, not a working ProxyPartner Lite app."
+}

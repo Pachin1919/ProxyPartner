@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "unit": "MiB",
+  "bytes_per_mib": 1048576,
+  "all_product_processes": true,
+  "tray_p95_mib": 25,
+  "window_p95_mib": 35,
+  "hard_peak_private_mib": 40,
+  "tray_mean_cpu_one_core_pct": 0.5,
+  "soak_hours": 24,
+  "soak_median_growth_mib": 2,
+  "fixture_nodes": 100,
+  "stress_nodes": 1000,
+  "fixture_targets": 3,
+  "sampling_max_gap_seconds": 2.5,
+  "note": "These are acceptance targets; no product measurement exists in this kit. Sampled peak alone is insufficient."
+}

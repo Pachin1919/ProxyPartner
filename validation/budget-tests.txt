@@ -1,0 +1,28 @@
+=== RUN   TestValidCSV
+--- PASS: TestValidCSV (0.00s)
+=== RUN   TestBadHeader
+--- PASS: TestBadHeader (0.00s)
+=== RUN   TestNaNRejected
+--- PASS: TestNaNRejected (0.00s)
+=== RUN   TestNonmonotonic
+--- PASS: TestNonmonotonic (0.00s)
+=== RUN   TestTrayPassNotLifetimeClaim
+--- PASS: TestTrayPassNotLifetimeClaim (0.00s)
+=== RUN   TestTrayTarget
+--- PASS: TestTrayTarget (0.00s)
+=== RUN   TestWorkerTotalOverHardGate
+--- PASS: TestWorkerTotalOverHardGate (0.00s)
+=== RUN   TestRootExited
+--- PASS: TestRootExited (0.00s)
+=== RUN   TestCPU
+--- PASS: TestCPU (0.00s)
+=== RUN   TestShortRun
+--- PASS: TestShortRun (0.00s)
+=== RUN   TestSamplingGap
+--- PASS: TestSamplingGap (0.00s)
+=== RUN   TestBadPhaseAndDuration
+--- PASS: TestBadPhaseAndDuration (0.00s)
+=== RUN   TestQuantile
+--- PASS: TestQuantile (0.00s)
+PASS
+ok  	proxypartnerlite.local/budget	0.003s

@@ -1,0 +1,36 @@
+=== RUN   TestReady
+--- PASS: TestReady (0.00s)
+=== RUN   TestCycle
+--- PASS: TestCycle (0.00s)
+=== RUN   TestUnknownDependency
+--- PASS: TestUnknownDependency (0.00s)
+=== RUN   TestDoneNeedsEvidence
+--- PASS: TestDoneNeedsEvidence (0.00s)
+=== RUN   TestReceiptPass
+--- PASS: TestReceiptPass (0.00s)
+=== RUN   TestStaleSHA
+--- PASS: TestStaleSHA (0.00s)
+=== RUN   TestSameVerifier
+--- PASS: TestSameVerifier (0.00s)
+=== RUN   TestMissingCheck
+--- PASS: TestMissingCheck (0.00s)
+=== RUN   TestTamperedArtifact
+--- PASS: TestTamperedArtifact (0.00s)
+=== RUN   TestEscape
+--- PASS: TestEscape (0.00s)
+=== RUN   TestFailedExit
+--- PASS: TestFailedExit (0.00s)
+=== RUN   TestGraphEdges
+--- PASS: TestGraphEdges (0.00s)
+=== RUN   TestSymlinkEscape
+--- PASS: TestSymlinkEscape (0.00s)
+=== RUN   TestMissingExitCode
+--- PASS: TestMissingExitCode (0.00s)
+=== RUN   TestMissingCommand
+--- PASS: TestMissingCommand (0.00s)
+=== RUN   TestBlockedCannotPass
+--- PASS: TestBlockedCannotPass (0.00s)
+=== RUN   TestDoneWithIncompleteParent
+--- PASS: TestDoneWithIncompleteParent (0.00s)
+PASS
+ok  	proxypartnerlite.local/flow	0.008s

@@ -1,0 +1,8 @@
+name = "data"
+description = "ProxyPartner Lite data"
+model = "gpt-6.1-sol"
+sandbox_mode = "workspace-write"
+developer_instructions = """
+Read AGENTS.md, assigned brief and only relevant specifications. Implement typed observations, SQLite, bounded retention and explainable target scoring. Never equate unknown/idle with failure, or target IP with exit IP. Preserve dedup and method/provenance.
+One writer per worktree; independent verifier run. Do not change budgets, user files, global settings or remote repositories without authorization. Save commands, exit codes, SHA and artifact hashes.
+"""

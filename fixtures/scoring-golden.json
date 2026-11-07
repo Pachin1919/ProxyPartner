@@ -1,0 +1,174 @@
+{
+  "note": "Synthetic specification fixtures, not actual user measurements",
+  "cases": [
+    {
+      "name": "fast_all_targets",
+      "targets": [
+        {
+          "n": 10,
+          "ok": 10,
+          "mean_ms": 200,
+          "sd_ms": 0
+        },
+        {
+          "n": 10,
+          "ok": 10,
+          "mean_ms": 200,
+          "sd_ms": 0
+        },
+        {
+          "n": 10,
+          "ok": 10,
+          "mean_ms": 200,
+          "sd_ms": 0
+        }
+      ],
+      "weights": [
+        0.6,
+        0.3,
+        0.1
+      ],
+      "expected_score": 100.0
+    },
+    {
+      "name": "all_targets_1600ms",
+      "targets": [
+        {
+          "n": 10,
+          "ok": 10,
+          "mean_ms": 1600,
+          "sd_ms": 0
+        },
+        {
+          "n": 10,
+          "ok": 10,
+          "mean_ms": 1600,
+          "sd_ms": 0
+        },
+        {
+          "n": 10,
+          "ok": 10,
+          "mean_ms": 1600,
+          "sd_ms": 0
+        }
+      ],
+      "weights": [
+        0.6,
+        0.3,
+        0.1
+      ],
+      "expected_score": 82.5
+    },
+    {
+      "name": "critical_timeout_cap",
+      "targets": [
+        {
+          "n": 10,
+          "ok": 8,
+          "mean_ms": 200,
+          "sd_ms": 0
+        },
+        {
+          "n": 10,
+          "ok": 10,
+          "mean_ms": 200,
+          "sd_ms": 0
+        },
+        {
+          "n": 10,
+          "ok": 10,
+          "mean_ms": 200,
+          "sd_ms": 0
+        }
+      ],
+      "weights": [
+        0.6,
+        0.3,
+        0.1
+      ],
+      "expected_score": 20.0
+    },
+    {
+      "name": "critical_slow_cap",
+      "targets": [
+        {
+          "n": 10,
+          "ok": 10,
+          "mean_ms": 2800,
+          "sd_ms": 0
+        },
+        {
+          "n": 10,
+          "ok": 10,
+          "mean_ms": 200,
+          "sd_ms": 0
+        },
+        {
+          "n": 10,
+          "ok": 10,
+          "mean_ms": 200,
+          "sd_ms": 0
+        }
+      ],
+      "weights": [
+        0.6,
+        0.3,
+        0.1
+      ],
+      "expected_score": 40.0
+    },
+    {
+      "name": "missing_chatgpt",
+      "targets": [
+        {
+          "n": 10,
+          "ok": 10,
+          "mean_ms": 200,
+          "sd_ms": 0
+        },
+        null,
+        {
+          "n": 10,
+          "ok": 10,
+          "mean_ms": 200,
+          "sd_ms": 0
+        }
+      ],
+      "weights": [
+        0.6,
+        0.3,
+        0.1
+      ],
+      "expected_score": null
+    },
+    {
+      "name": "all_failures",
+      "targets": [
+        {
+          "n": 10,
+          "ok": 0,
+          "mean_ms": null,
+          "sd_ms": null
+        },
+        {
+          "n": 10,
+          "ok": 0,
+          "mean_ms": null,
+          "sd_ms": null
+        },
+        {
+          "n": 10,
+          "ok": 0,
+          "mean_ms": null,
+          "sd_ms": null
+        }
+      ],
+      "weights": [
+        0.6,
+        0.3,
+        0.1
+      ],
+      "expected_score": 0.0
+    }
+  ]
+}

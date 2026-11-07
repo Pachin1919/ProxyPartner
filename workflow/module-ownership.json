@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "task_source": "workflow/tasks.json",
+  "policy_source": "workflow/orchestrator.policy.json",
+  "roles": {
+    "coordinator": "workflow/handoff/README.md",
+    "frontend": "workflow/handoff/FRONTEND.zh-CN.md",
+    "backend": "workflow/handoff/BACKEND.zh-CN.md",
+    "algorithm": "workflow/handoff/ALGORITHM.zh-CN.md",
+    "testing": "workflow/handoff/TESTING.zh-CN.md"
+  },
+  "bootstrap": {
+    "lead": "backend",
+    "verifier": "testing",
+    "scope": ["tools/orchestrator/"],
+    "checks_key": "bootstrap_checks"
+  },
+  "task_leads": {
+    "T00": "coordinator",
+    "T01": "testing",
+    "T02": "backend",
+    "T03": "frontend",
+    "T04": "backend",
+    "T05": "backend",
+    "T06": "backend",
+    "T07": "frontend",
+    "T08": "backend",
+    "T09": "backend",
+    "T10": "backend",
+    "T11": "testing"
+  },
+  "patch_handoffs": [
+    {
+      "task_id": "T07",
+      "producer": "algorithm",
+      "recipient": "frontend",
+      "scope": ["src/ProxyPartnerLite/Scoring/", "tests/scoring/"],
+      "order": "producer_then_recipient"
+    },
+    {
+      "task_id": "T09",
+      "producer": "algorithm",
+      "recipient": "backend",
+      "scope": ["src/ProxyPartnerLite/Domain/", "tests/domain/"],
+      "order": "producer_then_recipient"
+    }
+  ],
+  "verification": {
+    "default_role": "testing",
+    "separate_session_and_worktree": true
+  }
+}

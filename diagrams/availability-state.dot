@@ -1,0 +1,20 @@
+digraph G {
+graph [fontname="Noto Sans CJK SC", bgcolor="white", pad="0.3", nodesep="0.3", ranksep="0.45"]; node [shape=box, style="rounded", fontname="Noto Sans CJK SC", fontsize=12, margin="0.18,0.12"]; edge [fontname="Noto Sans CJK SC", fontsize=10];
+rankdir=LR; label="异常状态：只解释观察，不猜真实断网"; labelloc=t;
+unknown [label="Unknown
+缺少有效观察"];
+healthy [label="Observed healthy
+新成功样本"];
+suspect [label="Suspected failure
+1个新失败"];
+failed [label="Confirmed incident
+2个新失败"];
+recover [label="Recovery observed
+2个新成功"];
+gap [label="Observation gap
+睡眠 / 源失联 / 停监控"];
+unknown -> healthy; healthy -> suspect; suspect -> healthy [label="新成功"];
+suspect -> failed [label="再次失败"]; failed -> recover [label="有效恢复"];
+recover -> healthy; healthy -> gap; failed -> gap;
+gap -> unknown [label="恢复观察，新区间"];
+}

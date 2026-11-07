@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "observation_id": "fixture-ip-1",
+  "node_id": "fixture-jp",
+  "node_revision": "fixture-rev1",
+  "source_instance_id": "fixture-host",
+  "source_epoch": 1,
+  "network_context_id": "fixture-network",
+  "endpoint_id": "fixture-echo",
+  "observed_at_ms": 1793782800000,
+  "address_family": 4,
+  "ip": "192.0.2.10",
+  "route_state": "verified"
+}

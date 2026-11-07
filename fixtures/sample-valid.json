@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "sample_id": "fixture-sample-1",
+  "source_instance_id": "fixture-host",
+  "source_epoch": 1,
+  "node_id": "fixture-jp",
+  "node_revision": "fixture-rev1",
+  "target_id": "openai_api",
+  "target_revision": 1,
+  "network_context_id": "fixture-network",
+  "observed_at_ms": 1793782800000,
+  "collected_at_ms": 1793782800050,
+  "source_kind": "isolated_probe",
+  "measurement_kind": "cold_http_ttfb",
+  "outcome": "ok",
+  "latency_ms": 620,
+  "http_status": 401,
+  "service_state": "unverified",
+  "route_state": "verified"
+}

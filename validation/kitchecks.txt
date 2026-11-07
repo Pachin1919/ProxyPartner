@@ -1,0 +1,26 @@
+test_batch_delete_max500 (__main__.DatabaseTests.test_batch_delete_max500) ... ok
+test_dedup_key_unique (__main__.DatabaseTests.test_dedup_key_unique) ... ok
+test_insert_and_query (__main__.DatabaseTests.test_insert_and_query) ... ok
+test_integrity (__main__.DatabaseTests.test_integrity) ... ok
+test_ip_blob_validation (__main__.DatabaseTests.test_ip_blob_validation) ... ok
+test_sqlite_strict_and_checks (__main__.DatabaseTests.test_sqlite_strict_and_checks) ... ok
+test_target_revision_foreign_key (__main__.DatabaseTests.test_target_revision_foreign_key) ... ok
+test_unaggregated_not_deleted (__main__.DatabaseTests.test_unaggregated_not_deleted) ... ok
+test_all_json_toml (__main__.PackageTests.test_all_json_toml) ... ok
+test_bad_type_rejected (__main__.PackageTests.test_bad_type_rejected) ... ok
+test_budget_consistency (__main__.PackageTests.test_budget_consistency) ... ok
+test_golden_scores (__main__.PackageTests.test_golden_scores) ... ok
+test_good_sample (__main__.PackageTests.test_good_sample) ... ok
+test_ip_family_format (__main__.PackageTests.test_ip_family_format) ... ok
+test_negative_latency_rejected (__main__.PackageTests.test_negative_latency_rejected) ... ok
+test_product_tasks_pending (__main__.PackageTests.test_product_tasks_pending) ... ok
+test_schemas_are_valid (__main__.PackageTests.test_schemas_are_valid) ... ok
+test_source_manifest (__main__.PackageTests.test_source_manifest) ... ok
+test_success_requires_latency (__main__.PackageTests.test_success_requires_latency) ... ok
+test_timeout_null_allowed (__main__.PackageTests.test_timeout_null_allowed) ... ok
+test_unknown_field_rejected (__main__.PackageTests.test_unknown_field_rejected) ... ok
+
+----------------------------------------------------------------------
+Ran 21 tests in 0.076s
+
+OK

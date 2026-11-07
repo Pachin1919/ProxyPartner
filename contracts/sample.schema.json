@@ -1,0 +1,156 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:proxypartnerlite:sample:v1",
+  "title": "Normalized sample — not raw host JSON",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "sample_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 96
+    },
+    "source_instance_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "source_epoch": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "node_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "node_revision": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 96
+    },
+    "target_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "target_revision": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "network_context_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "observed_at_ms": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "collected_at_ms": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "source_kind": {
+      "enum": [
+        "native_history",
+        "isolated_probe",
+        "current_route_probe"
+      ]
+    },
+    "measurement_kind": {
+      "enum": [
+        "native_http_delay",
+        "cold_http_ttfb"
+      ]
+    },
+    "outcome": {
+      "enum": [
+        "ok",
+        "timeout",
+        "dns_error",
+        "connect_error",
+        "tls_error",
+        "read_error",
+        "unknown_native_failure",
+        "cancelled",
+        "source_unavailable",
+        "resource_limit"
+      ]
+    },
+    "latency_ms": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 0,
+      "maximum": 300000
+    },
+    "http_status": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 100,
+      "maximum": 599
+    },
+    "service_state": {
+      "enum": [
+        "unverified",
+        "blocked_or_challenged",
+        "rate_limited",
+        "server_error",
+        "not_applicable"
+      ]
+    },
+    "route_state": {
+      "enum": [
+        "verified",
+        "route_unverified",
+        "current_route",
+        "native_reported"
+      ]
+    }
+  },
+  "required": [
+    "schema_version",
+    "sample_id",
+    "source_instance_id",
+    "source_epoch",
+    "node_id",
+    "node_revision",
+    "target_id",
+    "target_revision",
+    "network_context_id",
+    "observed_at_ms",
+    "collected_at_ms",
+    "source_kind",
+    "measurement_kind",
+    "outcome",
+    "latency_ms",
+    "http_status",
+    "service_state",
+    "route_state"
+  ],
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "outcome": {
+            "const": "ok"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "latency_ms": {
+            "type": "integer"
+          }
+        }
+      }
+    }
+  ]
+}

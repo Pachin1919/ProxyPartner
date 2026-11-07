@@ -1,0 +1,12 @@
+flowchart TD
+  host["已有Verge/Mihomo"] --> read["C#自动发现；只读节点与历史"]
+  read --> normalize["类型投影和去重"]
+  normalize --> db["SQLite批量保存和清理"]
+  db --> score["网站权重与推荐解释"]
+  score --> ui["原生轻量表格；隐藏不绘制"]
+  normalize --> missing{"缺数据且启用补测？"}
+  missing -->|是| check["宿主单节点配置、权限、路径、预算检查"]
+  check -->|通过| worker["Go单节点探测；结束退出"]
+  worker --> normalize
+  missing -->|否| unknown["未知或覆盖不足"]
+  check -->|不满足| unknown

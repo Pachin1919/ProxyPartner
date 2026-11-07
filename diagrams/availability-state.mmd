@@ -1,0 +1,10 @@
+flowchart LR
+  unknown["未知"] --> healthy["观察正常"]
+  healthy --> suspect["一次新失败"]
+  suspect -->|再次失败| incident["确认异常"]
+  suspect -->|新成功| healthy
+  incident -->|两次新成功| recovery["观察恢复"]
+  recovery --> healthy
+  healthy --> gap["睡眠/源失联/停监控：观察空档"]
+  incident --> gap
+  gap --> unknown

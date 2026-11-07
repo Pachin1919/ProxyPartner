@@ -1,0 +1,6 @@
+# Project-only policy requested on 2026-11-06. No automatic model fallback.
+model = "gpt-6.1-sol"
+
+[agents]
+max_concurrent_threads_per_session = 3
+default_subagent_model = "gpt-6.1-sol"

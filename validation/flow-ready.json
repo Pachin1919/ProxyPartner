@@ -1,0 +1,21 @@
+[
+  {
+    "id": "T00",
+    "title": "环境与契约锁定",
+    "depends_on": [],
+    "role": "coordinator",
+    "scope": [
+      "spec/",
+      "workflow/",
+      "contracts/",
+      "scripts/"
+    ],
+    "goal": "核对Windows/SDK/AOT/宿主版本、许可证和性能口径，冻结资源预算。",
+    "required_checks": [
+      "environment",
+      "license-lock",
+      "budget-contract"
+    ],
+    "evidence_rule": "每项需当前SHA、真实命令/退出码/证据SHA256；Windows或实网未运行则BLOCKED。内存超过门槛不能擅改预算。"
+  }
+]

@@ -1,0 +1,25 @@
+digraph G {
+graph [fontname="Noto Sans CJK SC", bgcolor="white", pad="0.3", nodesep="0.3", ranksep="0.45"]; node [shape=box, style="rounded", fontname="Noto Sans CJK SC", fontsize=12, margin="0.18,0.12"]; edge [fontname="Noto Sans CJK SC", fontsize=10];
+rankdir=TB; label="ProxyPartner Lite · 开发与验证循环"; labelloc=t;
+ready [label="读取 checkpoint / 当前 Git
+选择依赖已完成的任务"];
+owner [label="唯一 Owner · 独立 worktree
+最小实现 + 测试 + 资源测量"];
+verify [label="另一验证者检出同一 SHA
+行为 + 只读边界 + 全进程预算"];
+pass [shape=diamond,label="全部适用检查通过？"];
+repair [label="原 Owner 返工
+同根因最多两轮，新 SHA 重验"];
+block [label="重新拆分 / 方案调整 / BLOCKED
+不降低预算，不造证据"];
+merge [label="本地集成 → 集成 SHA 回归
+证据哈希 / 状态 / checkpoint"];
+next [shape=diamond,label="还有 ready 任务与会话预算？"];
+stop [label="保存检查点并停止
+不承诺自动后台继续"];
+ready -> owner -> verify -> pass;
+pass -> merge [label="是"]; pass -> repair [label="否"];
+repair -> verify [label="有新修复"]; repair -> block [label="两轮无进展"];
+merge -> next; next -> ready [label="是"]; next -> stop [label="否"];
+block -> stop;
+}

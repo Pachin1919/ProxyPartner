@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "implementation_status": "DESIGNED_NOT_IMPLEMENTED",
+  "model": "gpt-6.1-sol",
+  "automatic_model_fallback": false,
+  "engine": "langgraph-python-local",
+  "product_runtime_dependency": false,
+  "task_source": "workflow/tasks.json",
+  "state_projection": "workflow/state.json",
+  "receipt_schema": "contracts/verification-receipt.schema.json",
+  "checkpoint_database": "runs/orchestrator/checkpoints.sqlite",
+  "first_slice_through": "T07",
+  "first_slice_parallel_writers": 1,
+  "max_parallel_writers": 2,
+  "max_parallel_verifiers": 1,
+  "max_same_cause_repairs": 2,
+  "max_candidate_verifications_per_cycle": 6,
+  "max_replans_per_task": 1,
+  "max_verification_rounds_per_task": 12,
+  "recursion_limit_per_cycle": 64,
+  "readonly_transport_max_retries": 1,
+  "automatic_mutation_retries": 0,
+  "background_model_calls": false,
+  "remote_publication_requires_authorization": true,
+  "bootstrap_checks": [
+    "runtime-lock", "graph-routing", "repair-breakout", "persistent-resume",
+    "dispatch-reconcile", "sha-evidence-gate", "state-projection", "sol-model-policy"
+  ]
+}

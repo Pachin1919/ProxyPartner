@@ -1,0 +1,105 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "observation_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 96
+    },
+    "node_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "node_revision": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 96
+    },
+    "source_instance_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "source_epoch": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "network_context_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "endpoint_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "observed_at_ms": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "address_family": {
+      "enum": [
+        4,
+        6
+      ]
+    },
+    "ip": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 45
+    },
+    "route_state": {
+      "enum": [
+        "verified",
+        "route_unverified",
+        "current_route"
+      ]
+    }
+  },
+  "required": [
+    "schema_version",
+    "observation_id",
+    "node_id",
+    "node_revision",
+    "source_instance_id",
+    "source_epoch",
+    "network_context_id",
+    "endpoint_id",
+    "observed_at_ms",
+    "address_family",
+    "ip",
+    "route_state"
+  ],
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "address_family": {
+            "const": 4
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "ip": {
+            "format": "ipv4"
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "ip": {
+            "format": "ipv6"
+          }
+        }
+      }
+    }
+  ]
+}

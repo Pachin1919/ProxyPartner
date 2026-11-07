@@ -1,0 +1,271 @@
+{
+  "schema_version": 1,
+  "name": "ProxyPartner Lite v3 — memory-first / passive-first",
+  "max_parallel_writers": 2,
+  "max_same_cause_repairs": 2,
+  "tasks": [
+    {
+      "id": "T00",
+      "title": "环境与契约锁定",
+      "depends_on": [],
+      "role": "coordinator",
+      "scope": [
+        "spec/",
+        "workflow/",
+        "contracts/",
+        "scripts/"
+      ],
+      "goal": "核对Windows/SDK/AOT/宿主版本、许可证和性能口径，冻结资源预算。",
+      "required_checks": [
+        "environment",
+        "license-lock",
+        "budget-contract"
+      ],
+      "evidence_rule": "每项需当前SHA、真实命令/退出码/证据SHA256；Windows或实网未运行则BLOCKED。内存超过门槛不能擅改预算。"
+    },
+    {
+      "id": "T01",
+      "title": "进程树性能基准与采样",
+      "depends_on": [
+        "T00"
+      ],
+      "role": "verifier",
+      "scope": [
+        "tests/perf/",
+        "scripts/",
+        "tools/budget/"
+      ],
+      "goal": "建立PrivateBytes/CPU与Job Object峰值验证，先用有子进程夹具证明不漏算。",
+      "required_checks": [
+        "process-tree",
+        "short-child-peak",
+        "baseline-format"
+      ],
+      "evidence_rule": "每项需当前SHA、真实命令/退出码/证据SHA256；Windows或实网未运行则BLOCKED。内存超过门槛不能擅改预算。"
+    },
+    {
+      "id": "T02",
+      "title": "自动只读接入宿主",
+      "depends_on": [
+        "T00"
+      ],
+      "role": "collector",
+      "scope": [
+        "src/ProxyPartnerLite/Discovery/",
+        "src/ProxyPartnerLite/Host/",
+        "tests/host/"
+      ],
+      "goal": "优先named pipe；失败才读授权loopback配置；不输入订阅URL。",
+      "required_checks": [
+        "pipe-handshake",
+        "fallback-auth",
+        "readonly-routes",
+        "no-secrets"
+      ],
+      "evidence_rule": "每项需当前SHA、真实命令/退出码/证据SHA256；Windows或实网未运行则BLOCKED。内存超过门槛不能擅改预算。"
+    },
+    {
+      "id": "T03",
+      "title": "小窗口与内存一票否决",
+      "depends_on": [
+        "T01",
+        "T02"
+      ],
+      "role": "desktop",
+      "scope": [
+        "src/ProxyPartnerLite/Desktop/",
+        "tests/ui/",
+        "tests/perf/",
+        "build/"
+      ],
+      "goal": "C#AOT+Win32虚拟表格与最小Avalonia候选公平比较；只留符合25/35/40预算的一套。",
+      "required_checks": [
+        "aot-build",
+        "100-node-ui",
+        "dpi-tray",
+        "memory-gate"
+      ],
+      "evidence_rule": "每项需当前SHA、真实命令/退出码/证据SHA256；Windows或实网未运行则BLOCKED。内存超过门槛不能擅改预算。"
+    },
+    {
+      "id": "T04",
+      "title": "类型与节点身份",
+      "depends_on": [
+        "T03"
+      ],
+      "role": "data",
+      "scope": [
+        "src/ProxyPartnerLite/Domain/",
+        "contracts/",
+        "tests/domain/",
+        "fixtures/"
+      ],
+      "goal": "强类型JSON、重复源历史、provider节点身份、目标与方法分开。",
+      "required_checks": [
+        "schema-roundtrip",
+        "dedup",
+        "node-revision",
+        "unknown-not-zero"
+      ],
+      "evidence_rule": "每项需当前SHA、真实命令/退出码/证据SHA256；Windows或实网未运行则BLOCKED。内存超过门槛不能擅改预算。"
+    },
+    {
+      "id": "T05",
+      "title": "SQLite与限额清理",
+      "depends_on": [
+        "T04"
+      ],
+      "role": "data",
+      "scope": [
+        "src/ProxyPartnerLite/Storage/",
+        "storage/",
+        "tests/storage/"
+      ],
+      "goal": "单写入与有界队列、持久去重、事务批次、汇总/保留/空间回收。",
+      "required_checks": [
+        "migration",
+        "retention-watermark",
+        "disk-pressure",
+        "aggregate-merge",
+        "memory-gate"
+      ],
+      "evidence_rule": "每项需当前SHA、真实命令/退出码/证据SHA256；Windows或实网未运行则BLOCKED。内存超过门槛不能擅改预算。"
+    },
+    {
+      "id": "T06",
+      "title": "被动采集完整闭环",
+      "depends_on": [
+        "T05"
+      ],
+      "role": "collector",
+      "scope": [
+        "src/ProxyPartnerLite/Host/",
+        "src/ProxyPartnerLite/Scheduler/",
+        "tests/host/",
+        "tests/integration/"
+      ],
+      "goal": "真实宿主→去重→SQLite→表格；无活跃连接/睡眠/源断开区别显示。",
+      "required_checks": [
+        "live-passive",
+        "sleep-gap",
+        "no-live-healthcheck",
+        "restart-persistence",
+        "memory-gate"
+      ],
+      "evidence_rule": "每项需当前SHA、真实命令/退出码/证据SHA256；Windows或实网未运行则BLOCKED。内存超过门槛不能擅改预算。"
+    },
+    {
+      "id": "T07",
+      "title": "网站权重和解释UI",
+      "depends_on": [
+        "T06"
+      ],
+      "role": "desktop",
+      "scope": [
+        "src/ProxyPartnerLite/Scoring/",
+        "src/ProxyPartnerLite/Desktop/",
+        "tests/scoring/",
+        "fixtures/"
+      ],
+      "goal": "依golden fixtures实现独立target加权/cap/覆盖不足；不自动切代理。",
+      "required_checks": [
+        "score-golden",
+        "critical-cap",
+        "missing-target",
+        "no-autoswitch",
+        "memory-gate"
+      ],
+      "evidence_rule": "每项需当前SHA、真实命令/退出码/证据SHA256；Windows或实网未运行则BLOCKED。内存超过门槛不能擅改预算。"
+    },
+    {
+      "id": "T08",
+      "title": "Go独立拨号资源验证",
+      "depends_on": [
+        "T07"
+      ],
+      "role": "probe",
+      "scope": [
+        "engine/",
+        "tests/probe/",
+        "tests/perf/"
+      ],
+      "goal": "只读宿主最终单节点配置；不重拉订阅；指定节点dialer无监听器，全进程40MiB。",
+      "required_checks": [
+        "no-resubscribe",
+        "specified-node",
+        "no-listeners",
+        "cancel-exit",
+        "combined-memory"
+      ],
+      "evidence_rule": "每项需当前SHA、真实命令/退出码/证据SHA256；Windows或实网未运行则BLOCKED。内存超过门槛不能擅改预算。"
+    },
+    {
+      "id": "T09",
+      "title": "网站探测和IP异常观察",
+      "depends_on": [
+        "T08"
+      ],
+      "role": "probe",
+      "scope": [
+        "engine/",
+        "src/ProxyPartnerLite/Domain/",
+        "src/ProxyPartnerLite/Scheduler/",
+        "tests/probe/",
+        "tests/domain/"
+      ],
+      "goal": "预算轮转补测、HTTP分类、IP与空档状态机；未验证路径不得混排。",
+      "required_checks": [
+        "http-classification",
+        "ip-pairs",
+        "incident-bounds",
+        "request-budget",
+        "tun-path"
+      ],
+      "evidence_rule": "每项需当前SHA、真实命令/退出码/证据SHA256；Windows或实网未运行则BLOCKED。内存超过门槛不能擅改预算。"
+    },
+    {
+      "id": "T10",
+      "title": "整合真实评分与收缩复核",
+      "depends_on": [
+        "T09"
+      ],
+      "role": "collector",
+      "scope": [
+        "src/ProxyPartnerLite/",
+        "tests/integration/",
+        "tests/perf/"
+      ],
+      "goal": "真实测量进入用途排名，清理/重启/休眠后结果一致，无新增管理功能。",
+      "required_checks": [
+        "end-to-end",
+        "readonly-regression",
+        "1000-nodes",
+        "combined-memory"
+      ],
+      "evidence_rule": "每项需当前SHA、真实命令/退出码/证据SHA256；Windows或实网未运行则BLOCKED。内存超过门槛不能擅改预算。"
+    },
+    {
+      "id": "T11",
+      "title": "24小时与便携发行",
+      "depends_on": [
+        "T10"
+      ],
+      "role": "verifier",
+      "scope": [
+        "tests/perf/",
+        "build/",
+        "docs/release/",
+        "third_party/"
+      ],
+      "goal": "原生Release24h、干净Windows启动、出处许可/源码/校验和，拒假完成。",
+      "required_checks": [
+        "soak24h",
+        "clean-windows",
+        "no-runtime-node",
+        "release-notices",
+        "no-secret-export"
+      ],
+      "evidence_rule": "每项需当前SHA、真实命令/退出码/证据SHA256；Windows或实网未运行则BLOCKED。内存超过门槛不能擅改预算。"
+    }
+  ]
+}

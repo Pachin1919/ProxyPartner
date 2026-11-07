@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "profile_id": "ai-work-network-v1",
+  "claim": "network-only; no API inference or authenticated ChatGPT use measured",
+  "targets": [
+    {
+      "id": "openai_api",
+      "url": "https://api.openai.com/v1/models",
+      "weight": 0.6,
+      "critical": true,
+      "expected_network_status": [
+        401
+      ],
+      "service_verified": false
+    },
+    {
+      "id": "chatgpt_web",
+      "url": "https://chatgpt.com/",
+      "weight": 0.3,
+      "critical": true,
+      "restricted_status": [
+        403
+      ],
+      "service_verified": false
+    },
+    {
+      "id": "github",
+      "url": "https://github.com/",
+      "weight": 0.1,
+      "critical": false,
+      "expected_network_status": [
+        200
+      ],
+      "service_verified": false
+    }
+  ],
+  "timeout_ms": 10000,
+  "max_body_bytes": 65536,
+  "max_concurrent_requests": 1,
+  "automatic_external_probes_enabled": false,
+  "max_requests_per_minute": 6,
+  "max_requests_per_hour": 360,
+  "follow_redirects": false
+}

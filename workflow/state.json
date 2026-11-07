@@ -1,0 +1,77 @@
+{
+  "schema_version": 1,
+  "tasks": {
+    "T00": {
+      "status": "pending",
+      "owner_run": "",
+      "head_sha": "",
+      "receipt_path": ""
+    },
+    "T01": {
+      "status": "pending",
+      "owner_run": "",
+      "head_sha": "",
+      "receipt_path": ""
+    },
+    "T02": {
+      "status": "pending",
+      "owner_run": "",
+      "head_sha": "",
+      "receipt_path": ""
+    },
+    "T03": {
+      "status": "pending",
+      "owner_run": "",
+      "head_sha": "",
+      "receipt_path": ""
+    },
+    "T04": {
+      "status": "pending",
+      "owner_run": "",
+      "head_sha": "",
+      "receipt_path": ""
+    },
+    "T05": {
+      "status": "pending",
+      "owner_run": "",
+      "head_sha": "",
+      "receipt_path": ""
+    },
+    "T06": {
+      "status": "pending",
+      "owner_run": "",
+      "head_sha": "",
+      "receipt_path": ""
+    },
+    "T07": {
+      "status": "pending",
+      "owner_run": "",
+      "head_sha": "",
+      "receipt_path": ""
+    },
+    "T08": {
+      "status": "pending",
+      "owner_run": "",
+      "head_sha": "",
+      "receipt_path": ""
+    },
+    "T09": {
+      "status": "pending",
+      "owner_run": "",
+      "head_sha": "",
+      "receipt_path": ""
+    },
+    "T10": {
+      "status": "pending",
+      "owner_run": "",
+      "head_sha": "",
+      "receipt_path": ""
+    },
+    "T11": {
+      "status": "pending",
+      "owner_run": "",
+      "head_sha": "",
+      "receipt_path": ""
+    }
+  }
+}
