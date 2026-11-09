@@ -223,6 +223,9 @@ public sealed unsafe partial class DesktopApp
                 }
                 return 0;
             case WmDpiChanged: SizeAux(window, (Rect*)lParam); return 0;
+            case WmSize when window == settingsWindow && settingsFont != 0:
+                ScrollSettings(settingsScroll);
+                return 0;
             case 0x115 when window == settingsWindow && lParam == 0: // window WM_VSCROLL
                 Rect viewport;
                 GetClientRect(window, &viewport);

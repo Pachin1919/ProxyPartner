@@ -22,6 +22,14 @@ function Read-Weights([IntPtr]$Settings) {
 function Target-Count([IntPtr]$Settings) {
     Send-Number ([DesktopWindows]::GetDlgItem($Settings,220)) 0x18B
 }
+function Limit-SettingsHeight([IntPtr]$Settings, [int]$Height) {
+    $bounds = [DesktopWindows+Rect]::new()
+    Assert ([DesktopWindows]::GetWindowRect($Settings,[ref]$bounds)) 'Settings bounds unavailable.'
+    if ($bounds.Bottom-$bounds.Top -gt $Height) {
+        Assert ([DesktopWindows]::MoveWindow($Settings,$bounds.Left,$bounds.Top,
+            ($bounds.Right-$bounds.Left),$Height,$true)) 'Could not constrain the test window.'
+    }
+}
 function Select-FirstTarget([IntPtr]$Settings) {
     $targets = [DesktopWindows]::GetDlgItem($Settings,220)
     Assert ((Send-Number $targets 0x186 0) -eq 0) 'Target could not be selected.'
@@ -71,6 +79,10 @@ Assert ([DesktopWindows]::MoveWindow($ui.panel,$small.Left+8,$small.Top+8,($smal
 $settings = Open-Auxiliary 124
 Assert ([DesktopWindows]::GetDpiForWindow($ui.panel) -eq 96 -and
     [DesktopWindows]::GetDpiForWindow($settings) -eq 96) 'Small physical display should be 96 DPI.'
+$summary.physical_small = @{ work_width=$small.Right-$small.Left; work_height=$small.Bottom-$small.Top
+    settings=Save-Window $ui.id $settings $ui.exe 'settings-physical-96' }
+# The display resolution can change. Replay the prior 487 px window cap when its work area is taller.
+Limit-SettingsHeight $settings 487
 $null = Send-Number $settings 0x115 6
 $summary.small_zh_top = Save-Window $ui.id $settings $ui.exe 'settings-small-top'
 Assert (![DesktopWindows]::ControlInClient($settings,227)) "Small display must exercise scrolling. Work area $($small.Right-$small.Left)x$($small.Bottom-$small.Top), Settings $($summary.small_zh_top.width)x$($summary.small_zh_top.height)."
@@ -133,11 +145,17 @@ $settings = Open-Auxiliary 124
 Assert ((Read-Weights $settings) -eq '70,20,10,50,40,10' -and (Target-Count $settings) -eq 1) 'Weights or target did not persist.'
 Assert ((Send-Number ([DesktopWindows]::GetDlgItem($settings,201)) 0xF0) -eq 1 -and
     (Send-Number ([DesktopWindows]::GetDlgItem($settings,202)) 0xF0) -eq 1) 'Theme or language toggle did not persist.'
+$summary.saved_en = Save-Window $ui.id $settings $ui.exe 'settings-en'
+Limit-SettingsHeight $settings 730
+$null = Send-Number $settings 0x115 6
+Assert (![DesktopWindows]::ControlInClient($settings,227)) 'High-DPI test must exercise scrolling.'
 $null = Send-Number $settings 0x115 7
 Assert ([DesktopWindows]::GetDpiForWindow($settings) -eq 144 -and
     [DesktopWindows]::ControlInClient($settings,227) -and [DesktopWindows]::ControlInClient($settings,221)) 'High-DPI Settings controls are clipped.'
-$summary.saved_en = Save-Window $ui.id $settings $ui.exe 'settings-en'
+$summary.large_en_scrolled = Save-Window $ui.id $settings $ui.exe 'settings-144-scrolled'
+$null = Send-Number $settings 0x115 6
 Write-Control $settings 213 '51'
+$null = Send-Number $settings 0x115 7
 Click-Control $settings 227
 Assert ([DesktopWindows]::IsWindow($settings) -and
     (Get-FileHash -LiteralPath $settingsFile).Hash -eq $summary.saved_sha256) 'Invalid target weights overwrote saved preferences.'
