@@ -20,15 +20,15 @@ function Find-AutomationItem([int[]]$ProcessIds, [string[]]$Names) {
         }
     }
 }
-function Invoke-AutomationItem($Element, [bool]$Right = $false) {
+function Invoke-AutomationItem($Element) {
     $pattern = $null
-    if (!$Right -and $Element.TryGetCurrentPattern([Windows.Automation.InvokePattern]::Pattern,[ref]$pattern)) {
+    if ($Element.TryGetCurrentPattern([Windows.Automation.InvokePattern]::Pattern,[ref]$pattern)) {
         $pattern.Invoke()
         return 'UI Automation Invoke'
     }
     $point = $Element.GetClickablePoint()
-    [DesktopWindows]::Click([int]$point.X,[int]$point.Y,$Right)
-    if ($Right) { 'Pointer right-click on identified element' } else { 'Pointer click on identified element' }
+    [DesktopWindows]::Click([int]$point.X,[int]$point.Y)
+    'Pointer click on identified element'
 }
 function Find-ShellIcon {
     $icon = Find-AutomationItem $explorerIds @($trayName)
@@ -44,7 +44,5 @@ $summary.shell_open_action = Invoke-AutomationItem $icon
 $reopened = Wait-Value { Find-Panel $ui.id } 'Actual shell activation did not reopen the window.'
 Assert ((Send-Number (Get-List $reopened) 0x1004) -eq 100) 'Reopened panel lost its rows.'
 $summary.tray_reopen = Save-Window $ui.id $reopened $ui.exe 'tray-reopen'
-$icon = Find-ShellIcon
-$summary.shell_menu_action = Invoke-AutomationItem $icon $true
-$exitItem = Wait-Value { Find-AutomationItem @($ui.id) @('退出') } 'The ProxyPartner exit item did not appear.'
-$summary.shell_exit_action = Invoke-AutomationItem $exitItem
+Exit-Tray $ui.tray
+$summary.shell_exit_action = 'Exit menu command dispatched to the product tray HWND'

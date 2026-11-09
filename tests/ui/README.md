@@ -15,9 +15,10 @@ restrictions can block the MSBuild task host. The sampling and listener checks
 require CIM access. The test entry saves JSON, command/exit records, window-only
 PrintWindow PNGs and hashes. The 125% and 200% cases send the native DPI message
 to the verified product PID and inspect the resized column, while 100% and 150%
-use the physical displays. The DPI/tray check exercises the real Explorer
-notification icon and menu. The resource stress loop sends the equivalent
-callback and command to the verified product tray HWND. For a manual pass,
+use the physical displays. The DPI/tray check opens via the real Explorer
+notification icon and dispatches the Exit menu command to the verified product
+tray HWND. The resource stress loop sends the equivalent open callback to that
+HWND. For a manual pass,
 double-click the published EXE, use Tab and End,
 close the window, open the ProxyPartner tray icon (check overflow), then
 right-click that icon and choose 退出.

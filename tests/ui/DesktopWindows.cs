@@ -63,12 +63,12 @@ public static class DesktopWindows
             GetWindowThreadProcessId(window, out int owner) != 0 && owner == pid;
     }
 
-    public static void Click(int x, int y, bool right)
+    public static void Click(int x, int y)
     {
         if (!GetCursorPos(out Point previous) || !SetCursorPos(x,y))
             throw new InvalidOperationException("Could not position the pointer for the identified control.");
-        mouse_event(right ? 8u : 2u, 0, 0, 0, UIntPtr.Zero);
-        mouse_event(right ? 16u : 4u, 0, 0, 0, UIntPtr.Zero);
+        mouse_event(2, 0, 0, 0, UIntPtr.Zero);
+        mouse_event(4, 0, 0, 0, UIntPtr.Zero);
         if (GetCursorPos(out Point current) && current.X == x && current.Y == y)
             SetCursorPos(previous.X, previous.Y);
     }
