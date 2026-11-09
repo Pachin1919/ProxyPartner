@@ -248,7 +248,8 @@ public sealed unsafe partial class DesktopApp
                     check.Bottom - check.Top, tick ? ActiveText : Muted, smallFont, 1);
             }
             int midpoint = (left + right) / 2;
-            Label(dc, ScoreText(row), left, at(23), midpoint, Scale(38), Text, scoreFont);
+            uint scoreColor = preferences.Light ? Text : DarkScoreColor(row.Quality?.Score) ?? Text;
+            Label(dc, ScoreText(row), left, at(23), midpoint, Scale(38), scoreColor, scoreFont);
             int badgeLeft = Math.Max(midpoint, right - Scale(102));
             Rounded(dc, Box(badgeLeft, at(28), right - badgeLeft, Scale(20)), Scale(8), Control);
             Rounded(dc, Box(badgeLeft + Scale(7), at(28) + Scale(8), Scale(5), Scale(5)), Scale(5), tone.Accent);
@@ -262,6 +263,14 @@ public sealed unsafe partial class DesktopApp
             Label(dc, Timestamp(row.LastObservedUtc), midpoint, at(89), right, Scale(17), Muted, smallFont, 2);
         }
     }
+
+    private static uint? DarkScoreColor(int? score) => score switch
+    {
+        >= 0 and < 60 => Color(0xF29DA2),
+        >= 60 and < 80 => Color(0xE6C477),
+        >= 80 and <= 100 => Color(0x79C79D),
+        _ => null
+    };
 
     private Rect CardCheckBounds(int x, int y)
     {
