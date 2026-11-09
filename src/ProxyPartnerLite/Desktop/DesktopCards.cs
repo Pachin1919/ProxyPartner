@@ -291,7 +291,7 @@ public sealed unsafe partial class DesktopApp
         finishSession = CardFinish.Start();
         siteIcons = new nint[Sites.Length];
         for (int index = 0; index < siteIcons.Length; index++)
-            if (index != 3) siteIcons[index] = LoadImage(0, Path.Combine(AppContext.BaseDirectory, "TargetIcons", $"{Sites[index].Id}.ico"), 1, 0, 0, 0x10);
+            siteIcons[index] = LoadImage(0, Path.Combine(AppContext.BaseDirectory, "TargetIcons", $"{Sites[index].Id}.ico"), 1, 0, 0, 0x10);
     }
 
     private void FreeCardArtwork()
@@ -333,19 +333,11 @@ public sealed unsafe partial class DesktopApp
             int end = left + (right - left) * SiteEdges[index + 1] / 100;
             int iconX = (start + end - size) / 2;
             nint mark = siteIcons![index];
-            if (mark != 0 || index == 3)
+            if (mark != 0)
             {
                 Rounded(dc, Box(iconX - Scale(2), iconY - Scale(2), size + Scale(4), size + Scale(4)),
                     Scale(6), Color(preferences.Light ? 0xF8FAFCu : 0xE0E9F4u));
-                if (index == 3)
-                {
-                    uint bubble = Color(0x24566B);
-                    Rounded(dc, Box(iconX + Scale(1), iconY + Scale(2), Scale(16), Scale(12)), Scale(5), bubble);
-                    Fill(dc, Box(iconX + Scale(4), iconY + Scale(13), Scale(3), Scale(3)), bubble);
-                    for (int dot = 0; dot < 3; dot++)
-                        Fill(dc, Box(iconX + Scale(4 + dot * 4), iconY + Scale(7), Scale(2), Scale(2)), ActiveText);
-                }
-                else DrawIconEx(dc, iconX, iconY, mark, size, size, 0, 0, 3);
+                DrawIconEx(dc, iconX, iconY, mark, size, size, 0, 0, 3);
                 Label(dc, Sites[index].Short, start, labelY, end, Scale(17), Muted, siteStatusFont, 1);
             }
             else
