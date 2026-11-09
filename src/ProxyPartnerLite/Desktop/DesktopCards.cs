@@ -412,12 +412,7 @@ public sealed unsafe partial class DesktopApp
     private void DrawToolbarButton(DrawItem* item)
     {
         if (item->Id is not (Toggle or SortMenu or Groups or OpenSettings or OpenDetails)) return;
-        var bounds = item->Bounds;
         bool activeButton = item->Id == Toggle || item->Id == Groups && showGroups;
-        Fill(item->Dc, bounds, (item->State & 0x10) != 0 ? Focus : Border);
-        var inside = Box(bounds.Left + 1, bounds.Top + 1, bounds.Right - bounds.Left - 2, bounds.Bottom - bounds.Top - 2);
-        Fill(item->Dc, inside, activeButton || (item->State & 1) != 0 ? Active : Control);
-        SetBkMode(item->Dc, 1);
         string label = item->Id switch
         {
             Toggle => ViewLabel,
@@ -426,8 +421,19 @@ public sealed unsafe partial class DesktopApp
             OpenDetails => L("详情", "Details"),
             _ => descending ? L("排序 ↓", "Sort ↓") : L("排序 ↑", "Sort ↑")
         };
+        DrawPanelButton(item, label, font, activeButton);
+    }
+
+    private void DrawPanelButton(DrawItem* item, string label, nint face, bool primary)
+    {
+        var bounds = item->Bounds;
+        bool accent = primary || (item->State & 1) != 0;
+        Fill(item->Dc, bounds, (item->State & 0x10) != 0 ? Focus : Border);
+        var inside = Box(bounds.Left + 1, bounds.Top + 1, bounds.Right - bounds.Left - 2, bounds.Bottom - bounds.Top - 2);
+        Fill(item->Dc, inside, accent ? Active : Control);
+        SetBkMode(item->Dc, 1);
         Label(item->Dc, label, bounds.Left, bounds.Top, bounds.Right, bounds.Bottom - bounds.Top,
-            activeButton ? ActiveText : Text, font, 1);
+            accent ? ActiveText : Text, face, 1);
     }
 
     private void ShowSortMenu()

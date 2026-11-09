@@ -28,8 +28,8 @@ public sealed unsafe partial class DesktopApp
         settingsWindow = CreateAux(L("ProxyPartner · 设置", "ProxyPartner · Settings"), 740, 634, 0x200000);
         if (settingsWindow == 0) return;
         draftTargets.AddRange(preferences.CustomTargets);
-        const uint button = WsTabStop | 0x4000; // BS_NOTIFY for keyboard focus
-        const uint check = button | 3, edit = WsTabStop | 0x800000 | 0x80;
+        const uint tab = WsTabStop | 0x4000; // BS_NOTIFY for keyboard focus
+        const uint button = tab | 11, check = tab | 3, edit = WsTabStop | 0x800000 | 0x80;
         nint Field(string cls, string caption, uint style, int id, int x, int y, int width, int height)
         {
             nint handle = AuxChild(settingsWindow, cls, caption, style, id);
@@ -241,6 +241,10 @@ public sealed unsafe partial class DesktopApp
             case 0x20a when window == settingsWindow:
                 ScrollSettings(settingsScroll - (short)(wParam >> 16) * SettingsPx(60) / 120);
                 return 0;
+            case 0x2b when window == settingsWindow: // WM_DRAWITEM
+                var item = (DrawItem*)lParam;
+                DrawPanelButton(item, ReadField(item->Window, 32), settingsFont, item->Id == SaveSettings);
+                return 1;
             case 0x14: // WM_ERASEBKGND
                 Rect rect;
                 GetClientRect(window, &rect);
