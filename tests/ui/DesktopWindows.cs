@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.ComponentModel;
 using System.Runtime.InteropServices;
 using System.Text;
 
@@ -8,6 +7,8 @@ public static class DesktopWindows
 {
     [StructLayout(LayoutKind.Sequential)]
     public struct Rect { public int Left, Top, Right, Bottom; }
+    [StructLayout(LayoutKind.Sequential)]
+    private struct Point { public int X, Y; }
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
     public struct MonitorInfo
     {
@@ -34,12 +35,11 @@ public static class DesktopWindows
     [DllImport("user32", CharSet=CharSet.Unicode)] public static extern IntPtr SendMessage(IntPtr hwnd, uint msg, IntPtr wParam, IntPtr lParam);
     [DllImport("user32", CharSet=CharSet.Unicode)] public static extern IntPtr SendMessage(IntPtr hwnd, uint msg, IntPtr wParam, string lParam);
     [DllImport("user32", CharSet=CharSet.Unicode)] private static extern IntPtr SendMessage(IntPtr hwnd, uint msg, IntPtr wParam, StringBuilder lParam);
+    [DllImport("user32", EntryPoint="SendMessageW")] private static extern IntPtr SendDpi(IntPtr hwnd, uint msg, IntPtr wParam, ref Rect lParam);
     [DllImport("user32")] public static extern bool PostMessage(IntPtr hwnd, uint msg, IntPtr wParam, IntPtr lParam);
-    [DllImport("kernel32", SetLastError=true)] private static extern IntPtr OpenProcess(uint access, bool inherit, int pid);
-    [DllImport("kernel32", SetLastError=true)] private static extern IntPtr VirtualAllocEx(IntPtr process, IntPtr address, UIntPtr bytes, uint type, uint protect);
-    [DllImport("kernel32", SetLastError=true)] private static extern bool VirtualFreeEx(IntPtr process, IntPtr address, UIntPtr bytes, uint type);
-    [DllImport("kernel32", SetLastError=true)] private static extern bool WriteProcessMemory(IntPtr process, IntPtr address, IntPtr buffer, UIntPtr bytes, out UIntPtr written);
-    [DllImport("kernel32")] private static extern bool CloseHandle(IntPtr handle);
+    [DllImport("user32")] private static extern bool GetCursorPos(out Point point);
+    [DllImport("user32")] private static extern bool SetCursorPos(int x, int y);
+    [DllImport("user32")] private static extern void mouse_event(uint flags, uint dx, uint dy, uint data, UIntPtr extra);
 
     public static IntPtr Find(int pid, string className, bool visible)
     {
@@ -63,6 +63,16 @@ public static class DesktopWindows
             GetWindowThreadProcessId(window, out int owner) != 0 && owner == pid;
     }
 
+    public static void Click(int x, int y, bool right)
+    {
+        if (!GetCursorPos(out Point previous) || !SetCursorPos(x,y))
+            throw new InvalidOperationException("Could not position the pointer for the identified control.");
+        mouse_event(right ? 8u : 2u, 0, 0, 0, UIntPtr.Zero);
+        mouse_event(right ? 16u : 4u, 0, 0, 0, UIntPtr.Zero);
+        if (GetCursorPos(out Point current) && current.X == x && current.Y == y)
+            SetCursorPos(previous.X, previous.Y);
+    }
+
     public static Rect[] Displays()
     {
         var displays = new List<Rect>();
@@ -82,29 +92,11 @@ public static class DesktopWindows
         return result.ToString();
     }
 
-    // A RECT argument belongs to the receiving process. Allocate it only in the
-    // verified test app, send WM_DPICHANGED synchronously, then free it.
     public static void DpiMessage(int pid, IntPtr panel, int dpi)
     {
         GetWindowThreadProcessId(panel, out int owner);
         if (owner != pid || !GetWindowRect(panel, out Rect rect)) throw new InvalidOperationException("Unexpected panel.");
-        int bytes = Marshal.SizeOf<Rect>();
-        IntPtr process = OpenProcess(0x28, false, pid), remote = IntPtr.Zero, local = IntPtr.Zero;
-        if (process == IntPtr.Zero) throw new Win32Exception();
-        try
-        {
-            remote = VirtualAllocEx(process, IntPtr.Zero, (UIntPtr)bytes, 0x3000, 4);
-            if (remote == IntPtr.Zero) throw new Win32Exception();
-            local = Marshal.AllocHGlobal(bytes);
-            Marshal.StructureToPtr(rect, local, false);
-            if (!WriteProcessMemory(process, remote, local, (UIntPtr)bytes, out _)) throw new Win32Exception();
-            SendMessage(panel, 0x02E0, (IntPtr)(dpi | dpi << 16), remote);
-        }
-        finally
-        {
-            if (local != IntPtr.Zero) Marshal.FreeHGlobal(local);
-            if (remote != IntPtr.Zero) VirtualFreeEx(process, remote, UIntPtr.Zero, 0x8000);
-            CloseHandle(process);
-        }
+        // User32 marshals the system message's RECT to the window process.
+        SendDpi(panel, 0x02E0, (IntPtr)(dpi | dpi << 16), ref rect);
     }
 }

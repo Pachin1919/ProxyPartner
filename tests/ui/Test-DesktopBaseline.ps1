@@ -61,7 +61,7 @@ function Wait-Value([scriptblock]$Action, [string]$Failure) {
     $timer = [Diagnostics.Stopwatch]::StartNew()
     do {
         $value = & $Action
-        if ($value) { return $value }
+        if ($value -and ($value -isnot [IntPtr] -or $value -ne [IntPtr]::Zero)) { return $value }
         Start-Sleep -Milliseconds 40
     } while ($timer.Elapsed.TotalSeconds -lt 12)
     throw $Failure
@@ -212,12 +212,9 @@ try {
             $summary.native_message_column_widths = $message
             Close-Panel $ui.panel
             Assert ((Find-Panel $ui.id) -eq 0 -and (Find-Tray $ui.id) -eq $ui.tray -and ![DesktopWindows]::IsWindow($list)) 'Panel/list disposal did not leave only the tray.'
-            $reopened = Open-FromTray $ui.id $ui.tray
-            Assert ((Send-Number (Get-List $reopened) 0x1004) -eq 100) 'Reopened panel lost its rows.'
-            $summary.tray_reopen = Save-Window $ui.id $reopened $ui.exe 'tray-reopen'
-            $summary.tray_interaction = 'NIN_SELECT callback, WM_COMMAND exit; HWND lifecycle observed'
+            . (Join-Path $PSScriptRoot 'Invoke-DesktopTray.ps1')
         }
-        Exit-Tray $ui.tray
+        if ($Check -ne 'dpi-tray') { Exit-Tray $ui.tray }
         $null = Receive-Recorded $ui.run 15
         Assert (![DesktopWindows]::IsWindow($ui.tray)) 'Tray HWND remained after exit.'
     } else {
@@ -232,7 +229,7 @@ try {
         if (!$ownedJob.run.process.HasExited -and (Test-Path -LiteralPath $ownedJob.pidFile)) {
             $jobId = [int](Get-Content -Raw -LiteralPath $ownedJob.pidFile)
             $tray = Find-Tray $jobId
-            if ($tray) { Exit-Tray $tray }
+            if ($tray -ne [IntPtr]::Zero) { Exit-Tray $tray }
             $null = $ownedJob.run.process.WaitForExit(10000)
         }
     }

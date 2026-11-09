@@ -57,7 +57,7 @@ internal sealed class ComparisonApp : Application
             return;
         }
         var snapshot = source.GetSnapshot();
-        var search = new TextBox { Watermark = "筛选节点", Width = 250 };
+        var search = new TextBox { PlaceholderText = "筛选节点", Width = 250 };
         var groups = new CheckBox { Content = "显示策略组" };
         var status = new TextBlock();
         var rows = new ListBox
