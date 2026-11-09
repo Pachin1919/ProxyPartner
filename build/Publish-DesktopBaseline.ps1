@@ -23,14 +23,15 @@ $project = Join-Path $repo $project
 $publish = Join-Path $out 'publish'
 $env:DOTNET_ROOT = $sdk
 $env:DOTNET_ROOT_X64 = $sdk
-$env:DOTNET_CLI_HOME = Join-Path $EvidenceDirectory 'dotnet-home'
+$cache = Join-Path $ToolchainRoot 'cache'
+$env:DOTNET_CLI_HOME = Join-Path $cache 'dotnet-home'
 $env:DOTNET_CLI_TELEMETRY_OPTOUT = '1'
 $env:DOTNET_NOLOGO = '1'
 $env:DOTNET_GENERATE_ASPNET_CERTIFICATE = 'false'
 $env:DOTNET_ADD_GLOBAL_TOOLS_TO_PATH = 'false'
 $env:DOTNET_CLI_WORKLOAD_UPDATE_NOTIFY_DISABLE = 'true'
-$env:NUGET_PACKAGES = Join-Path $EvidenceDirectory 'packages'
-$env:NUGET_HTTP_CACHE_PATH = Join-Path $EvidenceDirectory 'nuget-http-cache'
+$env:NUGET_PACKAGES = Join-Path $cache 'nuget-packages'
+$env:NUGET_HTTP_CACHE_PATH = Join-Path $cache 'nuget-http-cache'
 $env:PATH = "$(Join-Path $native 'bin');$env:PATH"
 $env:LIB = @('msvc', 'um', 'ucrt' | ForEach-Object { Join-Path $native "lib/$_" }) -join ';'
 
@@ -39,6 +40,8 @@ function Invoke-Recorded([string]$Stage, [string[]]$Arguments) {
     & $dotnet @Arguments *> (Join-Path $out "$Stage.log")
     $exitCode = $LASTEXITCODE
     [ordered]@{ exe=$dotnet; args=$Arguments; cwd=$PWD.Path; started_utc=$start
+        dotnet_cli_home=$env:DOTNET_CLI_HOME; nuget_packages=$env:NUGET_PACKAGES
+        nuget_http_cache=$env:NUGET_HTTP_CACHE_PATH
         ended_utc=[DateTime]::UtcNow.ToString('o'); exit_code=$exitCode } |
         ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $out "$Stage.command.json") -Encoding utf8NoBOM
     if ($exitCode -ne 0) {

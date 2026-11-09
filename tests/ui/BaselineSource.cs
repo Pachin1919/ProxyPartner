@@ -1,6 +1,6 @@
 using ProxyPartnerLite.Desktop;
 
-internal sealed class BaselineSource : IDesktopSnapshotSource
+internal sealed class BaselineSource(int nodeCount = 100) : IDesktopSnapshotSource
 {
     private static readonly DateTimeOffset Reference = new(2026, 11, 9, 0, 0, 0, TimeSpan.Zero);
     private static readonly string[] Cities = ["香港", "东京", "新加坡", "洛杉矶"];
@@ -10,8 +10,8 @@ internal sealed class BaselineSource : IDesktopSnapshotSource
     public DesktopSnapshot GetSnapshot()
     {
         if (snapshot is not null) return snapshot;
-        var rows = new List<DesktopRow>(102);
-        for (int i = 1; i <= 100; i++)
+        var rows = new List<DesktopRow>(nodeCount + 2);
+        for (int i = 1; i <= nodeCount; i++)
         {
             var name = i switch
             {

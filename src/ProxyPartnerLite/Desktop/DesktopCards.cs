@@ -98,7 +98,10 @@ public sealed unsafe partial class DesktopApp
                 {
                     SelectCard(index);
                     int localX = x - col * (cardWidth + cardGap);
-                    if (localX >= cardWidth - Scale(48) && y % (cardHeight + cardGap) < Scale(43))
+                    int localY = y % (cardHeight + cardGap);
+                    var check = CardCheckBounds(0, 0);
+                    if (localX >= check.Left && localX < check.Right &&
+                        localY >= check.Top && localY < check.Bottom)
                         ToggleTest(index);
                 }
                 return 0;
@@ -129,6 +132,7 @@ public sealed unsafe partial class DesktopApp
         Rect rect;
         GetClientRect(cards, &rect);
         int first = scrollY / Math.Max(1, cardHeight + cardGap) * columns;
+        ClearCardHover();
         cardGap = Scale(20);
         int width = Math.Max(1, rect.Right);
         columns = Math.Clamp((width + cardGap) / (Scale(224) + cardGap), 1, 6);
@@ -142,7 +146,9 @@ public sealed unsafe partial class DesktopApp
     {
         int count = (rows.Length + columns - 1) / columns;
         int extent = Math.Max(0, count * (cardHeight + cardGap) - cardGap);
-        scrollY = Math.Clamp(position, 0, Math.Max(0, extent - viewportHeight));
+        int next = Math.Clamp(position, 0, Math.Max(0, extent - viewportHeight));
+        if (next != scrollY) ClearCardHover();
+        scrollY = next;
         var info = new Scroll
         {
             Size = (uint)sizeof(Scroll), Mask = 0xf, Max = Math.Max(0, extent - 1),
@@ -213,8 +219,10 @@ public sealed unsafe partial class DesktopApp
             if (row.Kind == NodeKind.Leaf)
             {
                 bool tick = tested.Contains(row.Id);
-                Fill(dc, Box(right - Scale(19), at(8) + Scale(2), Scale(19), Scale(19)), tick ? Active : Border);
-                Label(dc, tick ? "✓" : "□", right - Scale(18), at(8) + Scale(2), right, Scale(19), tick ? ActiveText : Muted, smallFont, 1);
+                var check = CardCheckBounds(x, y);
+                Fill(dc, check, tick ? Active : Border);
+                Label(dc, tick ? "✓" : "□", check.Left + Scale(1), check.Top, check.Right,
+                    check.Bottom - check.Top, tick ? ActiveText : Muted, smallFont, 1);
             }
             int midpoint = (left + right) / 2;
             Label(dc, row.Quality?.Score is int score ? $"{score} 分" : "—", left, at(23), midpoint, Scale(38), tone.Text, scoreFont);
@@ -227,6 +235,19 @@ public sealed unsafe partial class DesktopApp
             Label(dc, $"原生 {ShortResult(row.Native)}", left, at(89), midpoint, Scale(17), Muted, smallFont);
             Label(dc, Timestamp(row.LastObservedUtc), midpoint, at(89), right, Scale(17), Muted, smallFont, 2);
         }
+    }
+
+    private Rect CardCheckBounds(int x, int y)
+    {
+        int size = Scale(19);
+        return Box(x + cardWidth - Scale(17) - size, y + cardHeight * 8 / 100 + Scale(2), size, size);
+    }
+
+    private void ClearCardHover()
+    {
+        if (hoverIndex == -1) return;
+        hoverIndex = hoverSite = -1;
+        if (!tableMode) SetText(hint, HoverText());
     }
 
     private void EnsureCardArtwork()

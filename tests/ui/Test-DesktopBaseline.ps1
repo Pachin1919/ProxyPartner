@@ -1,7 +1,7 @@
 #Requires -Version 7.3
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory)][ValidateSet('aot-build','100-node-ui','dpi-tray','memory-gate')][string]$Check,
+    [Parameter(Mandatory)][ValidateSet('aot-build','100-node-ui','dpi-tray','memory-gate','1000-node-stress')][string]$Check,
     [Parameter(Mandatory)][string]$ToolchainRoot,
     [Parameter(Mandatory)][string]$EvidenceDirectory,
     [string]$TargetIcons
@@ -163,7 +163,7 @@ try {
     $artifact = Get-Artifact 'win32'
     $summary.exe = $artifact.exe
     $summary.exe_sha256 = ($artifact.files | Where-Object name -eq 'ProxyPartner.exe').sha256
-    if ($Check -ne 'memory-gate') {
+    if ($Check -notin 'memory-gate','1000-node-stress') {
         $ui = Start-Panel $artifact
         $list = Get-List $ui.panel
         if ($Check -eq 'aot-build') {

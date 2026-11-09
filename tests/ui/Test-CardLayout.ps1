@@ -31,6 +31,20 @@ $checks = @(foreach ($sample in @(@{width=1536;columns=6},@{width=1280;columns=5
         window=(Save-Window $ui.id $ui.panel $ui.exe "cards-$($sample.width)") }
 })
 $summary.card_layout = $checks
+$null = [DesktopWindows]::MoveWindow($ui.panel,$screen.Left+10,$screen.Top+10,(494+$frame),680,$true)
+$narrow = [DesktopWindows+Rect]::new()
+Assert ([DesktopWindows]::GetClientRect($cards,[ref]$narrow) -and $narrow.Right -lt 468) 'Expected a one-column viewport.'
+$narrowHeight = [int][Math]::Floor(($narrow.Right*96+50)/100)
+$checkX = $narrow.Right - 22
+$checkY = [int][Math]::Floor($narrowHeight*0.08) + 17
+$point = $checkX -bor ($checkY -shl 16)
+$status = [DesktopWindows]::GetDlgItem($ui.panel,0)
+$null = Send-Number $cards 0x201 1 $point
+Assert (([DesktopWindows]::Text($status)) -like '*测试勾选 1*') 'The lower part of the checkbox did not accept a click.'
+$null = Send-Number $cards 0x201 1 $point
+Assert (([DesktopWindows]::Text($status)) -like '*测试勾选 0*') 'A second checkbox click did not clear the mark.'
+$summary.narrow_checkbox = [ordered]@{ viewport_width=$narrow.Right; card_height=$narrowHeight; x=$checkX; y=$checkY }
+$null = [DesktopWindows]::MoveWindow($ui.panel,$screen.Left+10,$screen.Top+10,(800+$frame),720,$true)
 $hint = [DesktopWindows]::GetDlgItem($ui.panel,121)
 $cardSize = $checks[-1]
 $summary.site_hover_text = @(foreach ($site in @(@{slot=2;text='OpenAI API · 未测'},@{slot=3;text='ChatGPT · 已过期'})) {
@@ -45,6 +59,7 @@ $summary.site_hover_window = Save-Window $ui.id $ui.panel $ui.exe 'cards-hover'
 $null = Send-Number $cards 0x100 0x23
 $last = [DesktopWindows]::ReadScroll($cards)
 Assert ($last.Position -eq $last.Max+1-$last.Page -and $last.Position -gt 0) 'End did not scroll to the final card.'
+Assert (([DesktopWindows]::Text($hint)) -ceq '悬停查看站点状态') 'End left a hover hint from the previous card visible.'
 $summary.card_end = Save-Window $ui.id $ui.panel $ui.exe 'cards-end'
 $null = Send-Number $cards 0x100 0x20
 Assert (([DesktopWindows]::Text([DesktopWindows]::GetDlgItem($ui.panel,0))) -like '*测试勾选 1*') 'Card selection did not produce a test check.'

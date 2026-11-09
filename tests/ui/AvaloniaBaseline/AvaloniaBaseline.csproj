@@ -20,4 +20,9 @@
     <ProjectReference Include="../../../src/ProxyPartnerLite/Desktop/ProxyPartnerLite.Desktop.csproj" />
     <Compile Include="../BaselineSource.cs" Link="BaselineSource.cs" />
   </ItemGroup>
+  <Target Name="ExcludeComparisonSymbols" AfterTargets="ComputeFilesToPublish">
+    <ItemGroup>
+      <ResolvedFileToPublish Remove="@(ResolvedFileToPublish)" Condition="'%(ResolvedFileToPublish.Extension)' == '.pdb'" />
+    </ItemGroup>
+  </Target>
 </Project>

@@ -1,9 +1,9 @@
 # Called by Test-DesktopBaseline.ps1 after it verifies the candidate artifacts.
-function Start-DesktopJob([string]$Name, [string]$Exe, [string[]]$AppArgs, [int]$Timeout) {
+function Start-DesktopJob([string]$Name, [string]$Exe, [string[]]$AppArgs, [int]$Timeout, [int]$NodeCount = 100) {
     $pidFile = Join-Path $out "$Name.pid"
     $run = Start-Recorded $Name $pwsh @('-NoProfile','-NonInteractive','-File',
         (Join-Path $repo 'scripts/Measure-JobPeak.ps1'),'-Executable',$Exe,
-        '-ArgumentsJson',(ConvertTo-Json -InputObject @($AppArgs) -Compress),'-Workload',"T03/100x3/$Name",
+        '-ArgumentsJson',(ConvertTo-Json -InputObject @($AppArgs) -Compress),'-Workload',"T03/${NodeCount}x3/$Name",
         '-ExpectedProcesses','1','-TimeoutSeconds',"$Timeout",'-StartedFile',$pidFile)
     $job = [pscustomobject]@{ run=$run; pidFile=$pidFile }
     $jobs.Add($job)
@@ -36,6 +36,11 @@ function Read-Budget([string]$Phase, [int]$Seconds) {
     $arguments = @('run','.','--csv',$csv,'--phase',$Phase,'--min-seconds',"$Seconds")
     $run = Start-Recorded "$Phase-budget" $go $arguments (Join-Path $repo 'tools/budget')
     Receive-Recorded $run | ConvertFrom-Json
+}
+
+if ($Check -eq '1000-node-stress') {
+    . (Join-Path $PSScriptRoot 'Test-DesktopStress.ps1')
+    return
 }
 
 $env:GOCACHE = Join-Path $out 'go-cache'

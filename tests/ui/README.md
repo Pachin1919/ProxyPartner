@@ -23,6 +23,15 @@ double-click the published EXE, use Tab and End,
 close the window, open the ProxyPartner tray icon (check overflow), then
 right-click that icon and choose 退出.
 
+Run `1000-node-stress` separately with the same published artifact. It opts
+into 1000 synthetic leaves, checks the card tail, selection, filtering and
+table tail, and records a Job Object peak against the existing 40 MiB limit.
+The default 100-leaf fixture and its timed resource phases retain their own checks.
+
+Win32 and Avalonia publish steps share `ToolchainRoot/cache` for expanded NuGet
+packages, NuGet HTTP cache and .NET CLI home. Evidence directories hold command
+records and outputs. The comparison publish omits package PDBs.
+
 For a branded local preview, supply `-TargetIcons <absolute-folder>` to
 `aot-build`. It copies the five known ICO files to the publish directory and
 records their hashes with the executable. The icons are optional preview
