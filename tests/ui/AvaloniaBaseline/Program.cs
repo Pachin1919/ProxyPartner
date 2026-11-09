@@ -8,7 +8,7 @@ using Avalonia.Themes.Fluent;
 using Avalonia.Threading;
 using ProxyPartnerLite.Desktop;
 
-return AppBuilder.Configure<ComparisonApp>().UseWin32().UseSkia()
+return AppBuilder.Configure<ComparisonApp>().UseWin32().UseSkia().UseHarfBuzz()
     .StartWithClassicDesktopLifetime(args, ShutdownMode.OnExplicitShutdown);
 
 internal sealed class ComparisonApp : Application

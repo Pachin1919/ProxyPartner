@@ -165,6 +165,7 @@ try {
         if ($Check -eq 'aot-build') {
             $summary.launch = Save-Window $ui.id $ui.panel $ui.exe 'launch'
         } elseif ($Check -eq '100-node-ui') {
+            . (Join-Path $PSScriptRoot 'Test-CardLayout.ps1')
             Assert ((Send-Number $list 0x1004) -eq 100) 'Expected exactly 100 leaves.'
             $status = [DesktopWindows]::Text([DesktopWindows]::GetDlgItem($ui.panel,0))
             Assert ($status -like '*合成数据*实际链路：未知*100 行*') "Unexpected status: $status"
@@ -210,6 +211,7 @@ try {
                 $message["$dpi"] = $firstColumn
             }
             $summary.native_message_column_widths = $message
+            Assert ([DesktopWindows]::IsWindowVisible([DesktopWindows]::GetDlgItem($ui.panel,106))) 'The card surface disappeared after DPI changes.'
             Close-Panel $ui.panel
             Assert ((Find-Panel $ui.id) -eq 0 -and (Find-Tray $ui.id) -eq $ui.tray -and ![DesktopWindows]::IsWindow($list)) 'Panel/list disposal did not leave only the tray.'
             . (Join-Path $PSScriptRoot 'Invoke-DesktopTray.ps1')

@@ -25,11 +25,17 @@ right-click that icon and choose 退出.
 
 The fixture generates seven days of synthetic observations for 100 leaves and
 three targets and projects them to display values. The fixture is shared by
-Win32 and the Avalonia comparison. The Avalonia process runs a short startup
+Win32 and the Avalonia comparison. Win32 starts on the virtualized card surface.
+The interaction check uses client widths 1536, 1280 and 800 on the physical 100%
+monitor, checks the resulting scroll geometry and reaches the last card. It
+checks shared filtering, selection and test marks while switching to the table.
+Desktop only displays provided quality projections. Fixture scores are synthetic.
+The Avalonia process runs a short startup
 probe first. If that already exceeds 40 MiB, its measured Job peak is sufficient
 to reject it. Its long-duration phases remain unmeasured in that case. The
 Win32 gate runs all three cold starts and the full 10-minute tray and 5-minute
-window phases.
+default-card window phases. A comparison startup failure is recorded separately
+and does not prevent the Win32 measurement.
 
 T06 references `src/ProxyPartnerLite/Desktop/ProxyPartnerLite.Desktop.csproj`,
 uses the same GUI manifest settings in its entry point, and provides an
@@ -53,7 +59,8 @@ message loop and display resources. Its caller owns observation lifecycle.
   [License](https://github.com/Zephyruso/zashboard/blob/bf4f00bb8d905f8a78f627af7cf84457c4db53c4/LICENSE)
 - Avalonia `12.1.5` · `5825bf8c66fba0c11e67c980d8ece6444576bffa`, MIT.
   Reviewed `ListBox.cs` (virtualizing default panel), `TrayIcon.cs`
-  (`SetIcons`, `Clicked`) and `Win32Platform.cs` (`UseWin32`). Referenced
+  (`SetIcons`, `Clicked`) and `Win32Platform.cs` (`UseWin32`). The minimal
+  platform registration explicitly calls `UseHarfBuzz` for text shaping. Referenced
   NuGet packages and transitives are pinned with content hashes in
   `AvaloniaBaseline/packages.lock.json`. This dependency is limited to the
   comparison project. No Avalonia source copied into the product.

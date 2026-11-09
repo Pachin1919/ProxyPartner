@@ -14,6 +14,7 @@
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Avalonia.Win32" Version="12.1.5" />
+    <PackageReference Include="Avalonia.HarfBuzz" Version="12.1.5" />
     <PackageReference Include="Avalonia.Skia" Version="12.1.5" />
     <PackageReference Include="Avalonia.Themes.Fluent" Version="12.1.5" />
     <ProjectReference Include="../../../src/ProxyPartnerLite/Desktop/ProxyPartnerLite.Desktop.csproj" />

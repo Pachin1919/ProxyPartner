@@ -21,9 +21,16 @@ internal sealed class BaselineSource : IDesktopSnapshotSource
             };
             var latest = Reference.AddMinutes(-i);
             var native = Project(i, 0, null, latest);
+            var quality = (i % 4) switch
+            {
+                0 => new DesktopQuality(null, QualityState.Restricted, "合成"),
+                1 => new DesktopQuality(92 - i % 7, QualityState.Good, "合成"),
+                2 => new DesktopQuality(38 + i % 7, QualityState.Poor, "合成"),
+                _ => new DesktopQuality(null, QualityState.Insufficient, "合成")
+            };
             rows.Add(new($"leaf-{i:000}", name, NodeKind.Leaf, false, native,
                 Project(i, 1, "openai_api", latest), Project(i, 2, "chatgpt_web", latest),
-                Project(i, 3, "github", latest), latest));
+                Project(i, 3, "github", latest), latest, quality));
         }
         var absent = new DesktopResult(null, null, null, null, "合成", ResultState.Missing);
         rows.Add(new("group-01", "策略组 · 日常工作", NodeKind.Group, false, absent, absent, absent, absent, null));

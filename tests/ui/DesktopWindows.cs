@@ -8,6 +8,14 @@ public static class DesktopWindows
     [StructLayout(LayoutKind.Sequential)]
     public struct Rect { public int Left, Top, Right, Bottom; }
     [StructLayout(LayoutKind.Sequential)]
+    public struct Scroll
+    {
+        public uint Size, Mask;
+        public int Min, Max;
+        public uint Page;
+        public int Position, Track;
+    }
+    [StructLayout(LayoutKind.Sequential)]
     private struct Point { public int X, Y; }
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
     public struct MonitorInfo
@@ -26,6 +34,8 @@ public static class DesktopWindows
     [DllImport("user32")] public static extern IntPtr GetDlgItem(IntPtr hwnd, int id);
     [DllImport("user32")] public static extern uint GetDpiForWindow(IntPtr hwnd);
     [DllImport("user32")] public static extern bool GetWindowRect(IntPtr hwnd, out Rect rect);
+    [DllImport("user32")] public static extern bool GetClientRect(IntPtr hwnd, out Rect rect);
+    [DllImport("user32")] private static extern bool GetScrollInfo(IntPtr hwnd, int bar, ref Scroll info);
     [DllImport("user32")] public static extern bool PrintWindow(IntPtr hwnd, IntPtr dc, uint flags);
     [DllImport("user32")] public static extern IntPtr SetThreadDpiAwarenessContext(IntPtr context);
     [DllImport("user32")] public static extern bool MoveWindow(IntPtr hwnd, int x, int y, int width, int height, bool repaint);
@@ -50,7 +60,7 @@ public static class DesktopWindows
             if (owner != pid || (visible && !IsWindowVisible(hwnd))) return true;
             var cls = new StringBuilder(128);
             GetClassName(hwnd, cls, cls.Capacity);
-            if (!string.Equals(cls.ToString(), className, StringComparison.Ordinal)) return true;
+            if (!string.IsNullOrEmpty(className) && !string.Equals(cls.ToString(), className, StringComparison.Ordinal)) return true;
             result = hwnd;
             return false;
         }, IntPtr.Zero);
@@ -61,6 +71,13 @@ public static class DesktopWindows
     {
         return window != IntPtr.Zero && IsWindowVisible(window) &&
             GetWindowThreadProcessId(window, out int owner) != 0 && owner == pid;
+    }
+
+    public static Scroll ReadScroll(IntPtr window)
+    {
+        var result = new Scroll { Size = (uint)Marshal.SizeOf<Scroll>(), Mask = 7 };
+        if (!GetScrollInfo(window,1,ref result)) throw new InvalidOperationException("Cannot read vertical scroll info.");
+        return result;
     }
 
     public static void Click(int x, int y)

@@ -44,16 +44,28 @@ $env:GOTOOLCHAIN = 'local'
 $env:GOTELEMETRY = 'off'
 $summary.host_before = Get-HostProcesses
 $summary.listener_checks = @()
-$comparison = Get-Artifact 'avalonia'
-$comparisonJob = Start-DesktopJob 'avalonia-cold-01' $comparison.exe @('--peak-probe') 40
-$comparisonId = Get-JobRoot $comparisonJob
-$comparisonWindow = Wait-Value {
-    (Get-Process -Id $comparisonId -ErrorAction SilentlyContinue).MainWindowHandle
-} 'Avalonia window did not appear.'
-$summary.avalonia_window = Save-Window $comparisonId $comparisonWindow $comparison.exe 'avalonia-window'
-$summary.avalonia = Confirm-Job $comparisonJob $comparisonId
-$summary.avalonia_exe_sha256 = ($comparison.files | Where-Object name -eq 'ProxyPartner.exe').sha256
-$summary.avalonia_decision = if ($summary.avalonia.peak_job_commit_bytes -gt 40MB) { 'REJECTED_HARD_PEAK' } else { 'FULL_COMPARISON_REQUIRED' }
+try {
+    $comparison = Get-Artifact 'avalonia'
+    $summary.avalonia_exe_sha256 = ($comparison.files | Where-Object name -eq 'ProxyPartner.exe').sha256
+    $comparisonJob = Start-DesktopJob 'avalonia-cold-01' $comparison.exe @('--peak-probe') 40
+    $comparisonId = Get-JobRoot $comparisonJob
+    try {
+        $comparisonWindow = Wait-Value {
+            if ($comparisonJob.run.process.HasExited) { throw 'Avalonia exited before its window was observed.' }
+            [DesktopWindows]::Find($comparisonId,$null,$true)
+        } 'Avalonia window did not appear.'
+        $summary.avalonia_window = Save-Window $comparisonId $comparisonWindow $comparison.exe 'avalonia-window'
+    } catch {
+        $summary.avalonia_window_error = $_.Exception.Message
+    }
+    $summary.avalonia = Confirm-Job $comparisonJob $comparisonId
+    $summary.avalonia_decision = if (!$comparisonWindow) { 'WINDOW_UNVERIFIED' }
+        elseif ($summary.avalonia.peak_job_commit_bytes -gt 40MB) { 'REJECTED_HARD_PEAK' }
+        else { 'FULL_COMPARISON_REQUIRED' }
+} catch {
+    $summary.avalonia_error = $_.Exception.Message
+    $summary.avalonia_decision = 'COMPARISON_FAILED'
+}
 
 $summary.win32_cold = @()
 foreach ($iteration in 1..3) {
@@ -63,7 +75,9 @@ foreach ($iteration in 1..3) {
     $panel = Wait-Value { Find-Panel $rootId } "No Win32 window in $name."
     $tray = Wait-Value { Find-Tray $rootId } "No Win32 tray HWND in $name."
     Assert ((Send-Number (Get-List $panel) 0x1004) -eq 100) 'Expected 100 rows after cold start.'
-    if ($iteration -eq 1) {
+    if ($iteration -eq 3) {
+        $cards = [DesktopWindows]::GetDlgItem($panel,106)
+        Assert ([DesktopWindows]::IsWindowVisible($cards)) 'The Win32 window phase must start on the default card surface.'
         Assert-NoListeners $rootId
         $summary.listener_checks += [ordered]@{ phase='cold-window'; pid=$rootId; tcp_listen=0; udp=0 }
         Close-Panel $panel
@@ -74,7 +88,7 @@ foreach ($iteration in 1..3) {
         $null = Receive-Recorded $sampling 660
         $summary.tray = Read-Budget 'tray' 600
         $panel = Open-FromTray $rootId $tray
-        $list = Get-List $panel
+        $cards = [DesktopWindows]::GetDlgItem($panel,106)
         $search = [DesktopWindows]::GetDlgItem($panel,103)
         Assert-NoListeners $rootId
         $summary.listener_checks += [ordered]@{ phase='interaction'; pid=$rootId; tcp_listen=0; udp=0 }
@@ -82,7 +96,7 @@ foreach ($iteration in 1..3) {
         $sampling = Start-Sampling 'window' $rootId 300
         $turn = 0
         while (!$sampling.process.HasExited) {
-            $null = Send-Number $list 0x100 $(if ($turn % 2) { 0x24 } else { 0x23 })
+            $null = Send-Number $cards 0x100 $(if ($turn % 2) { 0x24 } else { 0x23 })
             if ($turn % 4 -eq 0) {
                 $null = Send-Number $panel 0x111 112
                 $null = [DesktopWindows]::SendMessage($search,0xC,[IntPtr]::Zero,'香港')
@@ -117,4 +131,4 @@ foreach ($iteration in 1..3) {
     Assert ($result.peak_job_commit_bytes -le 40MB) "Win32 hard peak exceeded in $name."
 }
 $summary.host_after = Get-HostProcesses
-Assert ($summary.avalonia_decision -eq 'REJECTED_HARD_PEAK') 'Avalonia startup fit the hard limit. Full comparison still required.'
+Assert ($summary.avalonia_decision -eq 'REJECTED_HARD_PEAK') "Avalonia comparison incomplete: $($summary.avalonia_decision)"

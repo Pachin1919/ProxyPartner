@@ -78,6 +78,43 @@ internal static unsafe partial class Win32
         public NotifyHeader Header;
         public int Item, SubItem;
     }
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct CustomDraw
+    {
+        public NotifyHeader Header;
+        public uint Stage;
+        public nint Dc;
+        public Rect Bounds;
+        public nuint Item;
+        public uint State;
+        public nint Param;
+        public uint TextColor, BackgroundColor;
+    }
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct DrawItem
+    {
+        public uint Type, Id, Item, Action, State;
+        public nint Window, Dc;
+        public Rect Bounds;
+        public nuint Data;
+    }
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct Paint
+    {
+        public nint Dc;
+        public int Erase;
+        public Rect Bounds;
+        public int Restore, Update;
+        public fixed byte Reserved[32];
+    }
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct Scroll
+    {
+        public uint Size, Mask;
+        public int Min, Max;
+        public uint Page;
+        public int Position, Track;
+    }
 
     [StructLayout(LayoutKind.Sequential)]
     internal struct NotifyIcon
@@ -175,4 +212,34 @@ internal static unsafe partial class Win32
         uint clipPrecision, uint quality, uint pitchAndFamily, string faceName);
     [LibraryImport("gdi32")]
     internal static partial int DeleteObject(nint handle);
+    [LibraryImport("user32")]
+    internal static partial nint BeginPaint(nint window, Paint* paint);
+    [LibraryImport("user32")]
+    internal static partial int EndPaint(nint window, Paint* paint);
+    [LibraryImport("user32")]
+    internal static partial int FillRect(nint dc, Rect* rect, nint brush);
+    [LibraryImport("user32", EntryPoint = "DrawTextW")]
+    internal static partial int DrawText(nint dc, char* text, int length, Rect* rect, uint flags);
+    [LibraryImport("user32")]
+    internal static partial nint GetFocus();
+    [LibraryImport("user32")]
+    internal static partial int GetScrollInfo(nint window, int bar, Scroll* info);
+    [LibraryImport("user32")]
+    internal static partial int SetScrollInfo(nint window, int bar, Scroll* info, int redraw);
+    [LibraryImport("gdi32")]
+    internal static partial nint CreateSolidBrush(uint color);
+    [LibraryImport("gdi32")]
+    internal static partial nint GetStockObject(int index);
+    [LibraryImport("gdi32")]
+    internal static partial nint SelectObject(nint dc, nint value);
+    [LibraryImport("gdi32")]
+    internal static partial uint SetDCBrushColor(nint dc, uint color);
+    [LibraryImport("gdi32")]
+    internal static partial uint SetTextColor(nint dc, uint color);
+    [LibraryImport("gdi32")]
+    internal static partial uint SetBkColor(nint dc, uint color);
+    [LibraryImport("gdi32")]
+    internal static partial int SetBkMode(nint dc, int mode);
+    [LibraryImport("dwmapi")]
+    internal static partial int DwmSetWindowAttribute(nint window, uint attribute, int* value, uint size);
 }
