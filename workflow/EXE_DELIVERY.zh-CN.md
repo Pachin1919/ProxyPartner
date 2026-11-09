@@ -1,12 +1,12 @@
 # ProxyPartner.exe 交付执行文档
 
-2026-11-09 · 当前基线 `e75cd00`
+2026-11-09 · 初始基线 `e75cd00`
 
 ## 用户打开后要看到什么
 
-日常运行一个现有代理软件，例如 Clash Verge。它可以留在后台。解压 Windows x64 便携包，双击 `ProxyPartner.exe` 打开节点表。软件自动连接本机正在使用的宿主，显示节点、策略组和当前选择。宿主暂时不可读时，窗口显示连接状态和等待原因。
+日常运行一个现有代理软件，例如 Clash Verge。它可以留在后台。解压 Windows x64 便携包，双击 `ProxyPartner.exe` 打开节点卡片，也可切换表格。软件自动连接本机正在使用的宿主，显示节点、策略组和当前选择。宿主暂时不可读时，窗口显示连接状态和等待原因。
 
-在表里挑候选节点、选要测的网站，查看逐目标的测量、样本数和评分理由。Google、YouTube、ChatGPT 使用网站入口，OpenAI 和 Anthropic 使用已核对的 HTTPS API 入口。测量按节点和目标记录，数据不足显示待测。关窗缩到托盘，从托盘可以重开或退出。
+在表格或卡片里挑候选节点、选要测的网站，查看逐目标的测量、样本数和评分理由。Google、YouTube、ChatGPT 使用网站入口，OpenAI 和 Anthropic 使用已核对的 HTTPS API 入口。测量按节点和目标记录，数据不足显示待测。关窗缩到托盘，从托盘可以重开或退出。
 
 当前交付按项目的只读边界执行。你在 Clash Verge 改选后，ProxyPartner 读取新的选择。将来若加入由 ProxyPartner 发出的手动切换，需要单独确认并更新项目对宿主选点与缓存的边界。其它代理软件是可替换的宿主，按实际接入证据增加支持。 [产品规格](../spec/PRODUCT.md) [项目约束](../AGENTS.md)
 
@@ -21,6 +21,8 @@
 | 正式 Lite | T11 | 在干净的 Windows 环境验证解压双击、托盘和退出。完成 24 小时运行、性能与宿主无干扰验收。归档便携 ZIP、发布命令、依赖许可、来源、提交 SHA 和文件哈希。 |
 
 任务依赖与必做检查取自产品任务图。每次先验收一项，再启动下一项就绪任务。第一个能打开的 `.exe` 会作为阶段交付保留，正式 Lite 以 T11 的证据为准。 [产品任务图](tasks.json) [验收清单](../spec/ACCEPTANCE.md)
+
+正式前端先交可编辑的 Figma 评审稿，由用户确认美术效果后再实施。Windows 验收覆盖整行着色、独立评分列、五至六列卡片、宽高同步缩放、窄窗滚动和两种视图的一致性。 [前端验收顺序](../spec/DESIGN.zh-CN.md#前端验收顺序)
 
 ## 正式交付判定
 
@@ -38,6 +40,6 @@
 
 ## 起点证据
 
-LangGraph 启动关口已全部通过，五目标 PowerShell 工具已通过离线和实网复验。2026-11-09 的独立诊断从真实 Mihomo v1.19.21 管道读到 134 条节点及 47 个策略组。产品任务目前从 T00 开始。 [阶段报告](../runs/coordination/phase-report-2026-11-09.zh-CN.md) [终端验收](../runs/connectivity/verifier-e75cd00/report.md)
+LangGraph 启动关口已全部通过，五目标 PowerShell 工具已通过离线和实网复验。2026-11-09 的独立诊断从真实 Mihomo v1.19.21 管道读到 134 条节点及 47 个策略组。T00–T02 已通过独立候选与集成复验，T03 保留工程样机供后续复验。 [阶段报告](../runs/coordination/phase-report-2026-11-09-ui-direction.zh-CN.md) [终端验收](../runs/connectivity/verifier-e75cd00/report.md)
 
 Windows 的 Native AOT 发布工具要求 Microsoft 的 C++ 桌面工具链。本轮先确认可用 SDK 和原生链接工具，给首个 Windows 发布留出可复现入口。 [Microsoft Native AOT 构建前提](https://learn.microsoft.com/en-us/dotnet/core/deploying/native-aot/#prerequisites)
