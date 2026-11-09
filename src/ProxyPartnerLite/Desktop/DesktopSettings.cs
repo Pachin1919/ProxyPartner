@@ -7,11 +7,13 @@ namespace ProxyPartnerLite.Desktop;
 public sealed unsafe partial class DesktopApp
 {
     private const string AuxClass = "ProxyPartner.Auxiliary";
+    private const int SettingsContentHeight = 596;
     private const int OpenSettings = 124, OpenDetails = 125, EnglishId = 201, LightId = 202,
         WeightFirst = 210, TargetListId = 220, UrlId = 221, ShortId = 222, SymbolId = 223,
         AddTarget = 224, EditTarget = 225, RemoveTarget = 226, SaveSettings = 227, CancelSettings = 228;
     private nint settingsButton, detailButton, settingsWindow, detailWindow, detailText;
     private nint settingsFont, detailFont, englishBox, lightBox, targetsList, urlInput, shortInput, symbolInput, example, settingsStatus;
+    private int settingsScroll;
     private readonly nint[] weightInputs = new nint[6];
     private readonly List<(nint Handle, int X, int Y, int W, int H)> settingsControls = [];
     private readonly List<CustomTarget> draftTargets = [];
@@ -23,11 +25,11 @@ public sealed unsafe partial class DesktopApp
             SetForegroundWindow(settingsWindow);
             return;
         }
-        settingsWindow = CreateAux(L("ProxyPartner · 设置", "ProxyPartner · Settings"), 740, 634);
+        settingsWindow = CreateAux(L("ProxyPartner · 设置", "ProxyPartner · Settings"), 740, 634, 0x200000);
         if (settingsWindow == 0) return;
         draftTargets.AddRange(preferences.CustomTargets);
-        const uint check = WsTabStop | 3, edit = WsTabStop | 0x800000 | 0x80;
-        const uint button = WsTabStop;
+        const uint button = WsTabStop | 0x4000; // BS_NOTIFY for keyboard focus
+        const uint check = button | 3, edit = WsTabStop | 0x800000 | 0x80;
         nint Field(string cls, string caption, uint style, int id, int x, int y, int width, int height)
         {
             nint handle = AuxChild(settingsWindow, cls, caption, style, id);
@@ -95,23 +97,32 @@ public sealed unsafe partial class DesktopApp
         SetFocus(detailText);
     }
 
-    private nint CreateAux(string caption, int width, int height)
+    private nint CreateAux(string caption, int width, int height, uint style = 0)
     {
         Rect origin;
         GetWindowRect(panel, &origin);
-        var monitor = new MonitorInfo { Size = (uint)sizeof(MonitorInfo) };
-        int x = origin.Left + Scale(30), y = origin.Top + Scale(30), w = Scale(width), h = Scale(height);
-        if (GetMonitorInfo(MonitorFromWindow(panel, 2), &monitor) != 0)
-        {
-            w = Math.Min(w, monitor.Work.Right - monitor.Work.Left);
-            h = Math.Min(h, monitor.Work.Bottom - monitor.Work.Top);
-            x = Math.Clamp(x, monitor.Work.Left, monitor.Work.Right - w);
-            y = Math.Clamp(y, monitor.Work.Top, monitor.Work.Bottom - h);
-        }
-        nint window = CreateWindow(0, AuxClass, caption, 0x00c80000 | WsClipChildren, x, y, w, h, panel, 0, module, 0);
+        int x = origin.Left + Scale(30), y = origin.Top + Scale(30);
+        var bounds = FitAux(new Rect { Left = x, Top = y, Right = x + Scale(width), Bottom = y + Scale(height) },
+            MonitorFromWindow(panel, 2));
+        nint window = CreateWindow(0, AuxClass, caption, 0x00c80000 | WsClipChildren | style,
+            bounds.Left, bounds.Top, bounds.Right - bounds.Left, bounds.Bottom - bounds.Top, panel, 0, module, 0);
         int dark = preferences.Light ? 0 : 1;
         if (window != 0) DwmSetWindowAttribute(window, 20, &dark, sizeof(int));
         return window;
+    }
+
+    private static Rect FitAux(Rect bounds, nint display)
+    {
+        var monitor = new MonitorInfo { Size = (uint)sizeof(MonitorInfo) };
+        if (GetMonitorInfo(display, &monitor) != 0)
+        {
+            int w = Math.Min(bounds.Right - bounds.Left, monitor.Work.Right - monitor.Work.Left);
+            int h = Math.Min(bounds.Bottom - bounds.Top, monitor.Work.Bottom - monitor.Work.Top);
+            int x = Math.Clamp(bounds.Left, monitor.Work.Left, monitor.Work.Right - w);
+            int y = Math.Clamp(bounds.Top, monitor.Work.Top, monitor.Work.Bottom - h);
+            bounds = new Rect { Left = x, Top = y, Right = x + w, Bottom = y + h };
+        }
+        return bounds;
     }
 
     private nint AuxChild(nint parent, string cls, string value, uint style, int id) =>
@@ -120,20 +131,20 @@ public sealed unsafe partial class DesktopApp
     private void SizeAux(nint window, Rect* suggested)
     {
         if (suggested != null)
-            MoveWindow(window, suggested->Left, suggested->Top, suggested->Right - suggested->Left,
-                suggested->Bottom - suggested->Top, 1);
+        {
+            Rect bounds = FitAux(*suggested, MonitorFromRect(suggested, 2));
+            MoveWindow(window, bounds.Left, bounds.Top, bounds.Right - bounds.Left, bounds.Bottom - bounds.Top, 1);
+        }
         int scale = (int)GetDpiForWindow(window);
         int Px(int value) => (value * scale + 48) / 96;
         nint face = CreateFont(-Px(15), 0, 0, 0, 400, 0, 0, 0, 1, 0, 0, 0, 0, "Segoe UI");
         if (window == settingsWindow)
         {
             foreach (var item in settingsControls)
-            {
                 Send(item.Handle, WmSetFont, (nuint)face, 1);
-                MoveWindow(item.Handle, Px(item.X), Px(item.Y), Px(item.W), Px(item.H), 1);
-            }
             if (settingsFont != 0) DeleteObject(settingsFont);
             settingsFont = face;
+            ScrollSettings(settingsScroll);
         }
         else
         {
@@ -146,6 +157,44 @@ public sealed unsafe partial class DesktopApp
         }
     }
 
+    private int SettingsPx(int value) => (value * (int)GetDpiForWindow(settingsWindow) + 48) / 96;
+
+    private void ScrollSettings(int position)
+    {
+        Rect client;
+        GetClientRect(settingsWindow, &client);
+        int dpi = (int)GetDpiForWindow(settingsWindow);
+        int Px(int value) => (value * dpi + 48) / 96;
+        int extent = Px(SettingsContentHeight);
+        settingsScroll = Math.Clamp(position, 0, Math.Max(0, extent - client.Bottom));
+        var bar = new Scroll
+        {
+            Size = (uint)sizeof(Scroll), Mask = 7, Max = extent - 1,
+            Page = (uint)client.Bottom, Position = settingsScroll
+        };
+        SetScrollInfo(settingsWindow, 1, &bar, 1);
+        GetClientRect(settingsWindow, &client);
+        int usableWidth = Math.Min(client.Right, Px(724));
+        int X(int value) => value * usableWidth / 724;
+        foreach (var item in settingsControls)
+            MoveWindow(item.Handle, X(item.X), Px(item.Y) - settingsScroll, X(item.W), Px(item.H), 1);
+        InvalidateRect(settingsWindow, 0, 1);
+    }
+
+    private void RevealSettingsControl(nint control)
+    {
+        Rect client;
+        GetClientRect(settingsWindow, &client);
+        foreach (var item in settingsControls)
+        {
+            if (item.Handle != control) continue;
+            int top = SettingsPx(Math.Max(0, item.Y - 22)), bottom = SettingsPx(item.Y + item.H + 10);
+            if (top < settingsScroll) ScrollSettings(top);
+            else if (bottom > settingsScroll + client.Bottom) ScrollSettings(bottom - client.Bottom);
+            break;
+        }
+    }
+
     private nint HandleAux(nint window, uint message, nuint wParam, nint lParam)
     {
         switch (message)
@@ -155,6 +204,7 @@ public sealed unsafe partial class DesktopApp
                 if (window == settingsWindow)
                 {
                     settingsWindow = 0;
+                    settingsScroll = 0;
                     if (settingsFont != 0) DeleteObject(settingsFont);
                     settingsFont = example = 0;
                     settingsControls.Clear();
@@ -168,6 +218,21 @@ public sealed unsafe partial class DesktopApp
                 }
                 return 0;
             case WmDpiChanged: SizeAux(window, (Rect*)lParam); return 0;
+            case 0x115 when window == settingsWindow && lParam == 0: // window WM_VSCROLL
+                Rect viewport;
+                GetClientRect(window, &viewport);
+                var bar = new Scroll { Size = (uint)sizeof(Scroll), Mask = 0x10 };
+                GetScrollInfo(window, 1, &bar);
+                ScrollSettings(((int)wParam & 0xffff) switch
+                {
+                    0 => settingsScroll - SettingsPx(36), 1 => settingsScroll + SettingsPx(36),
+                    2 => settingsScroll - viewport.Bottom, 3 => settingsScroll + viewport.Bottom,
+                    4 or 5 => bar.Track, 6 => 0, 7 => int.MaxValue, _ => settingsScroll
+                });
+                return 0;
+            case 0x20a when window == settingsWindow:
+                ScrollSettings(settingsScroll - (short)(wParam >> 16) * SettingsPx(60) / 120);
+                return 0;
             case 0x14: // WM_ERASEBKGND
                 Rect rect;
                 GetClientRect(window, &rect);
@@ -185,9 +250,13 @@ public sealed unsafe partial class DesktopApp
                 int id = (int)wParam & 0xffff, notification = (int)wParam >> 16;
                 if (id >= WeightFirst && id < WeightFirst + 6 && notification == 0x300 && example != 0) UpdateExample();
                 if (id == TargetListId && notification == 1) SelectTarget();
-                if (id is AddTarget or EditTarget or RemoveTarget) ChangeTarget(id);
-                if (id == SaveSettings) CommitSettings();
-                if (id == CancelSettings || id == 2) DestroyWindow(window);
+                if (notification == 0)
+                {
+                    if (id is AddTarget or EditTarget or RemoveTarget) ChangeTarget(id);
+                    if (id == SaveSettings) CommitSettings();
+                    if (id == CancelSettings || id == 2) DestroyWindow(window);
+                }
+                else if (lParam != 0 && notification is 4 or 6 or 0x100) RevealSettingsControl(lParam);
                 return 0;
             case WmCommand when (int)wParam == 2:
                 DestroyWindow(window);
@@ -374,7 +443,10 @@ public sealed unsafe partial class DesktopApp
         {
             string value = result.Format(preferences.English);
             if (result.ElapsedMs is int ms && result.State != ResultState.Measured) value += $" · {ms} ms";
-            Line($"{name} · {value} · {Timestamp(result.ObservedUtc)} UTC · {SourceLabel(result.Source)}");
+            if (result.HttpStatus is int http && result.State is not (ResultState.AuthenticationRequired or ResultState.Restricted))
+                value += $" · HTTP {http}";
+            string observed = result.ObservedUtc.HasValue ? Timestamp(result.ObservedUtc) + " UTC" : L("时间未知", "Time unknown");
+            Line($"{name} · {value} · {observed} · {SourceLabel(result.Source)}");
         }
         Line(row.Name);
         Line($"{L("评分", "Score")} {ScoreText(row)}  |  {L("来源", "Source")}: {SourceLabel(row.Quality?.Source ?? "—")}");

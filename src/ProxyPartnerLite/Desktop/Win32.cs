@@ -193,6 +193,8 @@ internal static unsafe partial class Win32
     internal static partial uint GetDpiForWindow(nint window);
     [LibraryImport("user32")]
     internal static partial nint MonitorFromWindow(nint window, uint flags);
+    [LibraryImport("user32")]
+    internal static partial nint MonitorFromRect(Rect* rect, uint flags);
     [LibraryImport("user32", EntryPoint = "GetMonitorInfoW")]
     internal static partial int GetMonitorInfo(nint monitor, MonitorInfo* info);
     [LibraryImport("user32")]

@@ -35,6 +35,7 @@ public static class DesktopWindows
     [DllImport("user32")] public static extern uint GetDpiForWindow(IntPtr hwnd);
     [DllImport("user32")] public static extern bool GetWindowRect(IntPtr hwnd, out Rect rect);
     [DllImport("user32")] public static extern bool GetClientRect(IntPtr hwnd, out Rect rect);
+    [DllImport("user32")] private static extern bool ClientToScreen(IntPtr hwnd, ref Point point);
     [DllImport("user32")] private static extern bool GetScrollInfo(IntPtr hwnd, int bar, ref Scroll info);
     [DllImport("user32")] public static extern bool PrintWindow(IntPtr hwnd, IntPtr dc, uint flags);
     [DllImport("user32")] public static extern IntPtr SetThreadDpiAwarenessContext(IntPtr context);
@@ -108,6 +109,16 @@ public static class DesktopWindows
         var result = new StringBuilder(Math.Clamp(length + 1, 512, 64 * 1024));
         SendMessage(hwnd, 0xD, (IntPtr)result.Capacity, result);
         return result.ToString();
+    }
+
+    public static bool ControlInClient(IntPtr parent, int id)
+    {
+        IntPtr control = GetDlgItem(parent, id);
+        Point origin = default;
+        return control != IntPtr.Zero && IsWindowVisible(control) &&
+            GetWindowRect(control, out Rect child) && GetClientRect(parent, out Rect client) &&
+            ClientToScreen(parent, ref origin) && child.Left >= origin.X && child.Top >= origin.Y &&
+            child.Right <= origin.X + client.Right && child.Bottom <= origin.Y + client.Bottom;
     }
 
     public static void DpiMessage(int pid, IntPtr panel, int dpi)
