@@ -321,6 +321,7 @@ public sealed unsafe partial class DesktopApp
         {
             nint nextBold = Face(16, 650);
             nint nextSmall = Face(13, 400);
+            nint nextSiteStatus = Face(12, 400);
             nint nextScore = Face(30, 650);
             Send(title, WmSetFont, (nuint)nextBold, 1);
             Send(status, WmSetFont, (nuint)nextFont, 1);
@@ -334,6 +335,7 @@ public sealed unsafe partial class DesktopApp
             boldFont = nextBold;
             smallFont = nextSmall;
             scoreFont = nextScore;
+            siteStatusFont = nextSiteStatus;
         }
         for (int i = 0; i < Columns.Length; i++)
             Send(list, LvmSetColumnWidth, (nuint)i, Scale(ColumnWidths[i]));
@@ -353,7 +355,8 @@ public sealed unsafe partial class DesktopApp
         if (boldFont != 0) DeleteObject(boldFont);
         if (smallFont != 0) DeleteObject(smallFont);
         if (scoreFont != 0) DeleteObject(scoreFont);
-        font = boldFont = smallFont = scoreFont = 0;
+        if (siteStatusFont != 0) DeleteObject(siteStatusFont);
+        font = boldFont = smallFont = scoreFont = siteStatusFont = 0;
     }
 
     private int ToolbarHeight(int width) => Scale((width >= Scale(460) ? 112 : 147) + (width < Scale(740) ? 22 : 0));

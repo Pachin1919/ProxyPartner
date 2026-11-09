@@ -15,7 +15,7 @@ public sealed unsafe partial class DesktopApp
         Control = Color(0x23262D), Border = Color(0x373C46), Text = Color(0xF2F4F7),
         Muted = Color(0xAFB6C2), Focus = Color(0x8BADFF), Active = Color(0x315AC9),
         ActiveText = Color(0xF7F9FF);
-    private nint cards, toggle, sortButton, title, searchLabel, hint, smallFont, boldFont, scoreFont, editBrush, toolsBrush;
+    private nint cards, toggle, sortButton, title, searchLabel, hint, smallFont, boldFont, scoreFont, siteStatusFont, editBrush, toolsBrush;
     private nint tooltip, tipBuffer;
     private int hoverIndex = -1, hoverSite = -1;
     private nuint finishSession;
@@ -288,7 +288,8 @@ public sealed unsafe partial class DesktopApp
                 Label(dc, Sites[index].Short, start, iconY, end, Scale(23), Text, smallFont, 1);
             }
             var result = SiteResult(row, index);
-            Label(dc, ShortResult(result), start, statusY, end, Scale(18), result is null ? Muted : Text, smallFont, 1);
+            string state = result is { State: ResultState.Measured, ElapsedMs: int ms } ? $"{ms}ms" : ShortResult(result);
+            Label(dc, state, start, statusY, end, Scale(18), result is null ? Muted : Text, siteStatusFont, 1);
         }
     }
 
