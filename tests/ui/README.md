@@ -23,6 +23,12 @@ double-click the published EXE, use Tab and End,
 close the window, open the ProxyPartner tray icon (check overflow), then
 right-click that icon and choose 退出.
 
+For a branded local preview, supply `-TargetIcons <absolute-folder>` to
+`aot-build`. It copies the five known ICO files to the publish directory and
+records their hashes with the executable. The icons are optional preview
+resources supplied separately with source and license notes. The runtime uses
+short labels when they are missing and never downloads them.
+
 The fixture generates seven days of synthetic observations for 100 leaves and
 three targets and projects them to display values. The fixture is shared by
 Win32 and the Avalonia comparison. Win32 starts on the virtualized card surface.

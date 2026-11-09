@@ -3,7 +3,8 @@
 param(
     [Parameter(Mandatory)][ValidateSet('aot-build','100-node-ui','dpi-tray','memory-gate')][string]$Check,
     [Parameter(Mandatory)][string]$ToolchainRoot,
-    [Parameter(Mandatory)][string]$EvidenceDirectory
+    [Parameter(Mandatory)][string]$EvidenceDirectory,
+    [string]$TargetIcons
 )
 $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $false
@@ -23,6 +24,7 @@ $summary = [ordered]@{ status='FAIL'; check=$Check; head_sha=$head; cwd=$repo
         '-Check',$Check,'-ToolchainRoot',$ToolchainRoot,'-EvidenceDirectory',$EvidenceDirectory) }
 $owned = [Collections.Generic.List[Diagnostics.Process]]::new()
 $jobs = [Collections.Generic.List[object]]::new()
+if ($TargetIcons) { $summary.command += @('-TargetIcons',$TargetIcons) }
 
 function Assert($Condition, [string]$Message) {
     if (!$Condition) { throw $Message }
@@ -83,8 +85,8 @@ function Find-Panel([int]$Id) {
 function Find-Tray([int]$Id) {
     [DesktopWindows]::Find($Id,'ProxyPartner.Tray',$false)
 }
-function Start-Panel($Artifact) {
-    $run = Start-Recorded 'launch' $Artifact.exe @()
+function Start-Panel($Artifact, [string]$Name = 'launch') {
+    $run = Start-Recorded $Name $Artifact.exe @()
     $panel = Wait-Value { Find-Panel $run.process.Id } 'Product window did not appear.'
     $tray = Wait-Value { Find-Tray $run.process.Id } 'Product tray HWND did not appear.'
     [pscustomobject]@{ run=$run; panel=$panel; tray=$tray; id=$run.process.Id; exe=$Artifact.exe }
@@ -150,9 +152,11 @@ try {
     $null = [DesktopWindows]::SetThreadDpiAwarenessContext([IntPtr](-4))
     if ($Check -eq 'aot-build') {
         foreach ($variant in 'Win32','Avalonia') {
-            $run = Start-Recorded "publish-$variant" $pwsh @('-NoProfile','-NonInteractive','-File',
+            $arguments = @('-NoProfile','-NonInteractive','-File',
                 (Join-Path $repo 'build/Publish-DesktopBaseline.ps1'),'-ToolchainRoot',$ToolchainRoot,
                 '-EvidenceDirectory',$out,'-Variant',$variant)
+            if ($variant -eq 'Win32' -and $TargetIcons) { $arguments += @('-TargetIcons',$TargetIcons) }
+            $run = Start-Recorded "publish-$variant" $pwsh $arguments
             $null = Receive-Recorded $run 240
         }
     }
@@ -192,6 +196,15 @@ try {
             $summary.selected_index = Send-Number $list 0x100C -1 2
             Assert ($summary.top_index -gt 0 -and $summary.selected_index -eq 99) 'ListView End key did not select and scroll to final row.'
             $summary.last_page = Save-Window $ui.id $ui.panel $ui.exe 'last-page'
+            $bareDirectory = Join-Path $out 'no-icons'
+            $null = New-Item -ItemType Directory -Path $bareDirectory
+            $bareExe = Join-Path $bareDirectory 'ProxyPartner.exe'
+            Copy-Item -LiteralPath $artifact.exe -Destination $bareExe
+            Assert ((Get-FileHash -LiteralPath $bareExe).Hash -eq $summary.exe_sha256) 'Fallback binary hash differs.'
+            $bare = Start-Panel @{exe=$bareExe} 'fallback-launch'
+            $summary.icon_fallback = Save-Window $bare.id $bare.panel $bare.exe 'cards-without-icons'
+            Exit-Tray $bare.tray
+            $null = Receive-Recorded $bare.run 15
         } else {
             $physical = [ordered]@{}
             foreach ($display in [DesktopWindows]::Displays()) {

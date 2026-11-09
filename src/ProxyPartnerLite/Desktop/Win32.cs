@@ -115,6 +115,25 @@ internal static unsafe partial class Win32
         public uint Page;
         public int Position, Track;
     }
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct TooltipTool
+    {
+        public uint Size, Flags;
+        public nint Window;
+        public nuint Id;
+        public Rect Bounds;
+        public nint Instance, Text, Data, Reserved;
+    }
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct TooltipInfo
+    {
+        public NotifyHeader Header;
+        public nint Text;
+        public fixed char Buffer[80];
+        public nint Instance;
+        public uint Flags;
+        public nint Data;
+    }
 
     [StructLayout(LayoutKind.Sequential)]
     internal struct NotifyIcon
@@ -202,6 +221,14 @@ internal static unsafe partial class Win32
     internal static partial uint TrackPopupMenu(nint menu, uint flags, int x, int y, int reserved, nint window, nint rect);
     [LibraryImport("user32")]
     internal static partial int GetCursorPos(Point* point);
+    [LibraryImport("user32")]
+    internal static partial int ScreenToClient(nint window, Point* point);
+    [LibraryImport("user32", EntryPoint = "LoadImageW", StringMarshalling = StringMarshalling.Utf16)]
+    internal static partial nint LoadImage(nint instance, string path, uint type, int width, int height, uint flags);
+    [LibraryImport("user32")]
+    internal static partial int DrawIconEx(nint dc, int x, int y, nint icon, int width, int height, uint step, nint brush, uint flags);
+    [LibraryImport("user32")]
+    internal static partial int DestroyIcon(nint icon);
     [LibraryImport("user32")]
     internal static partial int DestroyMenu(nint menu);
     [LibraryImport("shell32", EntryPoint = "Shell_NotifyIconW")]

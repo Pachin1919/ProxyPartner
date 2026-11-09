@@ -20,10 +20,10 @@ $checks = @(foreach ($sample in @(@{width=1536;columns=6},@{width=1280;columns=5
     Assert ([DesktopWindows]::GetClientRect($ui.panel,[ref]$client) -and $client.Right -eq $sample.width) 'Actual panel client width differs.'
     $cardRect = [DesktopWindows+Rect]::new()
     $null = [DesktopWindows]::GetClientRect($cards,[ref]$cardRect)
-    $expectedWidth = [int][Math]::Floor(($cardRect.Right - ($sample.columns-1)*12)/$sample.columns)
+    $expectedWidth = [int][Math]::Floor(($cardRect.Right - ($sample.columns-1)*20)/$sample.columns)
     $expectedHeight = [int][Math]::Floor(($expectedWidth*96+50)/100)
     $scroll = [DesktopWindows]::ReadScroll($cards)
-    $expectedExtent = [int][Math]::Ceiling(100/$sample.columns)*($expectedHeight+12)-12
+    $expectedExtent = [int][Math]::Ceiling(100/$sample.columns)*($expectedHeight+20)-20
     Assert ($scroll.Max+1 -eq $expectedExtent -and $scroll.Page -eq $cardRect.Bottom) "Card layout/scroll range differs at $($sample.width)."
     [ordered]@{ client_width=$client.Right; viewport_width=$cardRect.Right; columns=$sample.columns
         card_width=$expectedWidth; card_height=$expectedHeight; ratio=[Math]::Round($expectedHeight/$expectedWidth,4)
@@ -31,6 +31,17 @@ $checks = @(foreach ($sample in @(@{width=1536;columns=6},@{width=1280;columns=5
         window=(Save-Window $ui.id $ui.panel $ui.exe "cards-$($sample.width)") }
 })
 $summary.card_layout = $checks
+$hint = [DesktopWindows]::GetDlgItem($ui.panel,121)
+$cardSize = $checks[-1]
+$summary.site_hover_text = @(foreach ($site in @(@{slot=2;text='OpenAI API · 未测'},@{slot=3;text='ChatGPT · 已过期'})) {
+    $x = 17 + [int](($cardSize.card_width-34)*($site.slot+0.5)/5)
+    $y = [int]($cardSize.card_height*0.63)
+    $null = Send-Number $cards 0x200 0 ($x -bor ($y -shl 16))
+    $actual = [DesktopWindows]::Text($hint)
+    Assert ($actual -ceq $site.text) "Unexpected site hover text: $actual"
+    $actual
+})
+$summary.site_hover_window = Save-Window $ui.id $ui.panel $ui.exe 'cards-hover'
 $null = Send-Number $cards 0x100 0x23
 $last = [DesktopWindows]::ReadScroll($cards)
 Assert ($last.Position -eq $last.Max+1-$last.Page -and $last.Position -gt 0) 'End did not scroll to the final card.'

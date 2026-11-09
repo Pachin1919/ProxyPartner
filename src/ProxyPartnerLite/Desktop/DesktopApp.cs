@@ -43,7 +43,7 @@ public sealed unsafe partial class DesktopApp
 
     private int RunLoop(bool startInTray)
     {
-        uint* common = stackalloc uint[] { 8, 1 };
+        uint* common = stackalloc uint[] { 8, 1 | 4 };
         if (InitCommonControlsEx(common) == 0) return 1;
         icon = LoadIcon(0, 32512);
         if (!Register(TrayClass) || !Register(PanelClass) || !Register(CardsClass)) return 1;
@@ -142,7 +142,8 @@ public sealed unsafe partial class DesktopApp
                 case WmDestroy:
                     source.SnapshotChanged -= OnSnapshotChanged;
                     rows = [];
-                    panel = status = search = groups = list = cards = toggle = title = searchLabel = sortButton = 0;
+                    FreeCardArtwork();
+                    panel = status = search = groups = list = cards = toggle = title = searchLabel = sortButton = hint = 0;
                     FreeFonts();
                     if (editBrush != 0) DeleteObject(editBrush);
                     if (toolsBrush != 0) DeleteObject(toolsBrush);
@@ -156,7 +157,7 @@ public sealed unsafe partial class DesktopApp
                     return 1;
                 case 0x133: // WM_CTLCOLOREDIT
                 case 0x138: // WM_CTLCOLORSTATIC
-                    SetTextColor((nint)wParam, lParam == status ? Muted : Text);
+                    SetTextColor((nint)wParam, lParam == status || lParam == hint ? Muted : Text);
                     SetBkMode((nint)wParam, 2);
                     SetBkColor((nint)wParam, msg == 0x133 ? Control : Tools);
                     return msg == 0x133 ? editBrush : toolsBrush;
@@ -190,6 +191,11 @@ public sealed unsafe partial class DesktopApp
                     return 0;
                 case WmNotify:
                     var header = (NotifyHeader*)lParam;
+                    if (header->Window == tooltip && header->Code == -530)
+                    {
+                        GetTooltipText((TooltipInfo*)lParam);
+                        return 0;
+                    }
                     if (header->Window != list) break;
                     if (header->Code == LvnGetDisplayInfo) FillCell(&((DisplayInfo*)lParam)->Item);
                     if (header->Code == LvnColumnClick) Sort(((ListNotify*)lParam)->SubItem);
@@ -248,19 +254,21 @@ public sealed unsafe partial class DesktopApp
         title = Child("STATIC", "ProxyPartner  /  节点质量", 0, 109);
         status = Child("STATIC", "", 0, 0);
         searchLabel = Child("STATIC", "搜索", 0x200, 120);
+        hint = Child("STATIC", tableMode ? "表格 · 可按列排序" : "悬停查看站点状态", 0x200, 121);
         search = Child("EDIT", filterText, WsTabStop | 0x800000 | 0x80, Search);
         toggle = Child("BUTTON", tableMode ? "切换卡片" : "切换表格", WsTabStop | 11, Toggle);
         sortButton = Child("BUTTON", "排序", WsTabStop | 11, SortMenu);
         groups = Child("BUTTON", "策略组", WsTabStop | 11, Groups);
         list = Child("SysListView32", "", WsTabStop | 0x1000 | 1 | 4 | 8, 105);
         cards = Child(CardsClass, "节点卡片", WsTabStop | 0x200000, 106);
-        if (title == 0 || status == 0 || search == 0 || searchLabel == 0 || groups == 0 || list == 0 ||
+        if (title == 0 || status == 0 || search == 0 || searchLabel == 0 || hint == 0 || groups == 0 || list == 0 ||
             cards == 0 || toggle == 0 || sortButton == 0 || editBrush == 0 || toolsBrush == 0)
         {
             DestroyWindow(panel);
             return false;
         }
         Send(list, 0x2005, 1, 0); // CCM_SETUNICODEFORMAT
+        CreateCardTooltip();
         Send(list, LvmSetExtendedStyle, 0, 0x10020); // double buffer and full-row selection
         Send(list, LvmFirst + 1, 0, (nint)Background);
         Send(list, LvmFirst + 36, 0, (nint)Text);
@@ -311,12 +319,13 @@ public sealed unsafe partial class DesktopApp
         nint nextFont = Face(15, 400);
         if (nextFont != 0)
         {
-            nint nextBold = Face(17, 650);
-            nint nextSmall = Face(14, 400);
-            nint nextScore = Face(29, 650);
+            nint nextBold = Face(16, 650);
+            nint nextSmall = Face(13, 400);
+            nint nextScore = Face(30, 650);
             Send(title, WmSetFont, (nuint)nextBold, 1);
             Send(status, WmSetFont, (nuint)nextFont, 1);
             Send(searchLabel, WmSetFont, (nuint)nextFont, 1);
+            Send(hint, WmSetFont, (nuint)nextSmall, 1);
             Send(search, WmSetFont, (nuint)nextFont, 1);
             Send(groups, WmSetFont, (nuint)nextFont, 1);
             Send(list, WmSetFont, (nuint)nextFont, 1);
@@ -328,6 +337,7 @@ public sealed unsafe partial class DesktopApp
         }
         for (int i = 0; i < Columns.Length; i++)
             Send(list, LvmSetColumnWidth, (nuint)i, Scale(ColumnWidths[i]));
+        if (tooltip != 0) Send(tooltip, 0x418, 0, Scale(420));
         if (suggested != null)
             MoveWindow(panel, suggested->Left, suggested->Top, suggested->Right - suggested->Left,
                 suggested->Bottom - suggested->Top, 1);
@@ -346,7 +356,7 @@ public sealed unsafe partial class DesktopApp
         font = boldFont = smallFont = scoreFont = 0;
     }
 
-    private int ToolbarHeight(int width) => Scale(width >= Scale(460) ? 112 : 147);
+    private int ToolbarHeight(int width) => Scale((width >= Scale(460) ? 112 : 147) + (width < Scale(740) ? 22 : 0));
 
     private void Layout()
     {
@@ -364,8 +374,14 @@ public sealed unsafe partial class DesktopApp
         MoveWindow(toggle, controlX, controlY, Scale(90), Scale(28), 1);
         MoveWindow(sortButton, controlX + Scale(98), controlY, Scale(76), Scale(28), 1);
         MoveWindow(groups, controlX + Scale(182), controlY, Scale(94), Scale(28), 1);
-        MoveWindow(list, pad, top, width, Math.Max(0, size.Bottom - top - pad), 1);
-        if (cards != 0) MoveWindow(cards, pad, top, width, Math.Max(0, size.Bottom - top - pad), 1);
+        int hintX = size.Right < Scale(740) ? pad : controlX + Scale(290);
+        int hintY = size.Right < Scale(740) ? controlY + Scale(30) : controlY;
+        MoveWindow(hint, hintX, hintY, Math.Max(0, size.Right - pad - hintX), Scale(24), 1);
+        int contentPad = Scale(24);
+        int contentWidth = Math.Max(0, size.Right - contentPad * 2);
+        int contentHeight = Math.Max(0, size.Bottom - top - contentPad);
+        MoveWindow(list, contentPad, top, contentWidth, contentHeight, 1);
+        if (cards != 0) MoveWindow(cards, contentPad, top, contentWidth, contentHeight, 1);
         InvalidateRect(panel, 0, 1);
     }
 
@@ -399,6 +415,8 @@ public sealed unsafe partial class DesktopApp
         }
         filtered.Sort(CompareRows);
         rows = filtered.ToArray();
+        hoverIndex = hoverSite = -1;
+        if (!tableMode) SetText(hint, HoverText());
         SyncTable();
         ScrollCards(0);
         if (!tableMode && IndexOfSelection() is int selected && selected >= 0) SelectCard(selected);
@@ -454,6 +472,8 @@ public sealed unsafe partial class DesktopApp
         ShowWindow(list, tableMode ? 5 : 0);
         ShowWindow(cards, tableMode ? 0 : 5);
         SetText(toggle, tableMode ? "切换卡片" : "切换表格");
+        hoverIndex = hoverSite = -1;
+        SetText(hint, tableMode ? "表格 · 可按列排序" : HoverText());
         if (tableMode) SyncTable();
         else if (IndexOfSelection() is int index && index >= 0) SelectCard(index);
         SetFocus(tableMode ? list : cards);

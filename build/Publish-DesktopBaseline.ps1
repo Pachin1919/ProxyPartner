@@ -3,7 +3,8 @@
 param(
     [Parameter(Mandatory)][string]$ToolchainRoot,
     [Parameter(Mandatory)][string]$EvidenceDirectory,
-    [ValidateSet('Win32','Avalonia')][string]$Variant = 'Win32'
+    [ValidateSet('Win32','Avalonia')][string]$Variant = 'Win32',
+    [string]$TargetIcons
 )
 $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $false
@@ -70,11 +71,36 @@ $pe = [BitConverter]::ToInt32($data,0x3c)
 if ([BitConverter]::ToUInt32($data,$pe) -ne 0x4550 -or [BitConverter]::ToUInt16($data,$pe+4) -ne 0x8664 -or
     [BitConverter]::ToUInt16($data,$pe+24) -ne 0x20b -or [BitConverter]::ToUInt16($data,$pe+92) -ne 2 -or
     [BitConverter]::ToUInt32($data,$pe+248) -ne 0) { throw 'Expected x64 native GUI PE without a CLR directory.' }
+if ($Variant -eq 'Win32' -and $TargetIcons) {
+    if (![IO.Path]::IsPathFullyQualified($TargetIcons) -or !(Test-Path -LiteralPath $TargetIcons -PathType Container)) {
+        throw 'TargetIcons must point to an existing absolute directory of local preview resources.'
+    }
+    $destination = Join-Path $publish 'TargetIcons'
+    $null = New-Item -ItemType Directory -Path $destination
+    $sourcesFile = Join-Path $TargetIcons 'sources.json'
+    $iconSources = if (Test-Path -LiteralPath $sourcesFile -PathType Leaf) {
+        Get-Content -Raw -LiteralPath $sourcesFile | ConvertFrom-Json
+    }
+    foreach ($name in 'google.ico','youtube.ico','openai_api.ico','chatgpt_web.ico','anthropic_api.ico') {
+        $path = Join-Path $TargetIcons $name
+        if (Test-Path -LiteralPath $path -PathType Leaf) {
+            if ($iconSources) {
+                $source = @($iconSources | Where-Object file -ceq $name)
+                if ($source.Count -ne 1 -or (Get-FileHash -LiteralPath $path).Hash -ne $source[0].sha256) {
+                    throw "Local preview icon hash differs from sources.json: $name"
+                }
+            }
+            Copy-Item -LiteralPath $path -Destination (Join-Path $destination $name)
+        }
+    }
+    if ($iconSources) { Copy-Item -LiteralPath $sourcesFile -Destination (Join-Path $destination 'sources.json') }
+}
 $head = git -C $repo rev-parse HEAD
 if ($LASTEXITCODE -ne 0) { throw 'Cannot resolve build HEAD.' }
 [ordered]@{ head_sha=$head; worktree=$repo; sdk=$sdkVersion; runtime=$lock.dotnet.runtime
     linker_version=$lock.native.msvc_tools_version; exe=$exe; variant=$Variant; bytes=$data.Length
-    files=@(Get-ChildItem -File -LiteralPath $publish | ForEach-Object {
-        [ordered]@{ name=$_.Name; sha256=(Get-FileHash -LiteralPath $_.FullName).Hash.ToLowerInvariant() }
+    files=@(Get-ChildItem -File -Recurse -LiteralPath $publish | ForEach-Object {
+        [ordered]@{ name=[IO.Path]::GetRelativePath($publish,$_.FullName).Replace('\','/')
+            sha256=(Get-FileHash -LiteralPath $_.FullName).Hash.ToLowerInvariant() }
     }) } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $out 'artifact.json') -Encoding utf8NoBOM
 Write-Output $exe
