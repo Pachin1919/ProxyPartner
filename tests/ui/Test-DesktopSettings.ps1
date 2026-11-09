@@ -71,8 +71,9 @@ Assert ([DesktopWindows]::MoveWindow($ui.panel,$small.Left+8,$small.Top+8,($smal
 $settings = Open-Auxiliary 124
 Assert ([DesktopWindows]::GetDpiForWindow($ui.panel) -eq 96 -and
     [DesktopWindows]::GetDpiForWindow($settings) -eq 96) 'Small physical display should be 96 DPI.'
-Assert (![DesktopWindows]::ControlInClient($settings,227)) 'Small display must exercise the clipped-settings case.'
+$null = Send-Number $settings 0x115 6
 $summary.small_zh_top = Save-Window $ui.id $settings $ui.exe 'settings-small-top'
+Assert (![DesktopWindows]::ControlInClient($settings,227)) "Small display must exercise scrolling. Work area $($small.Right-$small.Left)x$($small.Bottom-$small.Top), Settings $($summary.small_zh_top.width)x$($summary.small_zh_top.height)."
 for ($i = 0; $i -lt 6; $i++) {
     Write-Control $settings (210 + $i) (@('70','20','10','50','40','10')[$i])
 }
@@ -113,6 +114,7 @@ Assert ((Read-Control $ui.panel 0) -like '*Synthetic data*100 rows*') 'English p
 $large = $displays[-1]
 Assert ([DesktopWindows]::MoveWindow($ui.panel,$large.Left+10,$large.Top+10,
     [Math]::Min(1890,$large.Right-$large.Left-20),[Math]::Min(1050,$large.Bottom-$large.Top-20),$true)) 'Could not restore the large display.'
+$null = Send-Number ([DesktopWindows]::GetDlgItem($ui.panel,106)) 0x115 6
 $summary.light_en = Save-Window $ui.id $ui.panel $ui.exe 'light-en'
 $summary.saved_sha256 = (Get-FileHash -LiteralPath $settingsFile).Hash
 

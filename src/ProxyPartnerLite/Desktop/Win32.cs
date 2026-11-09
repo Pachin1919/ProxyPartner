@@ -195,6 +195,8 @@ internal static unsafe partial class Win32
     internal static partial nint MonitorFromWindow(nint window, uint flags);
     [LibraryImport("user32")]
     internal static partial nint MonitorFromRect(Rect* rect, uint flags);
+    [LibraryImport("uxtheme", StringMarshalling = StringMarshalling.Utf16)]
+    internal static partial int SetWindowTheme(nint window, string app, string id);
     [LibraryImport("user32", EntryPoint = "GetMonitorInfoW")]
     internal static partial int GetMonitorInfo(nint monitor, MonitorInfo* info);
     [LibraryImport("user32")]

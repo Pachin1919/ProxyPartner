@@ -39,6 +39,11 @@ public sealed unsafe partial class DesktopApp
         Field("STATIC", L("显示与测试偏好", "Display and testing preferences"), 0, 0, 20, 18, 670, 21);
         englishBox = Field("BUTTON", L("English 界面", "English interface"), check, EnglishId, 20, 45, 165, 24);
         lightBox = Field("BUTTON", L("浅色主题", "Light theme"), check, LightId, 205, 45, 165, 24);
+        if (!preferences.Light)
+        {
+            SetWindowTheme(englishBox, "", "");
+            SetWindowTheme(lightBox, "", "");
+        }
         Send(englishBox, 0xf1, preferences.English ? 1u : 0u, 0);
         Send(lightBox, 0xf1, preferences.Light ? 1u : 0u, 0);
         Field("STATIC", L("评分分项（%）", "Score components (%)"), 0, 0, 20, 88, 680, 20);
@@ -54,7 +59,7 @@ public sealed unsafe partial class DesktopApp
                 WeightFirst + index, x + 119, y, 58, 24);
             Send(weightInputs[index], 0xc5, 3, 0); // EM_SETLIMITTEXT
         }
-        example = Field("STATIC", "", 0, 233, 20, 208, 685, 52);
+        example = Field("STATIC", "", 0, 233, 20, 208, 685, 62);
         Field("STATIC", L("自定义目标 · 仅登记，待测", "Custom targets · registration only, untested"), 0, 0, 20, 275, 690, 20);
         targetsList = Field("LISTBOX", "", WsTabStop | 0x800000 | 0x300000 | 1, TargetListId, 20, 300, 684, 98);
         Send(targetsList, 0x194, (nuint)Scale(1400), 0); // horizontal extent available when the list is wide
@@ -240,8 +245,9 @@ public sealed unsafe partial class DesktopApp
                 return 1;
             case 0x133: // WM_CTLCOLOREDIT
             case 0x134: // WM_CTLCOLORLISTBOX
+            case 0x135: // WM_CTLCOLORBTN
             case 0x138: // WM_CTLCOLORSTATIC (includes readonly detail edit)
-                bool field = message != 0x138 || lParam == detailText;
+                bool field = message is 0x133 or 0x134 || lParam == detailText;
                 SetTextColor((nint)wParam, Text);
                 SetBkMode((nint)wParam, 2);
                 SetBkColor((nint)wParam, field ? Control : Tools);
@@ -293,7 +299,7 @@ public sealed unsafe partial class DesktopApp
         double total = sites.Apply(openAi, gpt, gitHub);
         SetText(example, L(
             $"合成算例 · OPENAI {openAi:F1} / GPT {gpt:F1} / GitHub {gitHub:F1} → {total:F1}\r\n先加权成功率、延迟和稳定性，再加权目标。节点样例分数保持原值。",
-            $"Synthetic example · OPENAI {openAi:F1} / GPT {gpt:F1} / GitHub {gitHub:F1} → {total:F1}\r\nWeight success, latency and stability per target, then weight the targets. Sample node scores stay unchanged."));
+            $"Synthetic example · OPENAI {openAi:F1} / GPT {gpt:F1} / GitHub {gitHub:F1} → {total:F1}\r\nWeight the metrics per target, then combine target scores. Sample scores stay fixed."));
     }
 
     private int TargetIndex() => (int)Send(targetsList, 0x188, 0, 0);
