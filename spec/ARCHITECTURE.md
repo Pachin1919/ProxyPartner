@@ -29,12 +29,12 @@ C#用NamedPipeClientStream + SocketsHttpHandler.ConnectCallback，HTTP/1.1，Use
 节点身份：source_instance+provider+native_id映射为内部ID；拿到配置后用本机盐HMAC生成revision。不能只按server:port去重，也不能仅以显示名合并。
 
 ## live只读白名单
-GET /version、/proxies、/providers/proxies；GET /configs只用于确认mode和已知字段。
-可选GET /traffic流只在前台显示总速率时消费并有限缓存；不读取logs。/connections仅用户按“核对实际链路”时短时读取并脱敏，不保存逐域名历史。
-默认拒绝所有PUT/PATCH/DELETE，以及GET路径包含delay/healthcheck/restart/upgrade/cache等；不仅按HTTP方法过滤。白名单编译进代码并有单元测试。API Secret本身通常不是只读凭证，约束由本软件执行，不能宣传内核已做权限隔离。
+常规读取限于 GET /version 和 /proxies。需要核对节点归属时，显式读取 GET /providers/proxies。界面按组展示当前选择。全局路由或实际连接缺少证据时显示未知。
+Mihomo v1.19.21 的 GET /configs 返回整份通用配置，包含可能携带入站认证的字段。本版拒绝该路由。 [配置接口](https://github.com/MetaCubeX/mihomo/blob/3aa668c55704399ede35cd710a48c20111d23ea6/hub/route/configs.go) · [通用配置实现](https://github.com/MetaCubeX/mihomo/blob/3aa668c55704399ede35cd710a48c20111d23ea6/hub/executor/executor.go)
+发送边界只接受三个精确 GET 路径。配置、测速、健康检查、连接、日志与写操作均不在白名单。回退凭证仅用于已授权且确认归属的回环连接。
 
 ## Go补测与副作用
-以 Mihomo 与 faceair 的源码核对宿主接口、指定拨号和测试口径。逐节点测量采用经审查的许可兼容实现，先以实际 Shadowsocks 线路验证成熟库。自研代码使用 MIT，GPL 参考代码不进入实现。
+以 Mihomo 与 faceair 的源码核对宿主接口、指定拨号和测试口径。当前宿主现场为 VLESS 与 Mieru，首轮优先从获准的真实 VLESS 线路验证适用传输、许可与资源成本。自研代码使用 MIT，GPL 参考代码不进入实现。
 T08 在选型前核对拨号库的实际依赖、许可证、路径证据和资源成本。完整 Lite 仍须通过 40 MiB 进程树门槛，探测保持宿主白名单读取边界。
 全局并发1、节点级生命周期、无geodata/TUN/listener初始化、限制连接池与缓存。Go GOMEMLIMIT只是软runtime限制，不是Windows进程硬上限，不能当达标证据。
 TUN或系统过滤器可能串联已有代理；独立拨号≠路径天然独立。路径无法验证就标route_unverified，不发独立节点榜单。测试仍消耗网络带宽，不声称完全零影响。
