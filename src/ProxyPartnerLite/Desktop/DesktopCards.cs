@@ -11,6 +11,9 @@ public sealed unsafe partial class DesktopApp
         ("google", "Google", "GO"), ("youtube", "YouTube", "YT"), ("openai_api", "OpenAI API", "API"),
         ("chatgpt_web", "ChatGPT", "GPT"), ("anthropic_api", "Anthropic API", "ANT")
     ];
+    // Only the API and GPT slots contain measured results. Reserve room for
+    // three Chinese characters there while keeping the other marks aligned.
+    private static readonly int[] SiteEdges = [0, 18, 36, 59, 82, 100];
     private static readonly uint Background = Color(0x14161B), Tools = Color(0x1A1D23),
         Control = Color(0x23262D), Border = Color(0x373C46), Text = Color(0xF2F4F7),
         Muted = Color(0xAFB6C2), Focus = Color(0x8BADFF), Active = Color(0x315AC9),
@@ -294,8 +297,8 @@ public sealed unsafe partial class DesktopApp
         int size = Scale(18);
         for (int index = 0; index < Sites.Length; index++)
         {
-            int start = left + (right - left) * index / Sites.Length;
-            int end = left + (right - left) * (index + 1) / Sites.Length;
+            int start = left + (right - left) * SiteEdges[index] / 100;
+            int end = left + (right - left) * SiteEdges[index + 1] / 100;
             int iconX = (start + end - size) / 2;
             nint mark = siteIcons![index];
             if (mark != 0)
@@ -338,7 +341,14 @@ public sealed unsafe partial class DesktopApp
         {
             int inset = Scale(17), available = cardWidth - inset * 2;
             if (available > 0 && localX >= inset && localX < cardWidth - inset)
-                site = Math.Min(Sites.Length - 1, (localX - inset) * Sites.Length / available);
+            {
+                for (int indexOfSite = 0; indexOfSite < Sites.Length; indexOfSite++)
+                {
+                    if (localX - inset >= available * SiteEdges[indexOfSite + 1] / 100) continue;
+                    site = indexOfSite;
+                    break;
+                }
+            }
         }
         if (hoverIndex == index && hoverSite == site) return;
         hoverIndex = index;
