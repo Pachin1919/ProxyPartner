@@ -1,0 +1,143 @@
+{
+  "schema_version": 1,
+  "rid": "win-x64",
+  "reference_windows_build": 26200,
+  "dotnet": {
+    "sdk": "10.0.403",
+    "runtime": "10.0.14",
+    "archive_url": "https://builds.dotnet.microsoft.com/dotnet/Sdk/10.0.403/dotnet-sdk-10.0.403-win-x64.zip",
+    "archive_sha512": "7a114c318fa7f1d9822991b534b2814d0e78386ceda816b371f5141acefe741d87ccb606ede06cadac8f9ac5070e32b708a67bbd1619ff5e5a7858a27874ef48",
+    "runtime_source_commit": "0427b9abbead3fa64c6655eb4290c537397131fa",
+    "nuget_packages": [
+      {
+        "id": "microsoft.aspnetcore.app.runtime.win-x64",
+        "version": "10.0.14",
+        "sha256": "91638ac8382c437e71c0739a0e3123290f9bf48bcd01e616352a86add5571089"
+      },
+      {
+        "id": "microsoft.dotnet.ilcompiler",
+        "version": "10.0.14",
+        "sha256": "6744a4a82b31a8568df48e927baaa85378a848966d5712323956f63528ed38b9"
+      },
+      {
+        "id": "microsoft.net.illink.tasks",
+        "version": "10.0.14",
+        "sha256": "e2a71b32b5c135dc2b0c87ea8fba6c9e677332e00bf959fbcdced239b825b75c"
+      },
+      {
+        "id": "microsoft.netcore.app.runtime.nativeaot.win-x64",
+        "version": "10.0.14",
+        "sha256": "76c0f133981113273a0e50dba97a6107eead821f707565443e787f0aa9f9fc69"
+      },
+      {
+        "id": "microsoft.netcore.app.runtime.win-x64",
+        "version": "10.0.14",
+        "sha256": "a3ea61b4a2da6d28e562dd1cdacf80eb4dd6b9727b0a2b47f9d6aba90dbbcb1f"
+      },
+      {
+        "id": "microsoft.windowsdesktop.app.runtime.win-x64",
+        "version": "10.0.14",
+        "sha256": "a6dba3ca8b8b5b7945399545d881e0ac294746a7571f2209981934d49ecfe8cc"
+      },
+      {
+        "id": "runtime.win-x64.microsoft.dotnet.ilcompiler",
+        "version": "10.0.14",
+        "sha256": "e4279d8ed9bcc01b1d8a3a9b2c7db16f3249e098dc3081e15c6d93ef462e1bce"
+      }
+    ]
+  },
+  "native": {
+    "msvc_tools_version": "14.44.35229.0",
+    "msvc_crt_payload_version": "14.44.35226",
+    "windows_sdk_package": "Microsoft.Windows.SDK.CPP.x64",
+    "windows_sdk_version": "10.0.26100.9457",
+    "windows_sdk_license_url": "https://aka.ms/WinSDKLicenseURL",
+    "msvc_license_source": "https://visualstudio.microsoft.com/license-terms/"
+  },
+  "go": {
+    "version": "go1.27.3",
+    "relative_path": "../orchestrator/go/bin/go.exe"
+  },
+  "winsqlite": {
+    "version": "3.51.1",
+    "source_id": "2025-11-28 17:28:25 281fc0e9afc38674b9b0991943b9e9d1e64c6cbdb133d35f6f5c87ff6af38a88"
+  },
+  "host_evidence": {
+    "path": "../coordination/phase-host-read-2026-11-09.json",
+    "sha256": "c73603fcc94248b1aa8b899ae34ff77c1d2397bf0e3c42d6ac039a20fa0377d5",
+    "version": "v1.19.21"
+  },
+  "project_license_blob": "eb0aba6b8fa5f2f2e48027b2a89f4380a614f23a",
+  "tool_files": [
+    {
+      "path": "dotnet-10.0.403-win-x64/dotnet.exe",
+      "sha256": "1e881ec1786c31ba712d052258b4ad4202ac155df5965794030037878abb822f"
+    },
+    {
+      "path": "../orchestrator/go/bin/go.exe",
+      "sha256": "83b7ba66215e696414fa49462d0db2da4f4cf15c7bebd42f0b189fa04866999d"
+    },
+    {
+      "path": "native/bin/link.exe",
+      "sha256": "a364af801a8539e4324d9489313dbf001d959128451fc99a27b24676bbac058f"
+    },
+    {
+      "path": "native/bin/lib.exe",
+      "sha256": "fde148a275981855689c45f932dda56b10dc9289a0290826a0fb93478da34929"
+    },
+    {
+      "path": "native/lib/msvc/libcmt.lib",
+      "sha256": "8fe40dd342b90b35d62b8f5d55b4e92df7785c122976618365cfe3b014cc857a"
+    },
+    {
+      "path": "native/lib/msvc/oldnames.lib",
+      "sha256": "35bd82cfb02a0146ff9c0ca6bf7dbde61d49c6d4f3493befe584218c370ff41d"
+    },
+    {
+      "path": "native/lib/um/kernel32.lib",
+      "sha256": "842f5ce7ad8cf5aab7491b791e7968d2be510ae93f4019d3311797289399d221"
+    },
+    {
+      "path": "native/lib/ucrt/ucrt.lib",
+      "sha256": "7ef4eac926bf597d2f243f16cdfed7e0db22cb3ca34a1d7e088a84c994a03d66"
+    }
+  ],
+  "provenance_files": [
+    {
+      "path": "dotnet-10.0.403-win-x64/LICENSE.txt",
+      "sha256": "7f6839a61ce892b79c6549e2dc5a81fdbd240a0b260f8881216b45b7fda8b45d"
+    },
+    {
+      "path": "dotnet-10.0.403-win-x64/ThirdPartyNotices.txt",
+      "sha256": "deb4427a295e1ed474b0d81c5a0d972c1b550b9a715cda939cdfa9236b1b418f"
+    },
+    {
+      "path": "../orchestrator/go/LICENSE",
+      "sha256": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad"
+    },
+    {
+      "path": "microsoft.windows.sdk.cpp.x64.10.0.26100.9457.nupkg",
+      "sha256": "52bd17c63d3b6d268f385c358f34d0eb595b9c1deb3273855abd2ec5c095d132"
+    },
+    {
+      "path": "native/msvc-payload-pin.json",
+      "sha256": "bc6cdd3aee749932bff2456e27768e27c945db4a5c482c52acfe7e7d236a5032"
+    },
+    {
+      "path": "native/Microsoft.VC.14.44.17.14.CRT.x64.Desktop.base.vsix",
+      "sha256": "f01f701a7bcd9587a340898c851424f6a52bb913a70c185ff0d5bf0288c5831a"
+    },
+    {
+      "path": "native/Microsoft.VC.14.44.17.14.Tools.HostX64.TargetX64.base.vsix",
+      "sha256": "f4ad3cee4ef18e9f36382399261de27be6910ab3467178d7e687377ec841306d"
+    },
+    {
+      "path": "native/Microsoft.VC.14.44.17.14.Tools.HostX64.TargetX64.Res.base.enu.vsix",
+      "sha256": "603375e4d6d639bc6e0a7d0d657b17e0c3b72e52450f78eb41e987f40c3b5305"
+    },
+    {
+      "path": "native/Microsoft.VC.14.44.17.14.CRT.x64.Store.base.vsix",
+      "sha256": "9135b03c0df53c7a0aa9bef7230a1c2ff4263a0ee7baa7e419d034f484f6bb56"
+    }
+  ]
+}
