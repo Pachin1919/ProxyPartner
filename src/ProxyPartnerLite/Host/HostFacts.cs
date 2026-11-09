@@ -7,7 +7,7 @@ public enum HostStatus
     InvalidResponse, TransportError, TimedOut, Cancelled
 }
 
-public sealed record HostReadOptions(bool IncludeProviders = false, bool IncludeMode = false);
+public sealed record HostReadOptions(bool IncludeProviders = false);
 
 /// <summary>An explicit grant for a local controller-only file and a single running core.</summary>
 public sealed record LoopbackFallbackAuthorization(
@@ -17,7 +17,7 @@ public sealed record HostNode(string Name, string Type);
 public sealed record HostGroup(string Name, string Type, string? Selected, IReadOnlyList<string> Members);
 public sealed record HostProvider(string Name, IReadOnlyList<string> Members);
 public sealed record HostFacts(
-    DateTimeOffset ObservedAtUtc, string Version, string? Mode,
+    DateTimeOffset ObservedAtUtc, string Version,
     IReadOnlyList<HostNode> Nodes, IReadOnlyList<HostGroup> Groups, IReadOnlyList<HostProvider>? Providers);
 
 public sealed record HostRequestFact(string Path, int HttpStatus);

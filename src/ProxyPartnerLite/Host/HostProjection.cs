@@ -5,7 +5,6 @@ using System.Text.Json.Serialization;
 namespace ProxyPartnerLite.Host;
 
 internal sealed record VersionWire(string? Version);
-internal sealed record ConfigWire(string? Mode);
 internal sealed record ProxyWire(string? Name, string? Type, string? Now, string[]? All);
 internal sealed record ProxiesWire(Dictionary<string, ProxyWire?>? Proxies);
 internal sealed record ProviderMemberWire(string? Name);
@@ -14,7 +13,6 @@ internal sealed record ProvidersWire(Dictionary<string, ProviderWire?>? Provider
 
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase, MaxDepth = 32)]
 [JsonSerializable(typeof(VersionWire))]
-[JsonSerializable(typeof(ConfigWire))]
 [JsonSerializable(typeof(ProxiesWire))]
 [JsonSerializable(typeof(ProvidersWire))]
 internal sealed partial class HostJson : JsonSerializerContext { }
@@ -30,15 +28,6 @@ internal static class HostProjection
             throw new HostFailure(HostStatus.InvalidResponse);
         return version;
     }
-
-    internal static string? Mode(ConfigWire wire) => (wire.Mode is { Length: <= 16 } value
-        ? value.ToLowerInvariant() : null) switch
-    {
-        "global" => "global",
-        "rule" => "rule",
-        "direct" => "direct",
-        _ => null
-    };
 
     internal static (HostNode[] Nodes, HostGroup[] Groups) Proxies(ProxiesWire wire)
     {

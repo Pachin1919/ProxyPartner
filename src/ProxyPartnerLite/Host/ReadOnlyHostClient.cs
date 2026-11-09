@@ -60,10 +60,9 @@ public sealed class ReadOnlyHostClient
         }
     }
 
-    internal static string CheckRoute(string method, string path, bool includeMode)
+    internal static string CheckRoute(string method, string path)
     {
-        if (method == "GET" && (path is "/version" or "/proxies" or "/providers/proxies" ||
-            (includeMode && path == "/configs")))
+        if (method == "GET" && (path is "/version" or "/proxies" or "/providers/proxies"))
             return path;
         throw new HostFailure(HostStatus.IdentityRejected);
     }
@@ -99,15 +98,12 @@ public sealed class ReadOnlyHostClient
                 ? HostProjection.Providers(await GetAsync("/providers/proxies", HostJson.Default.ProvidersWire, fallback, token)
                     .ConfigureAwait(false))
                 : null;
-            string? mode = options.IncludeMode
-                ? HostProjection.Mode(await GetAsync("/configs", HostJson.Default.ConfigWire, fallback, token).ConfigureAwait(false))
-                : null;
-            return new HostFacts(DateTimeOffset.UtcNow, version, mode, nodes, groups, providers);
+            return new HostFacts(DateTimeOffset.UtcNow, version, nodes, groups, providers);
         }
 
         private async Task<T> GetAsync<T>(string path, JsonTypeInfo<T> type, LoopbackSettings? fallback, CancellationToken token)
         {
-            string allowedPath = CheckRoute("GET", path, options.IncludeMode);
+            string allowedPath = CheckRoute("GET", path);
             using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
             deadline.CancelAfter(TimeSpan.FromSeconds(5));
             var cancellation = deadline.Token;

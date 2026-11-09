@@ -25,18 +25,18 @@ try
             if (basic.Status is HostStatus.HostUnavailable or HostStatus.AccessDenied or HostStatus.FallbackAuthorizationRequired)
                 return 2;
             Require(basic.Status == HostStatus.ConnectedPipe && basic.CoreProcessId == basic.VerifiedPeerProcessId &&
-                Routes(basic) == "/version:200,/proxies:200" && basic.Facts is { Providers: null, Mode: null },
+                Routes(basic) == "/version:200,/proxies:200" && basic.Facts is { Providers: null },
                 "default real pipe identity and routes");
-            var live = await client.ReadAsync(new HostReadOptions(true, true));
+            var live = await client.ReadAsync(new HostReadOptions(IncludeProviders: true));
             Console.WriteLine($"status={live.Status}; core_pid={live.CoreProcessId}; verified_peer_pid={live.VerifiedPeerProcessId}");
             Console.WriteLine("routes=" + Routes(live));
             if (live.Status is HostStatus.HostUnavailable or HostStatus.AccessDenied or HostStatus.FallbackAuthorizationRequired)
                 return 2;
             Require(live.Status == HostStatus.ConnectedPipe && live.CoreProcessId == live.VerifiedPeerProcessId, "real pipe identity");
-            Require(Routes(live) == "/version:200,/proxies:200,/providers/proxies:200,/configs:200", "real pipe allowlist");
+            Require(Routes(live) == "/version:200,/proxies:200,/providers/proxies:200", "real pipe allowlist");
             Require(live.Facts is { Nodes.Count: > 0, Groups.Count: > 0, Version: "v1.19.21" } &&
                 live.Facts.Groups.Any(g => g.Selected is not null), "real typed facts and current selection");
-            Console.WriteLine($"version={live.Facts!.Version}; mode={live.Facts.Mode}; nodes={live.Facts.Nodes.Count}; groups={live.Facts.Groups.Count}; selected_groups={live.Facts.Groups.Count(g => g.Selected is not null)}; providers={live.Facts.Providers?.Count}");
+            Console.WriteLine($"version={live.Facts!.Version}; nodes={live.Facts.Nodes.Count}; groups={live.Facts.Groups.Count}; selected_groups={live.Facts.Groups.Count(g => g.Selected is not null)}; providers={live.Facts.Providers?.Count}");
             break;
         case "fallback-auth":
             await FallbackAsync();
@@ -81,7 +81,7 @@ static async Task FallbackAsync()
         var grant = Grant(core, path, $"127.0.0.1:{server.Port}", secret);
         var good = await ReadOnlyHostClient.ReadForCoreAsync(core, missingPipe, new(), grant);
         Require(good.Status == HostStatus.ConnectedLoopback && server.Requests == 2 && server.Authenticated == 2 &&
-            Routes(good) == "/version:200,/proxies:200" && good.Facts is { Providers: null, Mode: null },
+            Routes(good) == "/version:200,/proxies:200" && good.Facts is { Providers: null },
             "verified Windows owner, bearer and default routes");
         Require(Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path))) == grant.ApprovedSha256,
             "fixture source was read without modification");
@@ -129,12 +129,13 @@ static async Task ReadOnlyRoutesAsync()
 {
     foreach (var method in new[] { "PUT", "PATCH", "POST", "DELETE", "HEAD", "get" })
         MustReject(method, "/proxies");
-    foreach (var path in new[] { "/configs", "/proxies/node/delay", "/group/group/delay",
+    foreach (var path in new[] { "/configs", "/configs/", "/configs?mode=global", "/%63onfigs", "/proxies/node/delay", "/group/group/delay",
         "/providers/proxies/p/healthcheck", "/providers/proxies/p/n/healthcheck", "/restart",
         "/upgrade", "/cache", "/connections", "/Proxies", "/%70roxies", "/proxies/",
         "//proxies", "/x/../proxies", "/proxies?anything=1", "/proxies#fragment", "http://127.0.0.1/proxies" })
         MustReject("GET", path);
-    Require(ReadOnlyHostClient.CheckRoute("GET", "/configs", true) == "/configs", "explicit mode route");
+    foreach (var path in new[] { "/version", "/proxies", "/providers/proxies" })
+        Require(ReadOnlyHostClient.CheckRoute("GET", path) == path, "exact GET route");
 
     using var cancelled = new CancellationTokenSource();
     cancelled.Cancel();
@@ -164,7 +165,7 @@ static async Task ReadOnlyRoutesAsync()
 
 static void MustReject(string method, string path)
 {
-    try { ReadOnlyHostClient.CheckRoute(method, path, false); throw new CheckFailed("forbidden request reached allowlist"); }
+    try { ReadOnlyHostClient.CheckRoute(method, path); throw new CheckFailed("forbidden request reached allowlist"); }
     catch (HostFailure) { }
 }
 
@@ -180,10 +181,11 @@ static async Task NoSecretsAsync()
     {
         using var server = new HttpFixture(secret, password, url);
         var grant = Grant(core, path, $"127.0.0.1:{server.Port}", secret);
-        var result = await ReadOnlyHostClient.ReadForCoreAsync(core, missingPipe, new(true, true), grant);
+        var result = await ReadOnlyHostClient.ReadForCoreAsync(core, missingPipe, new(IncludeProviders: true), grant);
         Require(result.Status == HostStatus.ConnectedLoopback && Routes(result) ==
-            "/version:200,/proxies:200,/providers/proxies:200,/configs:200", "four exact approved routes");
-        Require(result.Facts is { Nodes.Count: 1, Groups.Count: 1, Mode: "rule", Providers.Count: 1 }, "typed projection");
+            "/version:200,/proxies:200,/providers/proxies:200" && server.Authenticated == 3,
+            "three exact approved routes");
+        Require(result.Facts is { Nodes.Count: 1, Groups.Count: 1, Providers.Count: 1 }, "typed projection");
         var encoded = JsonSerializer.Serialize(result, FixtureJson.Default.HostReadResult);
         Require(!encoded.Contains(secret) && !encoded.Contains(password) && !encoded.Contains(url), "projected result excludes sensitive fields");
         var denied = await ReadOnlyHostClient.ReadForCoreAsync(core, missingPipe, new(),
@@ -210,7 +212,7 @@ static async Task NoSecretsAsync()
             Require(await ReadLineAsync(owner) == "accepted=0", "no unauthorized fallback");
         }
         finally { if (!owner.HasExited) { owner.Kill(); await owner.WaitForExitAsync(); } }
-        Console.WriteLine("fixture_bearer_seen_by_verified_owner=4; projected_secrets=0; fake_pipe_http_bytes=0");
+        Console.WriteLine($"fixture_bearer_seen_by_verified_owner={server.Authenticated}; projected_secrets=0; fake_pipe_http_bytes=0");
     }
     finally { File.Delete(path); }
 }
@@ -288,7 +290,6 @@ sealed class HttpFixture : IDisposable
                     password + "\"},\"g\":{\"name\":\"g\",\"type\":\"Selector\",\"now\":\"n\",\"all\":[\"n\"]}}}",
                 "/providers/proxies" => "{\"providers\":{\"p\":{\"vehicleType\":\"HTTP\",\"url\":\"" + url +
                     "\",\"proxies\":[{\"name\":\"n\"}]}}}",
-                "/configs" => "{\"mode\":\"rule\",\"secret\":\"" + token + "\"}",
                 _ => throw new CheckFailed("fixture received unexpected path")
             };
             var response = Encoding.UTF8.GetBytes(authorized ? data : "{\"error\":\"" + token + "\"}");
