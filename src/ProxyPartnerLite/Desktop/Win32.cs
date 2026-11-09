@@ -267,6 +267,8 @@ internal static unsafe partial class Win32
     internal static partial uint SetBkColor(nint dc, uint color);
     [LibraryImport("gdi32")]
     internal static partial int SetBkMode(nint dc, int mode);
+    [LibraryImport("gdi32")]
+    internal static partial int RoundRect(nint dc, int left, int top, int right, int bottom, int width, int height);
     [LibraryImport("dwmapi")]
     internal static partial int DwmSetWindowAttribute(nint window, uint attribute, int* value, uint size);
 }

@@ -8,16 +8,20 @@ public sealed unsafe partial class DesktopApp
     private const string CardsClass = "ProxyPartner.Cards";
     private static readonly (string Id, string Name, string Short)[] Sites =
     [
-        ("google", "Google", "GO"), ("youtube", "YouTube", "YT"), ("openai_api", "OpenAI API", "API"),
+        ("google", "Google", "GO"), ("youtube", "YouTube", "YT"), ("openai_api", "OpenAI API", "OPENAI"),
         ("chatgpt_web", "ChatGPT", "GPT"), ("anthropic_api", "Anthropic API", "ANT")
     ];
     // Only the API and GPT slots contain measured results. Reserve room for
     // three Chinese characters there while keeping the other marks aligned.
     private static readonly int[] SiteEdges = [0, 18, 36, 59, 82, 100];
-    private static readonly uint Background = Color(0x14161B), Tools = Color(0x1A1D23),
-        Control = Color(0x23262D), Border = Color(0x373C46), Text = Color(0xF2F4F7),
-        Muted = Color(0xAFB6C2), Focus = Color(0x8BADFF), Active = Color(0x315AC9),
-        ActiveText = Color(0xF7F9FF);
+    private uint Background => Color(preferences.Light ? 0xE6EBF1u : 0x222933u);
+    private uint Tools => Color(preferences.Light ? 0xF1F4F8u : 0x29313Du);
+    private uint Control => Color(preferences.Light ? 0xFFFFFFu : 0x323B47u);
+    private uint Border => Color(preferences.Light ? 0xB7C3D0u : 0x495564u);
+    private uint Text => Color(preferences.Light ? 0x202B3Bu : 0xF2F4F7u);
+    private uint Muted => Color(preferences.Light ? 0x475A70u : 0xC3CEDBu);
+    private uint Focus => Color(preferences.Light ? 0x285C9Eu : 0xA6C3F3u);
+    private static readonly uint Active = Color(0x315AC9), ActiveText = Color(0xF7F9FF);
     private nint cards, toggle, sortButton, title, searchLabel, hint, smallFont, boldFont, scoreFont, siteStatusFont, editBrush, toolsBrush;
     private nint tooltip, tipBuffer;
     private int hoverIndex = -1, hoverSite = -1;
@@ -32,13 +36,22 @@ public sealed unsafe partial class DesktopApp
 
     private readonly record struct Tone(uint Background, uint Accent, uint Text, string Label);
 
-    private static Tone GetTone(DesktopRow row) => row.Quality?.State switch
+    private Tone GetTone(DesktopRow row, bool table = false)
     {
-        QualityState.Good => new(Color(0x17382E), Color(0x4CC99A), Color(0x81E9BC), "表现好"),
-        QualityState.Poor => new(Color(0x45272C), Color(0xF27473), Color(0xFFACA7), "表现差"),
-        QualityState.Restricted => new(Color(0x3C3021), Color(0xDDA34B), Color(0xF6CF83), "服务受限"),
-        _ => new(Color(0x242831), Color(0x6C7483), Color(0xBEC6D3), "样本不足")
-    };
+        bool light = preferences.Light;
+        var tone = row.Quality?.State switch
+        {
+            QualityState.Good => new Tone(Color(light ? 0xD7EDE1u : 0x17382Eu), Color(light ? 0x257C60u : 0x78B89Du),
+                Color(light ? 0x225942u : 0xA5E8CEu), L("表现好", "Good")),
+            QualityState.Poor => new Tone(Color(light ? 0xF2DDE5u : 0x45272Cu), Color(light ? 0xA34D6Au : 0xCC8A9Eu),
+                Color(light ? 0x78334Cu : 0xFFB9BAu), L("表现差", "Poor")),
+            QualityState.Restricted => new Tone(Color(light ? 0xF5E9CAu : 0x3C3021u), Color(light ? 0x96621Eu : 0xCBA769u),
+                Color(light ? 0x734815u : 0xF6CF83u), L("服务受限", "Restricted")),
+            _ => new Tone(Color(light ? 0xE6EDF4u : 0x242831u), Color(light ? 0x60768Bu : 0x99ADBFu),
+                Color(light ? 0x475A70u : 0xBEC6D3u), L("样本不足", "Low samples"))
+        };
+        return !light && !table ? tone with { Background = Color(0x303741), Text = Muted } : tone;
+    }
 
     private static uint Color(uint rgb) => ((rgb & 0xff) << 16) | (rgb & 0xff00) | (rgb >> 16);
 
@@ -110,6 +123,11 @@ public sealed unsafe partial class DesktopApp
                 return 0;
             case WmKeyDown:
                 int selected = IndexOfSelection();
+                if (wParam == 0x0d)
+                {
+                    ShowDetails();
+                    return 0;
+                }
                 if (wParam == 0x20)
                 {
                     ToggleTest(selected);
@@ -188,7 +206,7 @@ public sealed unsafe partial class DesktopApp
         SetBkMode(dc, 1);
         if (rows.Length == 0)
         {
-            Label(dc, "没有匹配的节点", Scale(16), Scale(14), area.Right, Scale(30), Muted, font);
+            Label(dc, L("没有匹配的节点", "No matching nodes"), Scale(16), Scale(14), area.Right, Scale(30), Muted, font);
             return;
         }
         int pitch = cardHeight + cardGap;
@@ -204,7 +222,9 @@ public sealed unsafe partial class DesktopApp
             var tone = GetTone(rows[index]);
             var bounds = Box(x, y, cardWidth, cardHeight);
             uint? outline = rows[index].Id == selectedId ? GetFocus() == cards ? Focus : Active : null;
-            if (!CardFinish.Draw(finish, bounds, Scale(12), tone.Background, outline, Scale(2)))
+            if (preferences.Light)
+                CardFinish.Draw(finish, Box(x, y + Scale(2), cardWidth, cardHeight), Scale(12), Color(0xCCD6E0), null, 1);
+            if (!CardFinish.Draw(finish, bounds, Scale(12), tone.Background, outline, Scale(2), preferences.Light))
                 Fill(dc, bounds, outline ?? tone.Background);
         }
         if (finish != 0) CardFinish.End(finish);
@@ -217,25 +237,28 @@ public sealed unsafe partial class DesktopApp
             var tone = GetTone(row);
             int left = x + Scale(17), right = x + cardWidth - Scale(17);
             int at(int percent) => y + cardHeight * percent / 100;
-            Fill(dc, Box(left, at(8) + Scale(4), Scale(2), Scale(15)), tone.Accent);
-            Label(dc, row.Name, left + Scale(9), at(8), right - Scale(25), Scale(24), Text, boldFont);
+            if (preferences.Light) Fill(dc, Box(left, at(8) + Scale(4), Scale(2), Scale(15)), tone.Accent);
+            Label(dc, row.Name, left + Scale(preferences.Light ? 9 : 0), at(8), right - Scale(25), Scale(24), Text, boldFont);
             if (row.Kind == NodeKind.Leaf)
             {
                 bool tick = tested.Contains(row.Id);
                 var check = CardCheckBounds(x, y);
-                Fill(dc, check, tick ? Active : Border);
+                Rounded(dc, check, Scale(5), tick ? Active : Border);
                 Label(dc, tick ? "✓" : "□", check.Left + Scale(1), check.Top, check.Right,
                     check.Bottom - check.Top, tick ? ActiveText : Muted, smallFont, 1);
             }
             int midpoint = (left + right) / 2;
-            Label(dc, row.Quality?.Score is int score ? $"{score} 分" : "—", left, at(23), midpoint, Scale(38), tone.Text, scoreFont);
-            Label(dc, tone.Label, midpoint, at(28), right, Scale(19), tone.Text, smallFont, 2);
+            Label(dc, ScoreText(row), left, at(23), midpoint, Scale(38), Text, scoreFont);
+            int badgeLeft = Math.Max(midpoint, right - Scale(102));
+            Rounded(dc, Box(badgeLeft, at(28), right - badgeLeft, Scale(20)), Scale(8), Control);
+            Rounded(dc, Box(badgeLeft + Scale(7), at(28) + Scale(8), Scale(5), Scale(5)), Scale(5), tone.Accent);
+            Label(dc, tone.Label, badgeLeft + Scale(17), at(28), right - Scale(4), Scale(20), tone.Text, smallFont);
             if (row.IsCurrent || row.Kind == NodeKind.Group)
-                Label(dc, row.IsCurrent ? "宿主当前" : "策略组", midpoint, at(37), right, Scale(16), Muted, smallFont, 2);
+                Label(dc, row.IsCurrent ? L("宿主当前", "Host current") : L("策略组", "Policy group"), midpoint, at(38), right, Scale(16), Muted, smallFont, 2);
             Fill(dc, Box(left, at(48), Math.Max(0, right - left), 1), Border);
             DrawSites(dc, row, left, right, at(55), at(66), at(75));
             Fill(dc, Box(left, at(86), Math.Max(0, right - left), 1), Border);
-            Label(dc, $"原生 {ShortResult(row.Native)}", left, at(89), midpoint, Scale(17), Muted, smallFont);
+            Label(dc, $"{L("原生", "Native")} {ShortResult(row.Native)}", left, at(89), midpoint, Scale(17), Muted, smallFont);
             Label(dc, Timestamp(row.LastObservedUtc), midpoint, at(89), right, Scale(17), Muted, smallFont, 2);
         }
     }
@@ -259,7 +282,7 @@ public sealed unsafe partial class DesktopApp
         finishSession = CardFinish.Start();
         siteIcons = new nint[Sites.Length];
         for (int index = 0; index < siteIcons.Length; index++)
-            siteIcons[index] = LoadImage(0, Path.Combine(AppContext.BaseDirectory, "TargetIcons", $"{Sites[index].Id}.ico"), 1, 0, 0, 0x10);
+            if (index != 3) siteIcons[index] = LoadImage(0, Path.Combine(AppContext.BaseDirectory, "TargetIcons", $"{Sites[index].Id}.ico"), 1, 0, 0, 0x10);
     }
 
     private void FreeCardArtwork()
@@ -281,15 +304,15 @@ public sealed unsafe partial class DesktopApp
         2 => row.OpenAi, 3 => row.ChatGpt, _ => null
     };
 
-    private static string ShortResult(DesktopResult? result) => result?.State switch
+    private string ShortResult(DesktopResult? result) => result?.State switch
     {
-        ResultState.AuthenticationRequired => "鉴权",
-        ResultState.Restricted => "受限",
-        ResultState.Failed => "失败",
-        ResultState.Stale => "过期",
-        ResultState.Incomparable => "不可比",
+        ResultState.AuthenticationRequired => L("鉴权", "Auth"),
+        ResultState.Restricted => L("受限", "Blocked"),
+        ResultState.Failed => L("失败", "Failed"),
+        ResultState.Stale => L("过期", "Stale"),
+        ResultState.Incomparable => L("不可比", "N/A"),
         ResultState.Measured when result.ElapsedMs is int ms => $"{ms} ms",
-        _ => "待测"
+        _ => L("待测", "N/T")
     };
 
     private void DrawSites(nint dc, DesktopRow row, int left, int right, int iconY, int labelY, int statusY)
@@ -301,15 +324,25 @@ public sealed unsafe partial class DesktopApp
             int end = left + (right - left) * SiteEdges[index + 1] / 100;
             int iconX = (start + end - size) / 2;
             nint mark = siteIcons![index];
-            if (mark != 0)
+            if (mark != 0 || index == 3)
             {
-                DrawIconEx(dc, iconX, iconY, mark, size, size, 0, 0, 3);
-                Label(dc, Sites[index].Short, start, labelY, end, Scale(17), Muted, smallFont, 1);
+                Rounded(dc, Box(iconX - Scale(2), iconY - Scale(2), size + Scale(4), size + Scale(4)),
+                    Scale(6), Color(preferences.Light ? 0xF8FAFCu : 0xE0E9F4u));
+                if (index == 3)
+                {
+                    uint bubble = Color(0x24566B);
+                    Rounded(dc, Box(iconX + Scale(1), iconY + Scale(2), Scale(16), Scale(12)), Scale(5), bubble);
+                    Fill(dc, Box(iconX + Scale(4), iconY + Scale(13), Scale(3), Scale(3)), bubble);
+                    for (int dot = 0; dot < 3; dot++)
+                        Fill(dc, Box(iconX + Scale(4 + dot * 4), iconY + Scale(7), Scale(2), Scale(2)), ActiveText);
+                }
+                else DrawIconEx(dc, iconX, iconY, mark, size, size, 0, 0, 3);
+                Label(dc, Sites[index].Short, start, labelY, end, Scale(17), Muted, siteStatusFont, 1);
             }
             else
             {
                 Fill(dc, Box(start + Scale(2), iconY, Math.Max(0, end - start - Scale(4)), Scale(23)), Control);
-                Label(dc, Sites[index].Short, start, iconY, end, Scale(23), Text, smallFont, 1);
+                Label(dc, Sites[index].Short, start, iconY, end, Scale(23), Text, siteStatusFont, 1);
             }
             var result = SiteResult(row, index);
             string state = result is { State: ResultState.Measured, ElapsedMs: int ms } ? $"{ms}ms" : ShortResult(result);
@@ -359,10 +392,10 @@ public sealed unsafe partial class DesktopApp
 
     private string HoverText()
     {
-        if ((uint)hoverIndex >= rows.Length) return "悬停查看站点状态";
+        if ((uint)hoverIndex >= rows.Length) return L("悬停查看站点状态", "Hover to see target details");
         var row = rows[hoverIndex];
         return hoverSite < 0 ? row.Name :
-            $"{Sites[hoverSite].Name} · {SiteResult(row, hoverSite)?.DisplayText ?? "待测"}";
+            $"{Sites[hoverSite].Name} · {SiteResult(row, hoverSite)?.Format(preferences.English) ?? L("待测", "Untested")}";
     }
 
     private void GetTooltipText(TooltipInfo* info)
@@ -378,7 +411,7 @@ public sealed unsafe partial class DesktopApp
 
     private void DrawToolbarButton(DrawItem* item)
     {
-        if (item->Id is not (Toggle or SortMenu or Groups)) return;
+        if (item->Id is not (Toggle or SortMenu or Groups or OpenSettings or OpenDetails)) return;
         var bounds = item->Bounds;
         bool activeButton = item->Id == Toggle || item->Id == Groups && showGroups;
         Fill(item->Dc, bounds, (item->State & 0x10) != 0 ? Focus : Border);
@@ -387,9 +420,11 @@ public sealed unsafe partial class DesktopApp
         SetBkMode(item->Dc, 1);
         string label = item->Id switch
         {
-            Toggle => tableMode ? "切换卡片" : "切换表格",
-            Groups => showGroups ? "✓ 策略组" : "策略组",
-            _ => descending ? "排序 ↓" : "排序 ↑"
+            Toggle => ViewLabel,
+            Groups => showGroups ? L("✓ 策略组", "✓ Groups") : L("策略组", "Groups"),
+            OpenSettings => L("设置", "Settings"),
+            OpenDetails => L("详情", "Details"),
+            _ => descending ? L("排序 ↓", "Sort ↓") : L("排序 ↑", "Sort ↑")
         };
         Label(item->Dc, label, bounds.Left, bounds.Top, bounds.Right, bounds.Bottom - bounds.Top,
             activeButton ? ActiveText : Text, font, 1);
@@ -413,7 +448,7 @@ public sealed unsafe partial class DesktopApp
     {
         if (item->Stage == 1) return 0x20;
         if (item->Stage != 0x10001 || item->Item >= (nuint)rows.Length) return 0;
-        var tone = GetTone(rows[(int)item->Item]);
+        var tone = GetTone(rows[(int)item->Item], table: true);
         item->BackgroundColor = tone.Background;
         item->TextColor = tone.Text;
         return 0;
@@ -426,6 +461,17 @@ public sealed unsafe partial class DesktopApp
     {
         SetDCBrushColor(dc, color);
         FillRect(dc, &rect, GetStockObject(18)); // DC_BRUSH
+    }
+
+    private static void Rounded(nint dc, Rect rect, int diameter, uint color)
+    {
+        if (rect.Right <= rect.Left || rect.Bottom <= rect.Top) return;
+        nint previousBrush = SelectObject(dc, GetStockObject(18));
+        nint previousPen = SelectObject(dc, GetStockObject(8)); // NULL_PEN
+        SetDCBrushColor(dc, color);
+        RoundRect(dc, rect.Left, rect.Top, rect.Right, rect.Bottom, diameter, diameter);
+        SelectObject(dc, previousPen);
+        SelectObject(dc, previousBrush);
     }
 
     private static void Label(nint dc, string value, int x, int y, int right, int height, uint color, nint face, uint align = 0)

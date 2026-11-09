@@ -9,11 +9,15 @@ public sealed unsafe partial class DesktopApp
     private const string TrayClass = "ProxyPartner.Tray", PanelClass = "ProxyPartner.Panel";
     private const uint TrayMessage = 0x8001, SnapshotMessage = 0x8002;
     private const int Open = 101, Exit = 102, Search = 103, Groups = 104, Toggle = 107, SortMenu = 108, SortFirst = 110;
-    private static readonly string[] Columns = ["节点", "当前", "原生延迟", "OpenAI API", "ChatGPT", "GitHub", "最近样本 (UTC)", "评分", "测试选择", "质量状态"];
+    private static readonly string[] ZhColumns = ["节点", "当前", "原生延迟", "OPENAI", "GPT", "GitHub", "最近样本 (UTC)", "评分", "测试选择", "质量状态"];
+    private static readonly string[] EnColumns = ["Node", "Current", "Native latency", "OPENAI", "GPT", "GitHub", "Last sample (UTC)", "Score", "Test selection", "Quality"];
+    private string[] Columns => preferences.English ? EnColumns : ZhColumns;
     private static readonly int[] ColumnWidths = [192, 56, 102, 126, 112, 102, 142, 74, 95, 94];
     private static DesktopApp? active;
 
     private readonly IDesktopSnapshotSource source;
+    private readonly string settingsPath;
+    private DesktopPreferences preferences;
     private readonly nint module = GetModuleHandle(0);
     private nint tray, panel, status, search, groups, list, font, icon;
     private uint taskbarCreated;
@@ -21,13 +25,24 @@ public sealed unsafe partial class DesktopApp
     private bool descending;
     private DesktopRow[] rows = [];
 
-    private DesktopApp(IDesktopSnapshotSource source) => this.source = source;
+    private DesktopApp(IDesktopSnapshotSource source, string? settingsPath)
+    {
+        this.source = source;
+        this.settingsPath = Path.GetFullPath(settingsPath ?? Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ProxyPartner", "Desktop", "settings.json"));
+        preferences = DesktopPreferences.Load(this.settingsPath);
+    }
+
+    private string L(string zh, string en) => preferences.English ? en : zh;
+    private string PanelTitle => L("ProxyPartner · 节点质量面板", "ProxyPartner · Node quality");
+    private string ViewLabel => tableMode ? L("切换卡片", "Cards") : L("切换表格", "Table");
+    private string TableHint => L("表格 · 可按列排序", "Table · sort by column");
 
     // Run on the caller's Windows UI thread. The caller owns the source lifecycle.
-    public static int Run(IDesktopSnapshotSource source, bool startInTray = false)
+    public static int Run(IDesktopSnapshotSource source, bool startInTray = false, string? settingsPath = null)
     {
         if (active is not null) throw new InvalidOperationException("A desktop loop is already running.");
-        var app = new DesktopApp(source);
+        var app = new DesktopApp(source, settingsPath);
         active = app;
         try
         {
@@ -46,9 +61,9 @@ public sealed unsafe partial class DesktopApp
         uint* common = stackalloc uint[] { 8, 1 | 4 };
         if (InitCommonControlsEx(common) == 0) return 1;
         icon = LoadIcon(0, 32512);
-        if (!Register(TrayClass) || !Register(PanelClass) || !Register(CardsClass)) return 1;
+        if (!Register(TrayClass) || !Register(PanelClass) || !Register(CardsClass) || !Register(AuxClass)) return 1;
         taskbarCreated = RegisterWindowMessage("TaskbarCreated");
-        tray = CreateWindow(0, TrayClass, "ProxyPartner · 托盘", 0, 0, 0, 0, 0, 0, 0, module, 0);
+        tray = CreateWindow(0, TrayClass, L("ProxyPartner · 托盘", "ProxyPartner · Tray"), 0, 0, 0, 0, 0, 0, 0, module, 0);
         if (tray == 0 || !UpdateTray(0)) return 1;
         UpdateTray(4);
         if (!startInTray && !ShowPanel()) return 1;
@@ -63,6 +78,8 @@ public sealed unsafe partial class DesktopApp
                 Send(panel, WmCommand, SortFirst + msg.WParam - 0x31, 0);
                 continue;
             }
+            if (settingsWindow != 0 && IsDialogMessage(settingsWindow, &msg) != 0) continue;
+            if (detailWindow != 0 && IsDialogMessage(detailWindow, &msg) != 0) continue;
             if (panel != 0 && IsDialogMessage(panel, &msg) != 0) continue;
             TranslateMessage(&msg);
             DispatchMessage(&msg);
@@ -90,6 +107,7 @@ public sealed unsafe partial class DesktopApp
     private nint Handle(nint window, uint msg, nuint wParam, nint lParam)
     {
         if (window == cards) return HandleCards(msg, wParam, lParam);
+        if (window == settingsWindow || window == detailWindow) return HandleAux(window, msg, wParam, lParam);
         if (window == tray)
         {
             if (msg == taskbarCreated && taskbarCreated != 0)
@@ -142,8 +160,10 @@ public sealed unsafe partial class DesktopApp
                 case WmDestroy:
                     source.SnapshotChanged -= OnSnapshotChanged;
                     rows = [];
+                    if (settingsWindow != 0) DestroyWindow(settingsWindow);
+                    if (detailWindow != 0) DestroyWindow(detailWindow);
                     FreeCardArtwork();
-                    panel = status = search = groups = list = cards = toggle = title = searchLabel = sortButton = hint = 0;
+                    panel = status = search = groups = list = cards = toggle = title = searchLabel = sortButton = hint = settingsButton = detailButton = 0;
                     FreeFonts();
                     if (editBrush != 0) DeleteObject(editBrush);
                     if (toolsBrush != 0) DeleteObject(toolsBrush);
@@ -187,6 +207,8 @@ public sealed unsafe partial class DesktopApp
                     }
                     if (id == Toggle) SwitchView();
                     if (id == SortMenu) ShowSortMenu();
+                    if (id == OpenSettings) ShowSettings();
+                    if (id == OpenDetails) ShowDetails();
                     if (id >= SortFirst && id < SortFirst + Columns.Length) Sort(id - SortFirst);
                     return 0;
                 case WmNotify:
@@ -200,6 +222,7 @@ public sealed unsafe partial class DesktopApp
                     if (header->Code == LvnGetDisplayInfo) FillCell(&((DisplayInfo*)lParam)->Item);
                     if (header->Code == LvnColumnClick) Sort(((ListNotify*)lParam)->SubItem);
                     if (header->Code == -12) return DrawTable((CustomDraw*)lParam);
+                    if (header->Code == -3) ShowDetails();
                     if (header->Code == -2 && ((ListNotify*)lParam)->SubItem == 8)
                         ToggleTest(((ListNotify*)lParam)->Item);
                     if (header->Code == -155 && *(ushort*)((byte*)lParam + sizeof(NotifyHeader)) == 0x20)
@@ -217,7 +240,7 @@ public sealed unsafe partial class DesktopApp
             Size = (uint)sizeof(NotifyIcon), Window = tray, Id = 1, Flags = 1 | 2 | 4 | 0x80,
             Callback = TrayMessage, Icon = icon, Version = 4
         };
-        "ProxyPartner · 节点质量面板".AsSpan().CopyTo(new Span<char>(data.Tip, 128));
+        PanelTitle.AsSpan().CopyTo(new Span<char>(data.Tip, 128));
         return ShellNotifyIcon(message, &data) != 0;
     }
 
@@ -225,8 +248,8 @@ public sealed unsafe partial class DesktopApp
     {
         nint menu = CreatePopupMenu();
         if (menu == 0) return;
-        AppendMenu(menu, 0, Open, "打开");
-        AppendMenu(menu, 0, Exit, "退出");
+        AppendMenu(menu, 0, Open, L("打开", "Open"));
+        AppendMenu(menu, 0, Exit, L("退出", "Exit"));
         Point point;
         GetCursorPos(&point);
         SetForegroundWindow(tray);
@@ -244,25 +267,28 @@ public sealed unsafe partial class DesktopApp
             SetForegroundWindow(panel);
             return true;
         }
-        panel = CreateWindow(0, PanelClass, "ProxyPartner · 节点质量面板", WsOverlappedWindow | WsClipChildren,
+        panel = CreateWindow(0, PanelClass, PanelTitle, WsOverlappedWindow | WsClipChildren,
             UseDefault, UseDefault, 1010, 560, 0, 0, module, 0);
         if (panel == 0) return false;
-        int dark = 1;
+        int dark = preferences.Light ? 0 : 1;
         DwmSetWindowAttribute(panel, 20, &dark, sizeof(int));
         editBrush = CreateSolidBrush(Control);
         toolsBrush = CreateSolidBrush(Tools);
-        title = Child("STATIC", "ProxyPartner  /  节点质量", 0, 109);
+        title = Child("STATIC", L("ProxyPartner  /  节点质量", "ProxyPartner  /  Node quality"), 0, 109);
         status = Child("STATIC", "", 0, 0);
-        searchLabel = Child("STATIC", "搜索", 0x200, 120);
-        hint = Child("STATIC", tableMode ? "表格 · 可按列排序" : "悬停查看站点状态", 0x200, 121);
+        searchLabel = Child("STATIC", L("搜索", "Search"), 0x200, 120);
+        hint = Child("STATIC", tableMode ? TableHint : HoverText(), 0x200, 121);
         search = Child("EDIT", filterText, WsTabStop | 0x800000 | 0x80, Search);
-        toggle = Child("BUTTON", tableMode ? "切换卡片" : "切换表格", WsTabStop | 11, Toggle);
-        sortButton = Child("BUTTON", "排序", WsTabStop | 11, SortMenu);
-        groups = Child("BUTTON", "策略组", WsTabStop | 11, Groups);
+        toggle = Child("BUTTON", ViewLabel, WsTabStop | 11, Toggle);
+        sortButton = Child("BUTTON", L("排序", "Sort"), WsTabStop | 11, SortMenu);
+        groups = Child("BUTTON", L("策略组", "Groups"), WsTabStop | 11, Groups);
+        settingsButton = Child("BUTTON", L("设置", "Settings"), WsTabStop | 11, OpenSettings);
+        detailButton = Child("BUTTON", L("详情", "Details"), WsTabStop | 11, OpenDetails);
         list = Child("SysListView32", "", WsTabStop | 0x1000 | 1 | 4 | 8, 105);
-        cards = Child(CardsClass, "节点卡片", WsTabStop | 0x200000, 106);
+        cards = Child(CardsClass, L("节点卡片", "Node cards"), WsTabStop | 0x200000, 106);
         if (title == 0 || status == 0 || search == 0 || searchLabel == 0 || hint == 0 || groups == 0 || list == 0 ||
-            cards == 0 || toggle == 0 || sortButton == 0 || editBrush == 0 || toolsBrush == 0)
+            cards == 0 || toggle == 0 || sortButton == 0 || settingsButton == 0 || detailButton == 0 ||
+            editBrush == 0 || toolsBrush == 0)
         {
             DestroyWindow(panel);
             return false;
@@ -359,7 +385,7 @@ public sealed unsafe partial class DesktopApp
         font = boldFont = smallFont = scoreFont = siteStatusFont = 0;
     }
 
-    private int ToolbarHeight(int width) => Scale((width >= Scale(460) ? 112 : 147) + (width < Scale(740) ? 22 : 0));
+    private int ToolbarHeight(int width) => Scale((width >= Scale(690) ? 112 : 147) + (width < Scale(940) ? 22 : 0));
 
     private void Layout()
     {
@@ -367,18 +393,23 @@ public sealed unsafe partial class DesktopApp
         Rect size;
         GetClientRect(panel, &size);
         int pad = Scale(14), width = Math.Max(0, size.Right - pad * 2), top = ToolbarHeight(size.Right);
-        bool compact = size.Right < Scale(460);
-        int searchWidth = compact ? width : Math.Min(Scale(288), width - Scale(290));
+        bool compact = size.Right < Scale(690);
+        int searchWidth = compact ? width : Math.Min(Scale(288), width - Scale(426));
         int controlX = compact ? pad : pad + searchWidth + Scale(10), controlY = Scale(compact ? 103 : 68);
+        int labelWidth = Scale(preferences.English ? 50 : 42);
         MoveWindow(title, pad, Scale(11), width, Scale(24), 1);
         MoveWindow(status, pad, Scale(40), width, Scale(20), 1);
-        MoveWindow(searchLabel, pad, Scale(68), Scale(38), Scale(28), 1);
-        MoveWindow(search, pad + Scale(42), Scale(68), Math.Max(0, searchWidth - Scale(42)), Scale(28), 1);
-        MoveWindow(toggle, controlX, controlY, Scale(90), Scale(28), 1);
-        MoveWindow(sortButton, controlX + Scale(98), controlY, Scale(76), Scale(28), 1);
-        MoveWindow(groups, controlX + Scale(182), controlY, Scale(94), Scale(28), 1);
-        int hintX = size.Right < Scale(740) ? pad : controlX + Scale(290);
-        int hintY = size.Right < Scale(740) ? controlY + Scale(30) : controlY;
+        MoveWindow(searchLabel, pad, Scale(68), labelWidth, Scale(28), 1);
+        MoveWindow(search, pad + labelWidth, Scale(68), Math.Max(0, searchWidth - labelWidth), Scale(28), 1);
+        int slot = Math.Min(Scale(80), Math.Max(1, (size.Right - pad - controlX - Scale(28)) / 5));
+        int pitch = slot + Scale(7);
+        MoveWindow(toggle, controlX, controlY, slot, Scale(28), 1);
+        MoveWindow(sortButton, controlX + pitch, controlY, slot, Scale(28), 1);
+        MoveWindow(groups, controlX + pitch * 2, controlY, slot, Scale(28), 1);
+        MoveWindow(settingsButton, controlX + pitch * 3, controlY, slot, Scale(28), 1);
+        MoveWindow(detailButton, controlX + pitch * 4, controlY, slot, Scale(28), 1);
+        int hintX = size.Right < Scale(940) ? pad : controlX + pitch * 5;
+        int hintY = size.Right < Scale(940) ? controlY + Scale(30) : controlY;
         MoveWindow(hint, hintX, hintY, Math.Max(0, size.Right - pad - hintX), Scale(24), 1);
         int contentPad = Scale(24);
         int contentWidth = Math.Max(0, size.Right - contentPad * 2);
@@ -458,14 +489,18 @@ public sealed unsafe partial class DesktopApp
         snapshot ??= source.GetSnapshot();
         string collection = snapshot.Collection switch
         {
-            CollectionState.Synthetic => "合成数据 · 桌面基线",
-            CollectionState.Observing => "观察中",
-            CollectionState.Idle => "无活跃连接",
-            CollectionState.SleepGap => "休眠间隔",
-            CollectionState.SourceStopped => "采集已停止",
-            _ => "未接入"
+            CollectionState.Synthetic => L("合成数据 · 桌面基线", "Synthetic data · Desktop baseline"),
+            CollectionState.Observing => L("观察中", "Observing"),
+            CollectionState.Idle => L("无活跃连接", "No active connections"),
+            CollectionState.SleepGap => L("休眠间隔", "Sleep gap"),
+            CollectionState.SourceStopped => L("采集已停止", "Collection stopped"),
+            _ => L("未接入", "Disconnected")
         };
-        SetText(status, $"{collection}  |  {snapshot.Host}  |  实际链路：{snapshot.VerifiedCurrentPath ?? "未知"}  |  {rows.Length} 行  |  测试勾选 {tested.Count}  |  更新：{Timestamp(snapshot.UpdatedUtc)} UTC");
+        string host = snapshot.Host == "未接入宿主" ? L("未接入宿主", "Host disconnected") : snapshot.Host;
+        string path = snapshot.VerifiedCurrentPath ?? L("未知", "Unknown");
+        SetText(status, preferences.English
+            ? $"{collection}  |  {host}  |  Route: {path}  |  {rows.Length} rows  |  Test checked {tested.Count}  |  Updated: {Timestamp(snapshot.UpdatedUtc)} UTC"
+            : $"{collection}  |  {host}  |  实际链路：{path}  |  {rows.Length} 行  |  测试勾选 {tested.Count}  |  更新：{Timestamp(snapshot.UpdatedUtc)} UTC");
     }
 
     private void SwitchView()
@@ -474,9 +509,9 @@ public sealed unsafe partial class DesktopApp
         tableMode = !tableMode;
         ShowWindow(list, tableMode ? 5 : 0);
         ShowWindow(cards, tableMode ? 0 : 5);
-        SetText(toggle, tableMode ? "切换卡片" : "切换表格");
+        SetText(toggle, ViewLabel);
         hoverIndex = hoverSite = -1;
-        SetText(hint, tableMode ? "表格 · 可按列排序" : HoverText());
+        SetText(hint, tableMode ? TableHint : HoverText());
         if (tableMode) SyncTable();
         else if (IndexOfSelection() is int index && index >= 0) SelectCard(index);
         SetFocus(tableMode ? list : cards);
@@ -510,12 +545,12 @@ public sealed unsafe partial class DesktopApp
         DesktopRow row = rows[item->Index];
         string value = item->SubItem switch
         {
-            0 => row.Kind == NodeKind.Group ? $"[组] {row.Name}" : row.Name,
-            1 => row.IsCurrent ? "当前" : "—",
-            2 => row.Native.DisplayText, 3 => row.OpenAi.DisplayText,
-            4 => row.ChatGpt.DisplayText, 5 => row.GitHub.DisplayText,
-            6 => Timestamp(row.LastObservedUtc), 7 => row.Quality?.Score is int score ? $"{score} 分" : "—",
-            8 => row.Kind == NodeKind.Group ? "—" : tested.Contains(row.Id) ? "已勾选" : "未勾选",
+            0 => row.Kind == NodeKind.Group ? $"{L("[组]", "[Group]")} {row.Name}" : row.Name,
+            1 => row.IsCurrent ? L("当前", "Current") : "—",
+            2 => row.Native.Format(preferences.English), 3 => row.OpenAi.Format(preferences.English),
+            4 => row.ChatGpt.Format(preferences.English), 5 => row.GitHub.Format(preferences.English),
+            6 => Timestamp(row.LastObservedUtc), 7 => ScoreText(row),
+            8 => row.Kind == NodeKind.Group ? "—" : tested.Contains(row.Id) ? L("已勾选", "Checked") : L("未勾选", "Unchecked"),
             9 => GetTone(row).Label, _ => ""
         };
         int count = Math.Min(value.Length, item->TextCapacity - 1);
@@ -523,6 +558,9 @@ public sealed unsafe partial class DesktopApp
         item->Text[count] = '\0';
     }
 
-    private static string Timestamp(DateTimeOffset? timestamp) =>
-        timestamp?.UtcDateTime.ToString("MM-dd HH:mm", System.Globalization.CultureInfo.InvariantCulture) ?? "未知";
+    private string Timestamp(DateTimeOffset? timestamp) =>
+        timestamp?.UtcDateTime.ToString("MM-dd HH:mm", System.Globalization.CultureInfo.InvariantCulture) ?? L("未知", "Unknown");
+
+    private string ScoreText(DesktopRow row) => row.Quality?.Score is int score
+        ? preferences.English ? score.ToString(System.Globalization.CultureInfo.InvariantCulture) : $"{score} 分" : "—";
 }

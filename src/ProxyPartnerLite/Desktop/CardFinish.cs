@@ -29,7 +29,7 @@ internal static unsafe partial class CardFinish
         return graphics;
     }
 
-    internal static bool Draw(nint graphics, Rect bounds, int radius, uint color, uint? focus, int stroke)
+    internal static bool Draw(nint graphics, Rect bounds, int radius, uint color, uint? focus, int stroke, bool light = false)
     {
         if (graphics == 0) return false;
         int left = bounds.Left + 1, top = bounds.Top + 1, right = bounds.Right - 1, bottom = bounds.Bottom - 1;
@@ -43,7 +43,9 @@ internal static unsafe partial class CardFinish
 
         var rect = new SizeRect { X = left, Y = top, Width = right - left, Height = bottom - top };
         bool painted = false;
-        if (CreateGradient(&rect, Highlight(color, 6), Argb(color), 1, 0, out nint brush) == 0)
+        uint topColor = light ? Argb(color) : Highlight(color, 6);
+        uint bottomColor = light ? Highlight(color, 45) : Argb(color);
+        if (CreateGradient(&rect, topColor, bottomColor, 1, 0, out nint brush) == 0)
         {
             painted = FillPath(graphics, brush, path) == 0;
             DeleteBrush(brush);

@@ -104,7 +104,8 @@ public static class DesktopWindows
 
     public static string Text(IntPtr hwnd)
     {
-        var result = new StringBuilder(512);
+        int length = SendMessage(hwnd, 0xE, IntPtr.Zero, IntPtr.Zero).ToInt32();
+        var result = new StringBuilder(Math.Clamp(length + 1, 512, 64 * 1024));
         SendMessage(hwnd, 0xD, (IntPtr)result.Capacity, result);
         return result.ToString();
     }

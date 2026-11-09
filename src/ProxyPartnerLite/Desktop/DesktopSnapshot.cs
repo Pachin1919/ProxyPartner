@@ -11,15 +11,17 @@ public sealed record DesktopResult(
     string? TargetId, int? ElapsedMs, int? HttpStatus, DateTimeOffset? ObservedUtc,
     string Source, ResultState State)
 {
-    public string DisplayText => State switch
+    public string DisplayText => Format(false);
+
+    internal string Format(bool english) => State switch
     {
-        ResultState.Missing => "未测",
-        ResultState.Stale => "已过期",
-        ResultState.Incomparable => "不可比较",
-        ResultState.AuthenticationRequired => $"{HttpStatus} 鉴权响应",
-        ResultState.Restricted => $"{HttpStatus} 受限",
-        ResultState.Failed => "测量失败",
-        _ => ElapsedMs is int ms ? $"{ms} ms" : "无耗时"
+        ResultState.Missing => english ? "Untested" : "未测",
+        ResultState.Stale => english ? "Stale" : "已过期",
+        ResultState.Incomparable => english ? "Not comparable" : "不可比较",
+        ResultState.AuthenticationRequired => english ? $"{HttpStatus} Auth response" : $"{HttpStatus} 鉴权响应",
+        ResultState.Restricted => english ? $"{HttpStatus} Restricted" : $"{HttpStatus} 受限",
+        ResultState.Failed => english ? "Measurement failed" : "测量失败",
+        _ => ElapsedMs is int ms ? $"{ms} ms" : english ? "No timing" : "无耗时"
     };
 }
 

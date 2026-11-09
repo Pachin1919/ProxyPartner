@@ -1,7 +1,7 @@
 #Requires -Version 7.3
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory)][ValidateSet('aot-build','100-node-ui','dpi-tray','memory-gate','1000-node-stress')][string]$Check,
+    [Parameter(Mandatory)][ValidateSet('aot-build','100-node-ui','dpi-tray','memory-gate','1000-node-stress','desktop-settings')][string]$Check,
     [Parameter(Mandatory)][string]$ToolchainRoot,
     [Parameter(Mandatory)][string]$EvidenceDirectory,
     [string]$TargetIcons
@@ -16,6 +16,7 @@ if ($LASTEXITCODE -or (git -C $repo status --porcelain)) { throw 'Run from a cle
 $out = Join-Path $EvidenceDirectory $Check
 if (Test-Path -LiteralPath $out) { throw "Evidence already exists: $out" }
 $null = New-Item -ItemType Directory -Path $out
+$env:PROXYPARTNER_DESKTOP_SETTINGS = Join-Path $out 'desktop-settings.json'
 $pwsh = (Get-Process -Id $PID).Path
 $summary = [ordered]@{ status='FAIL'; check=$Check; head_sha=$head; cwd=$repo
     started_utc=[DateTime]::UtcNow.ToString('o'); os=[Runtime.InteropServices.RuntimeInformation]::OSDescription
@@ -205,6 +206,8 @@ try {
             $summary.icon_fallback = Save-Window $bare.id $bare.panel $bare.exe 'cards-without-icons'
             Exit-Tray $bare.tray
             $null = Receive-Recorded $bare.run 15
+        } elseif ($Check -eq 'desktop-settings') {
+            . (Join-Path $PSScriptRoot 'Test-DesktopSettings.ps1')
         } else {
             $physical = [ordered]@{}
             foreach ($display in [DesktopWindows]::Displays()) {
