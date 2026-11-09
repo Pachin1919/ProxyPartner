@@ -2,7 +2,9 @@
 
 请以本目录为 ProxyPartner Lite 新项目的实施依据，先读 AGENTS.md、spec/PRODUCT.md、spec/PERFORMANCE.md 和 workflow/tasks.json。
 
-2026-11-06 更新：只使用 gpt-6.1-sol 指挥及执行/验收角色，不自动切 Astra。先读 spec/DESIGN.zh-CN.md、WORKFLOW.zh-CN.md 和 workflow/LANGGRAPH.zh-CN.md；开发期 LangGraph 的启动验收通过后才启动产品 loop。交接按 workflow/HANDOFF.zh-CN.md，退出/重新规划按 workflow/BREAKOUT.zh-CN.md，参数按 workflow/orchestrator.policy.json。Python/LangGraph 不进入产品。当前执行器尚未实现，不能把文档图当运行成功。
+Windows 便携版的启动流程、实施顺序和验收产物见 [ProxyPartner.exe 交付执行文档](workflow/EXE_DELIVERY.zh-CN.md)。用户日常只运行一个现有代理宿主，ProxyPartner 从这个宿主读取节点。交付验证从双击主程序开始。
+
+只使用 gpt-6.1-sol 指挥及执行/验收角色，不自动切 Astra。先读 spec/DESIGN.zh-CN.md、WORKFLOW.zh-CN.md 和 workflow/LANGGRAPH.zh-CN.md。开发期 LangGraph 启动验收已通过，产品从 T00 开始。交接按 workflow/HANDOFF.zh-CN.md，退出/重新规划按 workflow/BREAKOUT.zh-CN.md，参数按 workflow/orchestrator.policy.json。Python/LangGraph 不进入产品。 [本机启动验收](runs/orchestrator/bootstrap/verifier-80a6330/report.md)
 
 我要 Windows 轻量常驻“节点质量测试面板”，自动接入我已运行的 Clash Verge Rev 2.4.7 / Mihomo 1.19.21，不重新填订阅，不控制代理。重点是 OpenAI API/ChatGPT 网站延迟、历史、IP观察和自定义加权排名。不要做完整代理软件或网页壳。
 

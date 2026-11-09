@@ -34,7 +34,7 @@ GET /version、/proxies、/providers/proxies；GET /configs只用于确认mode�
 默认拒绝所有PUT/PATCH/DELETE，以及GET路径包含delay/healthcheck/restart/upgrade/cache等；不仅按HTTP方法过滤。白名单编译进代码并有单元测试。API Secret本身通常不是只读凭证，约束由本软件执行，不能宣传内核已做权限隔离。
 
 ## Go补测与副作用
-先用faceair的DialContext结构，不使用其配置下载、订阅刷新、测速服务器或全套CLI。锁定Mihomo版本，先考察仅SS协议的实际依赖（用户截图节点均为SS），不自己实现加密；不得假称已支持其他协议。
-尝试普通ParseProxy会链接过多初始化时，测量依赖成本后选择成熟的直接outbound构造器；做不到40MiB就阻塞“完整Lite”，不是偷用live healthcheck。
+以 Mihomo 与 faceair 的源码核对宿主接口、指定拨号和测试口径。逐节点测量采用经审查的许可兼容实现，先以实际 Shadowsocks 线路验证成熟库。自研代码使用 MIT，GPL 参考代码不进入实现。
+T08 在选型前核对拨号库的实际依赖、许可证、路径证据和资源成本。完整 Lite 仍须通过 40 MiB 进程树门槛，探测保持宿主白名单读取边界。
 全局并发1、节点级生命周期、无geodata/TUN/listener初始化、限制连接池与缓存。Go GOMEMLIMIT只是软runtime限制，不是Windows进程硬上限，不能当达标证据。
 TUN或系统过滤器可能串联已有代理；独立拨号≠路径天然独立。路径无法验证就标route_unverified，不发独立节点榜单。测试仍消耗网络带宽，不声称完全零影响。
