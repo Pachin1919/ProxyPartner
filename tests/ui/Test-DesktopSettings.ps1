@@ -123,17 +123,13 @@ Assert ($saved.English -and $saved.Light -and $saved.CustomTargets.Count -eq 1 -
     $saved.CustomTargets[0].Url -eq 'https://example.invalid/updated' -and
     $saved.CustomTargets[0].ShortName -eq 'EX2' -and $saved.CustomTargets[0].Symbol -eq '◆') 'Incorrect saved target or display preferences.'
 Assert ((Read-Control $ui.panel 0) -like '*Synthetic data*100 rows*') 'English panel status did not apply.'
-$large = $displays[-1]
-Assert ([DesktopWindows]::MoveWindow($ui.panel,$large.Left+10,$large.Top+10,
-    [Math]::Min(1890,$large.Right-$large.Left-20),[Math]::Min(1050,$large.Bottom-$large.Top-20),$true)) 'Could not restore the large display.'
-$null = Send-Number ([DesktopWindows]::GetDlgItem($ui.panel,106)) 0x115 6
-$summary.light_en = Save-Window $ui.id $ui.panel $ui.exe 'light-en'
 $summary.saved_sha256 = (Get-FileHash -LiteralPath $settingsFile).Hash
 
 Exit-Tray $ui.tray
 $null = Receive-Recorded $ui.run 15
 $ui = Start-Panel $artifact 'settings-restart'
 Assert ((Read-Control $ui.panel 0) -like '*Synthetic data*') 'English did not persist across exit.'
+$summary.light_en = Save-Window $ui.id $ui.panel $ui.exe 'light-en'
 Select-SampleNode '节点 005'
 $details = Open-Auxiliary 125
 $detailEn = Read-Control $details 240
@@ -141,6 +137,11 @@ Assert ($detailEn -match 'Score\s+87\b' -and
     $detailEn -like '*EX2*Untested*https://example.invalid/updated*undetermined*') "Saved target, provenance or fixed score is absent: $detailEn"
 $summary.details_en = Save-Window $ui.id $details $ui.exe 'details-en'
 Close-Panel $details
+Write-Control $ui.panel 103 '节点 004'
+Click-Control $ui.panel 107
+Assert ([DesktopWindows]::IsWindowVisible((Get-List $ui.panel))) 'Could not open the localized table.'
+$summary.table_en = Save-Window $ui.id $ui.panel $ui.exe 'table-en'
+Click-Control $ui.panel 107
 $settings = Open-Auxiliary 124
 Assert ((Read-Weights $settings) -eq '70,20,10,50,40,10' -and (Target-Count $settings) -eq 1) 'Weights or target did not persist.'
 Assert ((Send-Number ([DesktopWindows]::GetDlgItem($settings,201)) 0xF0) -eq 1 -and
@@ -165,12 +166,16 @@ Assert ((Read-Control $settings 221) -eq 'https://example.invalid/updated' -and
     (Read-Control $settings 222) -eq 'EX2' -and (Read-Control $settings 223) -eq '◆') 'Edited target did not reload.'
 Click-Control $settings 226
 Assert ((Target-Count $settings) -eq 0) 'Remove did not update the draft.'
+$null = Send-Number $settings 0x115 6
+Click-Control $settings 201
+$null = Send-Number $settings 0x115 7
 Click-Control $settings 227
 Assert (![DesktopWindows]::IsWindow($settings)) 'Removal could not be saved.'
 
 Exit-Tray $ui.tray
 $null = Receive-Recorded $ui.run 15
 $ui = Start-Panel $artifact 'settings-remove-restart'
+Assert ((Read-Control $ui.panel 0) -like '*合成数据*') 'Switching back to Chinese did not persist.'
 $settings = Open-Auxiliary 124
 Assert ((Target-Count $settings) -eq 0 -and (Read-Weights $settings) -eq '70,20,10,50,40,10') 'Removal did not persist.'
 Close-Panel $settings
