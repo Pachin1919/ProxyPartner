@@ -64,7 +64,7 @@ public sealed unsafe partial class DesktopApp
     }
 
     private static uint Color(uint rgb) => ((rgb & 0xff) << 16) | (rgb & 0xff00) | (rgb >> 16);
-    private uint TimeoutInk => Color(preferences.Light ? 0x9F253E : 0xFFABA9);
+    private uint TimeoutInk => Color(preferences.Light ? 0x9F253Eu : 0xFFABA9u);
 
     private nint HandleCards(uint msg, nuint wParam, nint lParam)
     {

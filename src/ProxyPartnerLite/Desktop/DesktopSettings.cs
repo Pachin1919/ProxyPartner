@@ -467,9 +467,9 @@ public sealed unsafe partial class DesktopApp
         if (row.SelectedMember is { } member)
             Line($"{L("组内选中", "Selected group member")} · {member}");
         Line($"{L("评分", "Score")} {ScoreText(row)}  |  {L("来源", "Source")}: {SourceLabel(row.Quality?.Source ?? "—")}");
-        if (row.Quality is { Cap: int cap, CapTarget: { } target })
+        if (row.Quality is { Cap: int cap, CapTarget: { } capTarget })
         {
-            string site = CurrentSiteLabel(target) ?? target;
+            string site = CurrentSiteLabel(capTarget) ?? capTarget;
             string reason = cap == 20 ? L("超时", "timed out") : L("响应超过 2500 ms", "response exceeded 2500 ms");
             Line(L($"评分上限 {cap} · {site} {reason}", $"Score cap {cap} · {site} {reason}"));
         }
