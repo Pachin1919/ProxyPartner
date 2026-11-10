@@ -8,6 +8,8 @@ public sealed unsafe partial class DesktopApp
 {
     private const string TrayClass = "ProxyPartner.Tray", PanelClass = "ProxyPartner.Panel";
     private const uint TrayMessage = 0x8001, SnapshotMessage = 0x8002;
+    private const int CurrentProbeTimer = 1;
+    private const uint CurrentProbeIntervalMs = 10_000;
     private const int Open = 101, Exit = 102, Search = 103, Groups = 104, Toggle = 107, SortMenu = 108, SortFirst = 110;
     private const int TestServers = 131;
     private static readonly string[] ZhColumns = ["节点", "当前", "原生延迟", "OPENAI", "GPT", "GitHub", "最近样本 (UTC)", "评分", "测试选择", "质量状态"];
@@ -183,7 +185,11 @@ public sealed unsafe partial class DesktopApp
             {
                 case WmSize: Layout(); return 0;
                 case WmClose: DestroyWindow(panel); return 0;
+                case WmTimer when wParam == CurrentProbeTimer && source is IDesktopCurrentTestSource timerSource:
+                    timerSource.RequestCurrentTest();
+                    return 0;
                 case WmDestroy:
+                    if (source is IDesktopCurrentTestSource) KillTimer(window, CurrentProbeTimer);
                     source.SnapshotChanged -= OnSnapshotChanged;
                     rows = [];
                     if (settingsWindow != 0) DestroyWindow(settingsWindow);
@@ -356,7 +362,11 @@ public sealed unsafe partial class DesktopApp
         }
         else ApplyDpi(initialDpi, null);
         source.SnapshotChanged += OnSnapshotChanged;
-        if (source is IDesktopCurrentTestSource test) test.RequestSweep();
+        if (source is IDesktopCurrentTestSource test)
+        {
+            test.RequestSweep();
+            SetTimer(panel, CurrentProbeTimer, CurrentProbeIntervalMs, 0);
+        }
         Refresh();
         ShowWindow(panel, 5);
         UpdateWindow(panel);

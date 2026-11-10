@@ -5,7 +5,8 @@ namespace ProxyPartnerLite.Desktop;
 internal static unsafe partial class Win32
 {
     internal const int WmClose = 0x10, WmDestroy = 2, WmSize = 5, WmNotify = 0x4e,
-        WmCommand = 0x111, WmSetFont = 0x30, WmDpiChanged = 0x2e0, WmKeyDown = 0x100, WmSetRedraw = 0x0b;
+        WmCommand = 0x111, WmSetFont = 0x30, WmDpiChanged = 0x2e0, WmKeyDown = 0x100, WmSetRedraw = 0x0b,
+        WmTimer = 0x113;
     internal const int LvmFirst = 0x1000, LvmGetNextItem = LvmFirst + 12,
         LvmRedrawItems = LvmFirst + 21,
         LvmSetItemCount = LvmFirst + 47, LvmSetItemState = LvmFirst + 43,
@@ -181,6 +182,10 @@ internal static unsafe partial class Win32
     internal static partial int ShowWindow(nint window, int command);
     [LibraryImport("user32")]
     internal static partial int IsWindowVisible(nint window);
+    [LibraryImport("user32")]
+    internal static partial nuint SetTimer(nint window, nuint id, uint milliseconds, nint callback);
+    [LibraryImport("user32")]
+    internal static partial int KillTimer(nint window, nuint id);
     [LibraryImport("user32")]
     internal static partial int UpdateWindow(nint window);
     [LibraryImport("user32")]
