@@ -651,7 +651,7 @@ public sealed unsafe partial class DesktopApp
 
     private long? Number(DesktopRow row) => sortColumn switch
     {
-        2 => NodeLatency(row).ElapsedMs, 3 => row.OpenAi.ElapsedMs, 4 => row.ChatGpt.ElapsedMs,
+        2 => row.Native.ElapsedMs, 3 => row.OpenAi.ElapsedMs, 4 => row.ChatGpt.ElapsedMs,
         5 => row.GitHub.ElapsedMs, 6 => row.LastObservedUtc?.UtcTicks, 7 => row.Quality?.Score,
         8 => tested.Contains(row.Id) ? 1 : 0, 9 => (long)(row.Quality?.State ?? QualityState.Insufficient), _ => null
     };
@@ -665,7 +665,7 @@ public sealed unsafe partial class DesktopApp
         {
             0 => row.Kind == NodeKind.Group ? $"{L("[组]", "[Group]")} {row.Name}" : row.Name,
             1 => row.SelectedMember ?? (row.IsCurrent ? L("当前", "Current") : "—"),
-            2 => NodeLatency(row).Format(preferences.English), 3 => FormatSiteLatency(row.OpenAi),
+            2 => row.Native.Format(preferences.English), 3 => FormatSiteLatency(row.OpenAi),
             4 => FormatSiteLatency(row.ChatGpt), 5 => FormatSiteLatency(row.GitHub),
             6 => Timestamp(row.LastObservedUtc), 7 => ScoreText(row),
             8 => row.Kind == NodeKind.Group ? "—" : tested.Contains(row.Id) ? L("已勾选", "Checked") : L("未勾选", "Unchecked"),

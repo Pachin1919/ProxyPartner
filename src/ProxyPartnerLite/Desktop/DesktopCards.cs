@@ -616,15 +616,18 @@ public sealed unsafe partial class DesktopApp
         if (item->Stage != 0x30001 || item->Item >= (nuint)rows.Length) return 0;
         var row = rows[(int)item->Item];
         var tone = GetTone(row, table: true);
-        bool siteFailed = item->SubItem switch
+        bool nodeFailed = NodeLatency(row).NoResponse;
+        bool failed = item->SubItem switch
         {
+            0 or 9 => nodeFailed,
+            2 => row.Native.NoResponse,
             3 => row.OpenAi.NoResponse,
             4 => row.ChatGpt.NoResponse,
             5 => row.GitHub.NoResponse,
             _ => false
         };
         item->BackgroundColor = tone.Background;
-        item->TextColor = siteFailed ? TimeoutInk : tone.Text;
+        item->TextColor = failed ? TimeoutInk : nodeFailed ? Muted : tone.Text;
         return 0;
     }
 
