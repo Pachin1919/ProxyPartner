@@ -7,6 +7,7 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
     private static readonly DesktopResult Untested = new(null, null, null, null, "—", ResultState.Missing);
     private static readonly TimeSpan NativeFreshness = TimeSpan.FromMinutes(15);
     private const int ParallelServerLimit = 5;
+    private const int ParallelWebsiteNodeLimit = 5;
     private readonly CancellationTokenSource stop = new();
     private readonly SemaphoreSlim requested = new(0, 1);
     private readonly Task poll;
@@ -55,8 +56,6 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
         string serverPath = Environment.GetEnvironmentVariable("PROXYPARTNER_SERVER_TARGETS") ??
             Path.Combine(AppContext.BaseDirectory, "ServerTargets.json");
         var serverMap = ServerTargets.Load(serverPath);
-        string profilePath = Environment.GetEnvironmentVariable("PROXYPARTNER_NODE_PROBES") ??
-            Path.Combine(AppContext.BaseDirectory, "ProbeNodes.json");
         var profiles = new Dictionary<string, ProbeProfile>(StringComparer.Ordinal);
         var exitV4 = new Dictionary<string, DesktopExitIp>(StringComparer.Ordinal);
         var exitV6 = new Dictionary<string, DesktopExitIp>(StringComparer.Ordinal);
@@ -102,7 +101,8 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                         if (!updatedMap.TryGetValue(name, out string? host) || host != serverMap[name])
                             serverResults.Remove(name);
                     serverMap = updatedMap;
-                    var updatedProfiles = IndependentNodeProbe.Load(profilePath);
+                    var updatedProfiles = IndependentNodeProbe.LoadConfigured(
+                        read.Status == HostStatus.ConnectedPipe && read.VerifiedPeerProcessId == corePid);
                     foreach (var (name, old) in profiles)
                     {
                         if (updatedProfiles.TryGetValue(name, out var replacement) && replacement.Revision == old.Revision)
@@ -147,17 +147,19 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                         window.Add(sample);
                     else history[key] = new(sample);
                 }
-                async Task RunIndependentAsync(string name)
+                async Task<(List<WebsiteProbe> Sites, System.Net.IPAddress? Address)> MeasureIndependentAsync(string name)
                 {
-                    string[] testing = [name];
-                    Emit(running: false, testingNodes: testing);
+                    var sites = new List<WebsiteProbe>(ReadOnlyHostClient.CurrentProbeTargetCount);
                     var address = await IndependentNodeProbe.MeasureAsync(name, profiles[name],
-                        ReadOnlyHostClient.WebsiteTargets, IndependentNodeProbe.EchoUrl, sample =>
-                        {
-                            RecordSite(sample);
-                            Emit(running: false, testingNodes: testing);
-                        }, stop.Token).ConfigureAwait(false);
-                    if (address is null || stop.IsCancellationRequested) return;
+                        ReadOnlyHostClient.WebsiteTargets, IndependentNodeProbe.EchoUrl, sites.Add, stop.Token)
+                        .ConfigureAwait(false);
+                    return (sites, address);
+                }
+                void RecordIndependent(string name, (List<WebsiteProbe> Sites, System.Net.IPAddress? Address) measured)
+                {
+                    if (stop.IsCancellationRequested) return;
+                    foreach (var sample in measured.Sites) RecordSite(sample);
+                    if (measured.Address is not { } address) return;
                     var family = address.AddressFamily == AddressFamily.InterNetwork ? exitV4 : exitV6;
                     string value = address.ToString();
                     var previous = family.GetValueOrDefault(name);
@@ -202,7 +204,8 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                 {
                     bool queued = websiteBatch.Contains(priority, StringComparer.Ordinal);
                     if (queued) websiteBatch = new Queue<string>(websiteBatch.Where(name => name != priority));
-                    await RunIndependentAsync(priority).ConfigureAwait(false);
+                    Emit(running: false, testingNodes: [priority]);
+                    RecordIndependent(priority, await MeasureIndependentAsync(priority).ConfigureAwait(false));
                     if (queued) websiteDone++;
                 }
                 if (pingPriority is not null && batch.Contains(pingPriority, StringComparer.Ordinal))
@@ -245,16 +248,36 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                     }
                     Emit(running: false);
                 }
-                while (!stop.IsCancellationRequested && Volatile.Read(ref nodeRequested) is null &&
-                    Volatile.Read(ref queuedOrRunning) == 0 && websiteBatch.TryDequeue(out string? websiteNode))
+                if (websiteBatch.Count != 0)
                 {
-                    if (!websiteEligible.Contains(websiteNode))
+                    var active = new Dictionary<Task<(List<WebsiteProbe> Sites, System.Net.IPAddress? Address)>, string>(
+                        ParallelWebsiteNodeLimit);
+                    while (true)
                     {
-                        websiteTotal--;
-                        continue;
+                        while (active.Count < ParallelWebsiteNodeLimit && !stop.IsCancellationRequested &&
+                            Volatile.Read(ref nodeRequested) is null && Volatile.Read(ref queuedOrRunning) == 0 &&
+                            websiteBatch.TryDequeue(out string? websiteNode))
+                        {
+                            if (!websiteEligible.Contains(websiteNode))
+                            {
+                                websiteTotal--;
+                                continue;
+                            }
+                            active.Add(MeasureIndependentAsync(websiteNode), websiteNode);
+                        }
+                        if (active.Count == 0) break;
+
+                        Emit(running: false, testingNodes: active.Values);
+                        var finished = await Task.WhenAny(active.Keys).ConfigureAwait(false);
+                        if (stop.IsCancellationRequested)
+                        {
+                            await Task.WhenAll(active.Keys).ConfigureAwait(false);
+                            return;
+                        }
+                        RecordIndependent(active[finished], await finished.ConfigureAwait(false));
+                        active.Remove(finished);
+                        websiteDone++;
                     }
-                    await RunIndependentAsync(websiteNode).ConfigureAwait(false);
-                    websiteDone++;
                     Emit(running: false);
                 }
             }

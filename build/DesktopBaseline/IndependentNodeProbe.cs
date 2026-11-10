@@ -19,10 +19,34 @@ internal static class IndependentNodeProbe
     [
         "name", "type", "server", "port", "uuid", "network", "tls", "servername", "client-fingerprint",
         "flow", "encryption", "reality-opts", "ws-opts", "alpn", "udp", "xudp", "packet-addr", "packet-encoding",
-        "dialer-proxy", "interface-name", "ip-version", "routing-mark", "skip-cert-verify", "tfo", "mptcp"
+        "dialer-proxy", "interface-name", "ip-version", "routing-mark", "skip-cert-verify", "tfo", "mptcp",
+        "alterId", "cipher"
     ];
     private static readonly string[] WsFields = ["path", "headers", "max-early-data", "v2ray-http-upgrade", "v2ray-http-upgrade-fast-open"];
     private static readonly string[] RealityFields = ["public-key", "short-id"];
+
+    internal static Dictionary<string, ProbeProfile> LoadConfigured(bool verifiedPipe)
+    {
+        if (Environment.GetEnvironmentVariable("PROXYPARTNER_NODE_PROBES") is { } configured)
+            return Load(configured);
+
+        var pointer = new FileInfo(Path.Combine(AppContext.BaseDirectory, "ProbeProfilePath.txt"));
+        if (verifiedPipe && pointer.Exists)
+        {
+            try
+            {
+                if (pointer.Length is > 0 and <= 4096)
+                {
+                    string path = File.ReadAllText(pointer.FullName).Trim();
+                    if (Path.IsPathFullyQualified(path)) return Load(path);
+                }
+            }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+            return new(StringComparer.Ordinal);
+        }
+        return Load(Path.Combine(AppContext.BaseDirectory, "ProbeNodes.json"));
+    }
 
     internal static Dictionary<string, ProbeProfile> Load(string path)
     {
@@ -83,6 +107,8 @@ internal static class IndependentNodeProbe
                 Text(entry, "server") is not { } server || Uri.CheckHostName(server) == UriHostNameType.Unknown ||
                 !int.TryParse(Text(entry, "port"), out int port) || port is < 1 or > 65535 ||
                 !Guid.TryParse(Text(entry, "uuid"), out Guid id) ||
+                Text(entry, "alterId") is not (null or "0") ||
+                Text(entry, "cipher") is not (null or "auto" or "none") ||
                 Text(entry, "encryption") is not (null or "" or "none") ||
                 Text(entry, "dialer-proxy") is not (null or "") ||
                 Text(entry, "interface-name") is not (null or "") ||
