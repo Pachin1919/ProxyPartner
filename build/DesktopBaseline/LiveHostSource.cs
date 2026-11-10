@@ -1,5 +1,6 @@
 using ProxyPartnerLite.Desktop;
 using ProxyPartnerLite.Host;
+using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Sockets;
 
@@ -48,6 +49,20 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
             if (requested.CurrentCount == 0) requested.Release();
     }
 
+    private static bool TryTakeNode(ref string? priority, ref Queue<string> queue, out string name, out bool counted)
+    {
+        if (priority is not { } requested)
+        {
+            counted = true;
+            return queue.TryDequeue(out name!);
+        }
+        name = requested;
+        priority = null;
+        counted = queue.Contains(requested);
+        if (counted) queue = new(queue.Where(queued => queued != requested));
+        return true;
+    }
+
     private async Task PollAsync()
     {
         var client = new ReadOnlyHostClient();
@@ -62,17 +77,22 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
         var exitV6 = new Dictionary<string, DesktopExitIp>(StringComparer.Ordinal);
         var batch = new Queue<string>();
         var websiteBatch = new Queue<string>();
-        var serverActive = new Dictionary<Task<DesktopResult>, (string Name, string Host)>(ParallelServerLimit);
+        var serverActive = new Dictionary<Task<DesktopResult>, (string Name, string Host, bool Counted)>(ParallelServerLimit);
         var websiteActive = new Dictionary<Task<(List<WebsiteProbe> Sites, IPAddress? Address)>,
-            (string Name, string Revision)>(ParallelWebsiteNodeLimit);
+            (string Name, string Revision, bool Counted)>(ParallelWebsiteNodeLimit);
+        string? serverPriority = null, websitePriority = null;
         int batchTotal = 0, batchDone = 0;
         int websiteTotal = 0, websiteDone = 0;
         bool sweepStarted = false;
         string? unavailableNode = null;
         WebsiteProbe? current = null;
+        Task<WebsiteProbe?>? currentTask = null;
+        var currentSamples = new ConcurrentQueue<WebsiteProbe>();
         IReadOnlyList<HostGroup>? testedGroups = null;
         int? previousPid = null;
         Task<bool>? wake = null;
+        bool HasPendingRequest() => Volatile.Read(ref nodeRequested) is not null ||
+            Volatile.Read(ref sweepRequested) != 0 || currentTask is null && Volatile.Read(ref queuedOrRunning) != 0;
         try
         {
             do
@@ -84,8 +104,16 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                     if (previousPid != corePid)
                     {
                         await Task.WhenAll(serverActive.Keys.Cast<Task>().Concat(websiteActive.Keys)).ConfigureAwait(false);
+                        if (currentTask is not null)
+                        {
+                            await currentTask.ConfigureAwait(false);
+                            currentTask = null;
+                            currentSamples.Clear();
+                            Volatile.Write(ref queuedOrRunning, 0);
+                        }
                         serverActive.Clear();
                         websiteActive.Clear();
+                        serverPriority = websitePriority = null;
                         samples.Clear();
                         history.Clear();
                         serverResults.Clear();
@@ -132,24 +160,26 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                         .Order(StringComparer.Ordinal).ToArray();
                     var websiteEligible = facts.Nodes.Where(n => n.Type == "Vless" && profiles.ContainsKey(n.Name))
                         .Select(n => n.Name).ToHashSet(StringComparer.Ordinal);
-                    string? pingPriority = null;
                     if (priority is not null)
                     {
                         bool currentRequested = priority == current?.Node;
                         if (currentRequested) Interlocked.CompareExchange(ref queuedOrRunning, 1, 0);
                         bool canPing = Array.BinarySearch(eligible, priority, StringComparer.Ordinal) >= 0;
-                        if (canPing) pingPriority = priority;
-                        unavailableNode = websiteEligible.Contains(priority) || currentRequested ? null : priority;
+                        bool canProbe = websiteEligible.Contains(priority);
+                        serverPriority = canPing && !serverActive.Values.Any(job => job.Name == priority) ? priority : null;
+                        websitePriority = canProbe && !websiteActive.Values.Any(job => job.Name == priority) ? priority : null;
+                        unavailableNode = canProbe || currentRequested ? null : priority;
                     }
                     if (startSweep) unavailableNode = null;
-                    void Emit(bool running, IReadOnlyCollection<string>? testingNodes = null)
+                    void Emit()
                     {
-                        testingNodes ??= serverActive.Values.Select(job => job.Name)
+                        var testingNodes = serverActive.Values.Select(job => job.Name)
                             .Concat(websiteActive.Values.Select(job => job.Name)).ToArray();
                         var sweep = new DesktopServerSweep(batchDone, batchTotal, sweepStarted, unavailableNode,
                             websiteDone, websiteTotal);
                         PublishFacts(facts, samples, history.Values, serverResults, exitV4, exitV6, current,
-                            sweep, running, pathChanged: samples.Count != 0 && testedGroups is null, testingNodes);
+                            sweep, running: currentTask is not null,
+                            pathChanged: samples.Count != 0 && testedGroups is null, testingNodes);
                     }
                     void RecordSite(WebsiteProbe sample)
                     {
@@ -178,22 +208,15 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                         int changes = previous is null ? 0 : previous.Changes + (previous.Address == value ? 0 : 1);
                         family[name] = new(value, DateTimeOffset.UtcNow, changes);
                     }
-                    if (Volatile.Read(ref queuedOrRunning) == 1)
+                    if (currentTask is null && Volatile.Read(ref queuedOrRunning) != 0)
                     {
                         samples.Clear();
                         testedGroups = facts.Groups;
-                        Emit(running: true);
-                        current = await client.MeasureCurrentPathAsync(corePid, facts, sample =>
+                        currentTask = client.MeasureCurrentPathAsync(corePid, facts, sample =>
                         {
-                            samples.Add(sample);
-                            RecordSite(sample);
-                            Emit(running: true);
-                        }, stop.Token).ConfigureAwait(false);
-                        var names = facts.Nodes.Select(n => n.Name).ToHashSet(StringComparer.Ordinal);
-                        foreach (var key in history.Keys.ToArray())
-                            if (!names.Contains(key.Node)) history.Remove(key);
-                        Volatile.Write(ref queuedOrRunning, 0);
-                        if (stop.IsCancellationRequested) return;
+                            currentSamples.Enqueue(sample);
+                            Wake();
+                        }, stop.Token);
                     }
                     else if (testedGroups is not null && !testedGroups.Select(g => (g.Name, g.Selected))
                         .SequenceEqual(facts.Groups.Select(g => (g.Name, g.Selected))))
@@ -212,51 +235,37 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                         websiteDone = 0;
                         sweepStarted = true;
                     }
-                    if (priority is not null && websiteEligible.Contains(priority) &&
-                        !websiteActive.Values.Any(job => job.Name == priority))
+                    while (!stop.IsCancellationRequested && !HasPendingRequest())
                     {
-                        bool queued = websiteBatch.Contains(priority, StringComparer.Ordinal);
-                        if (queued) websiteBatch = new Queue<string>(websiteBatch.Where(name => name != priority));
-                        Emit(running: false, testingNodes: [priority]);
-                        RecordIndependent(priority, await MeasureIndependentAsync(priority, profiles[priority]).ConfigureAwait(false));
-                        if (queued) websiteDone++;
-                    }
-                    if (pingPriority is not null && batch.Contains(pingPriority, StringComparer.Ordinal))
-                        batch = new Queue<string>(batch.Where(name => name != pingPriority).Prepend(pingPriority));
-                    else if (pingPriority is not null && !serverActive.Values.Any(job => job.Name == pingPriority))
-                    {
-                        Emit(running: false, testingNodes: [pingPriority]);
-                        serverResults[pingPriority] = await ServerTargets.MeasureAsync(serverMap[pingPriority], stop.Token)
-                            .ConfigureAwait(false);
-                    }
-                    while (!stop.IsCancellationRequested && Volatile.Read(ref nodeRequested) is null &&
-                        Volatile.Read(ref queuedOrRunning) == 0 && Volatile.Read(ref sweepRequested) == 0)
-                    {
-                        while (serverActive.Count < ParallelServerLimit && batch.TryDequeue(out string? name))
+                        while (serverActive.Count < ParallelServerLimit &&
+                            TryTakeNode(ref serverPriority, ref batch, out string name, out bool counted))
                         {
                             if (Array.BinarySearch(eligible, name, StringComparer.Ordinal) < 0)
                             {
-                                batchTotal--;
+                                if (counted) batchTotal--;
                                 continue;
                             }
                             string host = serverMap[name];
-                            serverActive.Add(ServerTargets.MeasureAsync(host, stop.Token), (name, host));
+                            serverActive.Add(ServerTargets.MeasureAsync(host, stop.Token), (name, host, counted));
                         }
-                        while (websiteActive.Count < ParallelWebsiteNodeLimit && websiteBatch.TryDequeue(out string? name))
+                        while (websiteActive.Count < ParallelWebsiteNodeLimit &&
+                            TryTakeNode(ref websitePriority, ref websiteBatch, out string name, out bool counted))
                         {
                             if (!websiteEligible.Contains(name))
                             {
-                                websiteTotal--;
+                                if (counted) websiteTotal--;
                                 continue;
                             }
                             var profile = profiles[name];
-                            websiteActive.Add(MeasureIndependentAsync(name, profile), (name, profile.Revision));
+                            websiteActive.Add(MeasureIndependentAsync(name, profile), (name, profile.Revision, counted));
                         }
-                        Emit(running: false);
-                        if (serverActive.Count == 0 && websiteActive.Count == 0) break;
+                        Emit();
+                        if (serverActive.Count == 0 && websiteActive.Count == 0 && currentTask is null) break;
 
                         wake ??= requested.WaitAsync(TimeSpan.FromSeconds(30), stop.Token);
-                        await Task.WhenAny(serverActive.Keys.Cast<Task>().Concat(websiteActive.Keys).Append(wake)).ConfigureAwait(false);
+                        var pending = serverActive.Keys.Cast<Task>().Concat(websiteActive.Keys).Append(wake);
+                        if (currentTask is not null) pending = pending.Append(currentTask);
+                        await Task.WhenAny(pending).ConfigureAwait(false);
                         if (stop.IsCancellationRequested) return;
                         if (wake.IsCompleted)
                         {
@@ -267,29 +276,56 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                         {
                             var result = await finished.ConfigureAwait(false);
                             serverActive.Remove(finished);
-                            if (!serverMap.TryGetValue(job.Name, out var host)) batchTotal--;
-                            else if (host != job.Host) batch.Enqueue(job.Name);
+                            if (Array.BinarySearch(eligible, job.Name, StringComparer.Ordinal) < 0)
+                            {
+                                if (job.Counted) batchTotal--;
+                            }
+                            else if (serverMap[job.Name] != job.Host)
+                            {
+                                if (job.Counted) batch.Enqueue(job.Name);
+                            }
                             else
                             {
                                 serverResults[job.Name] = result;
-                                batchDone++;
+                                if (job.Counted) batchDone++;
                             }
                         }
                         foreach (var (finished, job) in websiteActive.Where(job => job.Key.IsCompleted).ToArray())
                         {
                             var result = await finished.ConfigureAwait(false);
                             websiteActive.Remove(finished);
-                            if (!websiteEligible.Contains(job.Name)) websiteTotal--;
-                            else if (profiles[job.Name].Revision != job.Revision) websiteBatch.Enqueue(job.Name);
+                            if (!websiteEligible.Contains(job.Name))
+                            {
+                                if (job.Counted) websiteTotal--;
+                            }
+                            else if (profiles[job.Name].Revision != job.Revision)
+                            {
+                                if (job.Counted) websiteBatch.Enqueue(job.Name);
+                            }
                             else
                             {
                                 RecordIndependent(job.Name, result);
-                                websiteDone++;
+                                if (job.Counted) websiteDone++;
                             }
                         }
+                        bool currentFinished = currentTask?.IsCompleted == true;
+                        while (currentSamples.TryDequeue(out var sample))
+                        {
+                            samples.Add(sample);
+                            if (testedGroups is not null) RecordSite(sample);
+                        }
+                        if (currentFinished)
+                        {
+                            var verified = await currentTask!.ConfigureAwait(false);
+                            current = testedGroups is null ? null : verified;
+                            currentTask = null;
+                            var names = facts.Nodes.Select(n => n.Name).ToHashSet(StringComparer.Ordinal);
+                            foreach (var key in history.Keys.ToArray())
+                                if (!names.Contains(key.Node)) history.Remove(key);
+                            Volatile.Write(ref queuedOrRunning, 0);
+                        }
                     }
-                    if (Volatile.Read(ref queuedOrRunning) != 0 || Volatile.Read(ref nodeRequested) is not null ||
-                        Volatile.Read(ref sweepRequested) != 0) continue;
+                    if (HasPendingRequest()) continue;
                 }
                 else if (GetSnapshot() is { Collection: not CollectionState.Disconnected } previous)
                 {
@@ -309,6 +345,7 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
         finally
         {
             await Task.WhenAll(serverActive.Keys.Cast<Task>().Concat(websiteActive.Keys)).ConfigureAwait(false);
+            if (currentTask is not null) await currentTask.ConfigureAwait(false);
         }
     }
 
