@@ -5,7 +5,7 @@ namespace ProxyPartnerLite.Desktop;
 internal static unsafe partial class Win32
 {
     internal const int WmClose = 0x10, WmDestroy = 2, WmSize = 5, WmNotify = 0x4e,
-        WmCommand = 0x111, WmSetFont = 0x30, WmDpiChanged = 0x2e0, WmKeyDown = 0x100;
+        WmCommand = 0x111, WmSetFont = 0x30, WmDpiChanged = 0x2e0, WmKeyDown = 0x100, WmSetRedraw = 0x0b;
     internal const int LvmFirst = 0x1000, LvmGetNextItem = LvmFirst + 12,
         LvmRedrawItems = LvmFirst + 21,
         LvmSetItemCount = LvmFirst + 47, LvmSetItemState = LvmFirst + 43,
@@ -13,7 +13,7 @@ internal static unsafe partial class Win32
         LvmSetColumnWidth = LvmFirst + 30, LvmSetExtendedStyle = LvmFirst + 54;
     internal const int LvnGetDisplayInfo = -177, LvnColumnClick = -108;
     internal const uint WsChild = 0x40000000, WsVisible = 0x10000000, WsTabStop = 0x10000,
-        WsOverlappedWindow = 0xcf0000, WsClipChildren = 0x02000000;
+        WsOverlappedWindow = 0xcf0000, WsClipChildren = 0x02000000, WsClipSiblings = 0x04000000;
     internal const int UseDefault = unchecked((int)0x80000000);
 
     [StructLayout(LayoutKind.Sequential)]
@@ -90,6 +90,7 @@ internal static unsafe partial class Win32
         public uint State;
         public nint Param;
         public uint TextColor, BackgroundColor;
+        public int SubItem;
     }
     [StructLayout(LayoutKind.Sequential)]
     internal struct DrawItem
@@ -179,6 +180,8 @@ internal static unsafe partial class Win32
     [LibraryImport("user32")]
     internal static partial int ShowWindow(nint window, int command);
     [LibraryImport("user32")]
+    internal static partial int IsWindowVisible(nint window);
+    [LibraryImport("user32")]
     internal static partial int UpdateWindow(nint window);
     [LibraryImport("user32")]
     internal static partial int SetForegroundWindow(nint window);
@@ -190,6 +193,10 @@ internal static unsafe partial class Win32
     internal static partial int GetClientRect(nint window, Rect* rect);
     [LibraryImport("user32")]
     internal static partial int MoveWindow(nint window, int x, int y, int width, int height, int repaint);
+    [LibraryImport("user32")]
+    internal static partial int SetWindowPos(nint window, nint insertAfter, int x, int y, int width, int height, uint flags);
+    [LibraryImport("user32")]
+    internal static partial int RedrawWindow(nint window, Rect* update, nint region, uint flags);
     [LibraryImport("user32")]
     internal static partial uint GetDpiForWindow(nint window);
     [LibraryImport("user32")]
@@ -204,6 +211,11 @@ internal static unsafe partial class Win32
     internal static partial int GetWindowRect(nint window, Rect* rect);
     [LibraryImport("user32")]
     internal static partial int InvalidateRect(nint window, nint rect, int erase);
+    [LibraryImport("user32")]
+    internal static partial int GetUpdateRect(nint window, Rect* rect, int erase);
+    [LibraryImport("user32")]
+    internal static partial int ScrollWindowEx(nint window, int dx, int dy, Rect* scroll, Rect* clip,
+        nint updateRegion, Rect* updateRect, uint flags);
     [LibraryImport("user32", EntryPoint = "PostMessageW")]
     internal static partial int Post(nint window, uint msg, nuint wParam, nint lParam);
     [LibraryImport("user32", EntryPoint = "SendMessageW")]

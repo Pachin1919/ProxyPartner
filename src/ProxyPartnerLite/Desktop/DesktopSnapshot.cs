@@ -13,19 +13,20 @@ public sealed record DesktopResult(
     string Source, ResultState State)
 {
     public string DisplayText => Format(false);
+    internal bool NoResponse => State is ResultState.Failed or ResultState.TimedOut ||
+        State == ResultState.Stale && ElapsedMs is null;
 
     internal string Format(bool english) => State switch
     {
         ResultState.Missing => english ? "Untested" : "未测",
-        ResultState.Stale when ElapsedMs is > 0 => english ? $"{ElapsedMs} ms · Stale" : $"{ElapsedMs} ms · 已过期",
-        ResultState.Stale => english ? "Stale" : "已过期",
+        ResultState.Stale when ElapsedMs is int ms => $"{ms} ms",
+        ResultState.Stale or ResultState.Failed => english ? "No response" : "未响应",
         ResultState.Incomparable => english ? "Not comparable" : "不可比较",
         ResultState.AuthenticationRequired => (TargetId is "openai_api" or "anthropic_api"
             ? english ? $"{HttpStatus} API key required" : $"{HttpStatus} 需 API 密钥"
             : english ? $"{HttpStatus} Authentication required" : $"{HttpStatus} 需认证") + TimingSuffix,
         ResultState.Restricted => (english ? $"{HttpStatus} Restricted" : $"{HttpStatus} 受限") + TimingSuffix,
         ResultState.HttpError => $"HTTP {HttpStatus}",
-        ResultState.Failed => english ? "Measurement failed" : "测量失败",
         ResultState.TimedOut => english ? "Timed out" : "超时",
         _ => ElapsedMs is int ms ? $"{ms} ms" : english ? "No timing" : "无耗时"
     };

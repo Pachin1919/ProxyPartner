@@ -314,8 +314,8 @@ public sealed unsafe partial class DesktopApp
         detailButton = Child("BUTTON", L("详情", "Details"), WsTabStop | 11, OpenDetails);
         if (source is IDesktopCurrentTestSource)
             serverTestButton = Child("BUTTON", L("全部测速", "Test all"), WsTabStop | 11, TestServers);
-        list = Child("SysListView32", "", WsTabStop | 0x1000 | 1 | 4 | 8, 105);
-        cards = Child(CardsClass, L("节点卡片", "Node cards"), WsTabStop | 0x200000, 106);
+        list = Child("SysListView32", "", WsTabStop | WsClipSiblings | 0x1000 | 1 | 4 | 8, 105);
+        cards = Child(CardsClass, L("节点卡片", "Node cards"), WsTabStop | WsClipSiblings | 0x200000, 106);
         if (title == 0 || status == 0 || search == 0 || searchLabel == 0 || hint == 0 || groups == 0 || list == 0 ||
             cards == 0 || toggle == 0 || sortButton == 0 || settingsButton == 0 || detailButton == 0 ||
             editBrush == 0 || toolsBrush == 0)
@@ -431,28 +431,28 @@ public sealed unsafe partial class DesktopApp
         int searchWidth = compact ? width : Math.Min(Scale(288), width - Scale(buttonCount == 6 ? 470 : 426));
         int controlX = compact ? pad : pad + searchWidth + Scale(10), controlY = Scale(compact ? 103 : 68);
         int labelWidth = Scale(preferences.English ? 50 : 42);
-        MoveWindow(title, pad, Scale(11), width, Scale(24), 1);
-        MoveWindow(status, pad, Scale(40), width, Scale(20), 1);
-        MoveWindow(searchLabel, pad, Scale(68), labelWidth, Scale(28), 1);
-        MoveWindow(search, pad + labelWidth, Scale(68), Math.Max(0, searchWidth - labelWidth), Scale(28), 1);
+        MoveWindow(title, pad, Scale(11), width, Scale(24), 0);
+        MoveWindow(status, pad, Scale(40), width, Scale(20), 0);
+        MoveWindow(searchLabel, pad, Scale(68), labelWidth, Scale(28), 0);
+        MoveWindow(search, pad + labelWidth, Scale(68), Math.Max(0, searchWidth - labelWidth), Scale(28), 0);
         int slot = Math.Min(Scale(80), Math.Max(1, (size.Right - pad - controlX - Scale(7 * (buttonCount - 1))) / buttonCount));
         int pitch = slot + Scale(7);
-        MoveWindow(toggle, controlX, controlY, slot, Scale(28), 1);
-        MoveWindow(sortButton, controlX + pitch, controlY, slot, Scale(28), 1);
-        MoveWindow(groups, controlX + pitch * 2, controlY, slot, Scale(28), 1);
-        MoveWindow(settingsButton, controlX + pitch * 3, controlY, slot, Scale(28), 1);
-        MoveWindow(detailButton, controlX + pitch * 4, controlY, slot, Scale(28), 1);
-        if (serverTestButton != 0) MoveWindow(serverTestButton, controlX + pitch * 5, controlY, Math.Min(slot, Scale(36)), Scale(28), 1);
+        MoveWindow(toggle, controlX, controlY, slot, Scale(28), 0);
+        MoveWindow(sortButton, controlX + pitch, controlY, slot, Scale(28), 0);
+        MoveWindow(groups, controlX + pitch * 2, controlY, slot, Scale(28), 0);
+        MoveWindow(settingsButton, controlX + pitch * 3, controlY, slot, Scale(28), 0);
+        MoveWindow(detailButton, controlX + pitch * 4, controlY, slot, Scale(28), 0);
+        if (serverTestButton != 0) MoveWindow(serverTestButton, controlX + pitch * 5, controlY, Math.Min(slot, Scale(36)), Scale(28), 0);
         int hintX = size.Right < Scale(940) ? pad : controlX + pitch * 5 +
             (serverTestButton == 0 ? 0 : Math.Min(slot, Scale(36)) + Scale(7));
         int hintY = size.Right < Scale(940) ? controlY + Scale(30) : controlY;
-        MoveWindow(hint, hintX, hintY, Math.Max(0, size.Right - pad - hintX), Scale(24), 1);
+        MoveWindow(hint, hintX, hintY, Math.Max(0, size.Right - pad - hintX), Scale(24), 0);
         int contentPad = Scale(24);
         int contentWidth = Math.Max(0, size.Right - contentPad * 2);
         int contentHeight = Math.Max(0, size.Bottom - top - contentPad);
-        MoveWindow(list, contentPad, top, contentWidth, contentHeight, 1);
-        if (cards != 0) MoveWindow(cards, contentPad, top, contentWidth, contentHeight, 1);
-        InvalidateRect(panel, 0, 1);
+        MoveWindow(list, contentPad, top, contentWidth, contentHeight, 0);
+        if (cards != 0) MoveWindow(cards, contentPad, top, contentWidth, contentHeight, 0);
+        RedrawWindow(panel, null, 0, 0x85); // RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN
     }
 
     private void OnSnapshotChanged()
@@ -514,8 +514,8 @@ public sealed unsafe partial class DesktopApp
         {
             hoverIndex = hoverSite = -1;
             if (!tableMode) SetText(hint, HoverText());
-            SyncTable();
-            ScrollCards(preserveScroll ? scrollY : 0);
+            SyncTable(ensureSelection: !preserveScroll);
+            ScrollCards(preserveScroll ? scrollY : 0, refresh: true);
             if (!preserveScroll && !tableMode && IndexOfSelection() is int selected && selected >= 0) SelectCard(selected);
             if (detailWindow != 0) RefreshDetails();
         }
@@ -531,11 +531,13 @@ public sealed unsafe partial class DesktopApp
         if ((uint)index < rows.Length) selectedId = rows[index].Id;
     }
 
-    private void SyncTable()
+    private void SyncTable(bool ensureSelection = true)
     {
+        bool visible = IsWindowVisible(list) != 0;
+        if (visible) Send(list, WmSetRedraw, 0, 0);
         var state = new Item { StateMask = 3 };
         Send(list, LvmSetItemState, nuint.MaxValue, (nint)(&state));
-        Send(list, LvmSetItemCount, (nuint)rows.Length, 2);
+        Send(list, LvmSetItemCount, (nuint)rows.Length, 3);
         if (selectedId != null)
         {
             int index = IndexOfSelection();
@@ -543,10 +545,11 @@ public sealed unsafe partial class DesktopApp
             {
                 state.State = 3;
                 Send(list, LvmSetItemState, (nuint)index, (nint)(&state));
-                if (tableMode) Send(list, LvmEnsureVisible, (nuint)index, 0);
+                if (tableMode && ensureSelection) Send(list, LvmEnsureVisible, (nuint)index, 0);
             }
         }
-        InvalidateRect(list, 0, 1);
+        if (visible) Send(list, WmSetRedraw, 1, 0);
+        InvalidateRect(list, 0, 0);
     }
 
     private void UpdateStatus(DesktopSnapshot? snapshot = null)
@@ -619,14 +622,17 @@ public sealed unsafe partial class DesktopApp
     {
         CaptureSelection();
         tableMode = !tableMode;
-        ShowWindow(list, tableMode ? 5 : 0);
-        ShowWindow(cards, tableMode ? 0 : 5);
+        nint incoming = tableMode ? list : cards, outgoing = tableMode ? cards : list;
         SetText(toggle, ViewLabel);
         hoverIndex = hoverSite = -1;
         SetText(hint, tableMode ? TableHint : HoverText());
         if (tableMode) SyncTable();
         else if (IndexOfSelection() is int index && index >= 0) SelectCard(index);
-        SetFocus(tableMode ? list : cards);
+        if (SetWindowPos(incoming, 0, 0, 0, 0, 0, 0x53) == 0) // SHOWWINDOW | NOACTIVATE | NOMOVE | NOSIZE
+            ShowWindow(incoming, 5);
+        RedrawWindow(incoming, null, 0, 0x181); // RDW_INVALIDATE | RDW_ALLCHILDREN | RDW_UPDATENOW
+        ShowWindow(outgoing, 0);
+        SetFocus(incoming);
     }
 
     private int CompareRows(DesktopRow a, DesktopRow b)
@@ -645,7 +651,7 @@ public sealed unsafe partial class DesktopApp
 
     private long? Number(DesktopRow row) => sortColumn switch
     {
-        2 => row.Native.ElapsedMs, 3 => row.OpenAi.ElapsedMs, 4 => row.ChatGpt.ElapsedMs,
+        2 => NodeLatency(row).ElapsedMs, 3 => row.OpenAi.ElapsedMs, 4 => row.ChatGpt.ElapsedMs,
         5 => row.GitHub.ElapsedMs, 6 => row.LastObservedUtc?.UtcTicks, 7 => row.Quality?.Score,
         8 => tested.Contains(row.Id) ? 1 : 0, 9 => (long)(row.Quality?.State ?? QualityState.Insufficient), _ => null
     };
@@ -659,11 +665,11 @@ public sealed unsafe partial class DesktopApp
         {
             0 => row.Kind == NodeKind.Group ? $"{L("[组]", "[Group]")} {row.Name}" : row.Name,
             1 => row.SelectedMember ?? (row.IsCurrent ? L("当前", "Current") : "—"),
-            2 => row.Native.Format(preferences.English), 3 => FormatSiteLatency(row.OpenAi),
+            2 => NodeLatency(row).Format(preferences.English), 3 => FormatSiteLatency(row.OpenAi),
             4 => FormatSiteLatency(row.ChatGpt), 5 => FormatSiteLatency(row.GitHub),
             6 => Timestamp(row.LastObservedUtc), 7 => ScoreText(row),
             8 => row.Kind == NodeKind.Group ? "—" : tested.Contains(row.Id) ? L("已勾选", "Checked") : L("未勾选", "Unchecked"),
-            9 => GetTone(row).Label, _ => ""
+            9 => GetTone(row, table: true).Label, _ => ""
         };
         int count = Math.Min(value.Length, item->TextCapacity - 1);
         value.AsSpan(0, count).CopyTo(new Span<char>(item->Text, count));

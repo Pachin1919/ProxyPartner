@@ -40,6 +40,9 @@ public sealed unsafe partial class DesktopApp
     private Tone GetTone(DesktopRow row, bool table = false)
     {
         bool light = preferences.Light;
+        if (NodeLatency(row).NoResponse)
+            return new Tone(Color(table ? (light ? 0xF2DDE5u : 0x45272Cu) : (light ? 0xF1F4F8u : 0x303741u)),
+                TimeoutInk, TimeoutInk, L("未响应", "No response"));
         var tone = row.Quality?.State switch
         {
             QualityState.Good => new Tone(Color(light ? 0xD7EDE1u : 0x17382Eu), Color(light ? 0x257C60u : 0x78B89Du),
@@ -54,10 +57,7 @@ public sealed unsafe partial class DesktopApp
                 row.OpenAi.State != ResultState.Missing || row.ChatGpt.State != ResultState.Missing ||
                     row.Google is not null || row.YouTube is not null || row.Anthropic is not null
                     ? L("本轮已测", "Round tested") :
-                row.Native.State == ResultState.Stale ? row.Native.ElapsedMs.HasValue
-                    ? L("历史延迟", "Past latency") : L("历史未响应", "Past failure") :
-                row.Native.State == ResultState.Measured ? L("延迟已测", "Latency read") :
-                row.Native.State == ResultState.Failed ? L("内核未响应", "No response") :
+                NodeLatency(row).ElapsedMs.HasValue ? L("延迟已测", "Latency read") :
                 L("待测", "Untested"))
         };
         return !light && !table ? tone with { Background = Color(0x303741), Text = Muted } : tone;
@@ -65,6 +65,7 @@ public sealed unsafe partial class DesktopApp
 
     private static uint Color(uint rgb) => ((rgb & 0xff) << 16) | (rgb & 0xff00) | (rgb >> 16);
     private uint TimeoutInk => Color(preferences.Light ? 0x9F253Eu : 0xFFABA9u);
+    private static DesktopResult NodeLatency(DesktopRow row) => row.ServerPing ?? row.Native;
 
     private nint HandleCards(uint msg, nuint wParam, nint lParam)
     {
@@ -79,15 +80,21 @@ public sealed unsafe partial class DesktopApp
                 Paint paint;
                 nint dc = BeginPaint(cards, &paint);
                 Rect area = paint.Bounds;
-                long pixels = (long)(area.Right - area.Left) * (area.Bottom - area.Top);
-                if (pixels > 0)
+                int width = area.Right - area.Left;
+                if (width > 0 && area.Top < area.Bottom)
                 {
-                    nint paintDc = dc;
-                    // Keep the offscreen surface within 6 MiB even on a large desktop.
-                    nint buffer = bufferedPaint && pixels <= 1_500_000
-                        ? BeginBufferedPaint(dc, &area, 0, 0, out paintDc) : 0;
-                    DrawCards(buffer == 0 ? dc : paintDc, area);
-                    if (buffer != 0) EndBufferedPaint(buffer, 1);
+                    // A large dirty region is composed in bands so it never switches to unbuffered drawing for size alone.
+                    int bandHeight = Math.Max(1, 3_000_000 / width);
+                    for (int top = area.Top; top < area.Bottom; top += bandHeight)
+                    {
+                        Rect band = area;
+                        band.Top = top;
+                        band.Bottom = Math.Min(area.Bottom, top + bandHeight);
+                        nint paintDc = dc;
+                        nint buffer = bufferedPaint ? BeginBufferedPaint(dc, &band, 0, 0, out paintDc) : 0;
+                        DrawCards(buffer == 0 ? dc : paintDc, band);
+                        if (buffer != 0) EndBufferedPaint(buffer, 1);
+                    }
                 }
                 EndPaint(cards, &paint);
                 return 0;
@@ -98,7 +105,7 @@ public sealed unsafe partial class DesktopApp
                 return 0;
             case 0x07: // WM_SETFOCUS
             case 0x08: // WM_KILLFOCUS
-                InvalidateRect(cards, 0, 0);
+                if (IndexOfSelection() is int focused && focused >= 0) InvalidateCard(focused);
                 return 0;
             case 0x87: // WM_GETDLGCODE
                 return 0x81; // arrow keys and character input, retaining Tab navigation
@@ -188,15 +195,17 @@ public sealed unsafe partial class DesktopApp
         cardWidth = Math.Max(1, (width - cardGap * (columns - 1)) / columns);
         cardHeight = Math.Max(1, (cardWidth * 96 + 50) / 100);
         viewportHeight = rect.Bottom;
-        ScrollCards(first / columns * (cardHeight + cardGap));
+        ScrollCards(first / columns * (cardHeight + cardGap), refresh: true);
     }
 
-    private void ScrollCards(int position)
+    private void ScrollCards(int position, bool refresh = false)
     {
         int count = (rows.Length + columns - 1) / columns;
         int extent = Math.Max(0, count * (cardHeight + cardGap) - cardGap);
         int next = Math.Clamp(position, 0, Math.Max(0, extent - viewportHeight));
-        if (next != scrollY) ClearCardHover();
+        int delta = scrollY - next;
+        if (!refresh && delta == 0) return;
+        if (delta != 0) ClearCardHover();
         scrollY = next;
         var info = new Scroll
         {
@@ -205,7 +214,9 @@ public sealed unsafe partial class DesktopApp
         };
         SetScrollInfo(cards, 1, &info, 1);
         if (tooltip != 0) Send(tooltip, 0x41c, 0, 0); // TTM_POP
-        InvalidateRect(cards, 0, 0);
+        if (refresh || Math.Abs(delta) >= viewportHeight || GetUpdateRect(cards, null, 0) != 0 ||
+            ScrollWindowEx(cards, 0, delta, null, null, 0, null, 2) == 0) // SW_INVALIDATE
+            InvalidateRect(cards, 0, 0);
     }
 
     private int IndexOfSelection() => Array.FindIndex(rows, row => row.Id == selectedId);
@@ -221,10 +232,13 @@ public sealed unsafe partial class DesktopApp
 
     private void SelectCard(int index)
     {
+        int previous = IndexOfSelection();
         selectedId = rows[index].Id;
         int top = index / columns * (cardHeight + cardGap);
         ScrollCards(top < scrollY ? top :
             top + cardHeight > scrollY + viewportHeight ? top + cardHeight - viewportHeight : scrollY);
+        if (previous >= 0 && previous != index) InvalidateCard(previous);
+        InvalidateCard(index);
     }
 
     private void ToggleTest(int index)
@@ -306,15 +320,15 @@ public sealed unsafe partial class DesktopApp
             bool liveLatency = source is IDesktopCurrentTestSource && row.Kind == NodeKind.Leaf;
             if (liveLatency)
             {
-                int? rtt = row.ServerPing is null ? row.Native.ElapsedMs : row.ServerPing.ElapsedMs;
-                bool timedOut = row.ServerPing?.State == ResultState.TimedOut;
+                var latency = NodeLatency(row);
+                int? rtt = latency.ElapsedMs;
                 string? delay = rtt is >= 0 ? $"{(row.ServerPing is null ? "≈" : "")}{rtt}ms" :
-                    timedOut ? L("超时", "Timeout") : null;
+                    latency.NoResponse ? ShortResult(latency) : null;
                 string? grade = row.Quality?.Score is int score ? $"S={score}" :
                     row.Quality?.Cap is int cap ? $"S≤{cap}" : null;
                 string headline = delay is not null && grade is not null ? $"{delay} ({grade})" :
                     delay ?? grade ?? (row.Testing ? L("测速中", "Testing") : L("待测速", "Untested"));
-                uint ink = timedOut ? TimeoutInk : ScoreInk(row.Quality?.Score ?? row.Quality?.Cap) ??
+                uint ink = latency.NoResponse ? TimeoutInk : ScoreInk(row.Quality?.Score ?? row.Quality?.Cap) ??
                     (delay is not null ? Text : Muted);
                 Label(dc, headline, left, at(25), right, Scale(35), ink, combinedFont);
             }
@@ -322,9 +336,7 @@ public sealed unsafe partial class DesktopApp
             {
                 Label(dc, $"{nativeMs} ms", left, at(23), right, Scale(38),
                     row.Native.State == ResultState.Stale ? Muted : Text, scoreFont);
-                string measurement = row.Native.State == ResultState.Stale
-                    ? L("内核延迟 · 旧", "Core latency · stale") : L("内核延迟", "Core latency");
-                Label(dc, measurement, left, at(38), right, Scale(16), Muted, smallFont);
+                Label(dc, L("内核延迟", "Core latency"), left, at(38), right, Scale(16), Muted, smallFont);
             }
             else
                 Label(dc, ScoreText(row), left, at(23), midpoint, Scale(38), scoreColor, scoreFont);
@@ -345,11 +357,9 @@ public sealed unsafe partial class DesktopApp
             Fill(dc, Box(left, at(48), Math.Max(0, right - left), 1), Border);
             DrawSites(dc, row, left, right, at(52), at(63), at(73));
             Fill(dc, Box(left, at(86), Math.Max(0, right - left), 1), Border);
-            string native = row.Native.State == ResultState.Stale
-                ? row.Native.ElapsedMs is int old ? L($"旧 {old} ms", $"Old {old} ms") : L("旧失败", "Past failure")
-                : ShortResult(row.Native);
             if (!liveLatency)
-                Label(dc, $"{L("内核", "Core")} {native}", left, at(89), midpoint, Scale(17), Muted, smallFont);
+                Label(dc, $"{L("内核", "Core")} {ShortResult(row.Native)}", left, at(89), midpoint, Scale(17),
+                    row.Native.NoResponse ? TimeoutInk : Muted, smallFont);
             Label(dc, Timestamp(row.LastObservedUtc), midpoint, at(89), right, Scale(17), Muted, smallFont, 2);
         }
     }
@@ -415,12 +425,11 @@ public sealed unsafe partial class DesktopApp
     {
         ResultState.AuthenticationRequired => "—",
         ResultState.Restricted => L("受限", "Blocked"),
-        ResultState.Failed => L("失败", "Failed"),
+        ResultState.Stale or ResultState.Measured when result.ElapsedMs is int ms => $"{ms} ms",
+        ResultState.Stale or ResultState.Failed => L("未响应", "No reply"),
         ResultState.TimedOut => L("超时", "Timeout"),
         ResultState.HttpError => result?.HttpStatus?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "—",
-        ResultState.Stale => L("过期", "Stale"),
         ResultState.Incomparable => L("不可比", "N/A"),
-        ResultState.Measured when result.ElapsedMs is int ms => $"{ms} ms",
         _ => L("待测", "N/T")
     };
 
@@ -456,7 +465,7 @@ public sealed unsafe partial class DesktopApp
             var result = SiteResult(row, index);
             string state = result?.ElapsedMs is >= 0 and int ms && result.State != ResultState.TimedOut
                 ? $"{ms}ms" : ShortResult(result);
-            uint ink = result?.State == ResultState.TimedOut ? TimeoutInk : result is null ? Muted : Text;
+            uint ink = result?.NoResponse == true ? TimeoutInk : result is null ? Muted : Text;
             Label(dc, state, start, statusY, end, Scale(16), ink, siteStatusFont, 1);
         }
     }
@@ -603,11 +612,19 @@ public sealed unsafe partial class DesktopApp
 
     private nint DrawTable(CustomDraw* item)
     {
-        if (item->Stage == 1) return 0x20;
-        if (item->Stage != 0x10001 || item->Item >= (nuint)rows.Length) return 0;
-        var tone = GetTone(rows[(int)item->Item], table: true);
+        if (item->Stage is 1 or 0x10001) return 0x20;
+        if (item->Stage != 0x30001 || item->Item >= (nuint)rows.Length) return 0;
+        var row = rows[(int)item->Item];
+        var tone = GetTone(row, table: true);
+        bool siteFailed = item->SubItem switch
+        {
+            3 => row.OpenAi.NoResponse,
+            4 => row.ChatGpt.NoResponse,
+            5 => row.GitHub.NoResponse,
+            _ => false
+        };
         item->BackgroundColor = tone.Background;
-        item->TextColor = tone.Text;
+        item->TextColor = siteFailed ? TimeoutInk : tone.Text;
         return 0;
     }
 
