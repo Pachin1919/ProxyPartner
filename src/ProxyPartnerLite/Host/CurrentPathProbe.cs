@@ -22,22 +22,38 @@ public sealed partial class ReadOnlyHostClient
 
     public const int CurrentProbeTargetCount = 5;
 
-    /// <summary>Checks the current system proxy path once per built-in target, serially.</summary>
-    public async Task MeasureCurrentPathAsync(int corePid, HostFacts facts, Action<WebsiteProbe> publish, CancellationToken token)
+    /// <summary>Checks the built-in targets concurrently and returns the first verified route in target order.</summary>
+    public async Task<WebsiteProbe?> MeasureCurrentPathAsync(int corePid, HostFacts facts, Action<WebsiteProbe> publish, CancellationToken token)
     {
         CoreIdentity core;
         try { core = WindowsPeer.Discover(); }
-        catch (Exception error) when (IsBoundaryError(error)) { return; }
-        if (core.Pid != corePid)
-            return;
+        catch (Exception error) when (IsBoundaryError(error)) { return null; }
+        if (core.Pid != corePid || token.IsCancellationRequested)
+            return null;
 
         var nodes = facts.Nodes.Select(node => node.Name).ToHashSet(StringComparer.Ordinal);
-        foreach (var target in ProbeTargets)
+        var probes = ProbeTargets.Select(target => MeasureWebsiteAsync(core, target, nodes, token)).ToArray();
+        var pending = probes.ToList();
+        WebsiteProbe? anchor = null;
+        int anchorIndex = probes.Length;
+        while (pending.Count != 0)
         {
-            if (token.IsCancellationRequested)
-                return;
-            publish(await MeasureWebsiteAsync(core, target, nodes, token).ConfigureAwait(false));
+            var finished = await Task.WhenAny(pending).ConfigureAwait(false);
+            pending.Remove(finished);
+            var sample = await finished.ConfigureAwait(false);
+            if (token.IsCancellationRequested) continue;
+            publish(sample);
+            if (sample.Node is not null || sample.Direct)
+            {
+                int index = Array.IndexOf(probes, finished);
+                if (index < anchorIndex)
+                {
+                    anchor = sample;
+                    anchorIndex = index;
+                }
+            }
         }
+        return anchor;
     }
 
     private static async Task<WebsiteProbe> MeasureWebsiteAsync(CoreIdentity core, (string Id, Uri Url) target,
@@ -83,7 +99,7 @@ public sealed partial class ReadOnlyHostClient
                 {
                     // Start the one-shot lookup while the TLS tunnel is open.
                     if (context.InitialRequestMessage.Method == HttpMethod.Get && context.InitialRequestMessage.RequestUri == target.Url)
-                        route ??= FindProbeRouteAsync(core, target.Url, localPort, nodes, token);
+                        route ??= FindProbeRouteAsync(core, target.Url, localPort, nodes, deadline.Token);
                     return ValueTask.FromResult(context.PlaintextStream);
                 }
             };

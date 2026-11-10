@@ -5,6 +5,7 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
 {
     private static readonly DesktopResult Untested = new(null, null, null, null, "—", ResultState.Missing);
     private static readonly TimeSpan NativeFreshness = TimeSpan.FromMinutes(15);
+    private const int ParallelServerLimit = 5;
     private readonly CancellationTokenSource stop = new();
     private readonly SemaphoreSlim requested = new(0, 1);
     private readonly Task poll;
@@ -100,19 +101,18 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                     if (!canPing) priority = null;
                 }
                 if (startSweep) unavailableNode = null;
-                void Emit(bool running, string? testingNode = null)
+                void Emit(bool running, IReadOnlyCollection<string>? testingNodes = null)
                 {
                     var sweep = new DesktopServerSweep(batchDone, batchTotal, sweepStarted, unavailableNode);
                     PublishFacts(facts, samples, history.Values, serverResults, current, sweep,
-                        running, pathChanged: samples.Count != 0 && testedGroups is null, testingNode);
+                        running, pathChanged: samples.Count != 0 && testedGroups is null, testingNodes);
                 }
                 if (Volatile.Read(ref queuedOrRunning) == 1)
                 {
                     samples.Clear();
                     testedGroups = facts.Groups;
-                    bool verified = false;
                     Emit(running: true);
-                    await client.MeasureCurrentPathAsync(corePid, facts, sample =>
+                    current = await client.MeasureCurrentPathAsync(corePid, facts, sample =>
                     {
                         samples.Add(sample);
                         if (sample.Node is { } node)
@@ -121,14 +121,8 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                             if (history.TryGetValue(key, out var window)) window.Add(sample);
                             else history[key] = new(sample);
                         }
-                        if (!verified && (sample.Node is not null || sample.Direct))
-                        {
-                            current = sample;
-                            verified = true;
-                        }
                         Emit(running: true);
                     }, stop.Token).ConfigureAwait(false);
-                    if (!verified) current = null;
                     var names = facts.Nodes.Select(n => n.Name).ToHashSet(StringComparer.Ordinal);
                     foreach (var key in history.Keys.ToArray())
                         if (!names.Contains(key.Node)) history.Remove(key);
@@ -152,23 +146,40 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                     batch = new Queue<string>(batch.Where(name => name != priority).Prepend(priority));
                 else if (priority is not null)
                 {
-                    Emit(running: false, testingNode: priority);
+                    Emit(running: false, testingNodes: [priority]);
                     serverResults[priority] = await ServerTargets.MeasureAsync(serverMap[priority], stop.Token)
                         .ConfigureAwait(false);
                 }
                 Emit(running: false);
-                while (Volatile.Read(ref nodeRequested) is null && Volatile.Read(ref queuedOrRunning) == 0 &&
-                    batch.TryDequeue(out string? name))
+                if (batch.Count != 0)
                 {
-                    if (Array.BinarySearch(eligible, name, StringComparer.Ordinal) < 0)
+                    var active = new Dictionary<Task<DesktopResult>, string>(ParallelServerLimit);
+                    while (true)
                     {
-                        batchTotal--;
-                        continue;
+                        while (active.Count < ParallelServerLimit && !stop.IsCancellationRequested &&
+                            Volatile.Read(ref nodeRequested) is null && Volatile.Read(ref queuedOrRunning) == 0 &&
+                            batch.TryDequeue(out string? name))
+                        {
+                            if (Array.BinarySearch(eligible, name, StringComparer.Ordinal) < 0)
+                            {
+                                batchTotal--;
+                                continue;
+                            }
+                            active.Add(ServerTargets.MeasureAsync(serverMap[name], stop.Token), name);
+                        }
+                        if (active.Count == 0) break;
+
+                        Emit(running: false, testingNodes: active.Values);
+                        var finished = await Task.WhenAny(active.Keys).ConfigureAwait(false);
+                        if (stop.IsCancellationRequested)
+                        {
+                            await Task.WhenAll(active.Keys).ConfigureAwait(false);
+                            return;
+                        }
+                        serverResults[active[finished]] = await finished.ConfigureAwait(false);
+                        active.Remove(finished);
+                        batchDone++;
                     }
-                    Emit(running: false, testingNode: name);
-                    serverResults[name] = await ServerTargets.MeasureAsync(serverMap[name], stop.Token)
-                        .ConfigureAwait(false);
-                    batchDone++;
                     Emit(running: false);
                 }
             }
@@ -188,7 +199,7 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
 
     private void PublishFacts(HostFacts facts, List<WebsiteProbe> samples, IEnumerable<WebsiteWindow> history,
         Dictionary<string, DesktopResult> serverResults, WebsiteProbe? current, DesktopServerSweep sweep,
-        bool running, bool pathChanged, string? testingNode)
+        bool running, bool pathChanged, IReadOnlyCollection<string>? testingNodes)
     {
         var byNode = history.ToLookup(s => s.Latest.Node, StringComparer.Ordinal);
         DateTimeOffset now = DateTimeOffset.UtcNow;
@@ -209,7 +220,7 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
             var row = new DesktopRow("node:" + node.Name, node.Name, NodeKind.Leaf,
                 isCurrent, native, Untested, Untested, Untested, lastObserved,
                 CurrentTarget: isCurrent ? current?.TargetId : null, ServerPing: server,
-                Testing: node.Name == testingNode || isCurrent && running);
+                Testing: testingNodes?.Contains(node.Name) == true || isCurrent && running);
             int? cap = null;
             string? capTarget = null;
             double points = 0;

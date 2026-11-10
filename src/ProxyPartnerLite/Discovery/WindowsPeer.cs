@@ -146,6 +146,8 @@ internal static partial class WindowsPeer
         if (GetExtendedTcpTable(IntPtr.Zero, ref size, 0, 2, table, 0) != 122 ||
             size is < 4 or > 4 * 1024 * 1024)
             throw new HostFailure(HostStatus.IdentityRejected);
+        // Parallel probes can open additional sockets between the size query and the read.
+        size = Math.Min(size + 4096, 4u * 1024 * 1024);
         IntPtr buffer = Marshal.AllocHGlobal((int)size);
         try
         {
