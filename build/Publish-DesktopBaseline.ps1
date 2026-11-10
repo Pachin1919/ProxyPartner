@@ -15,6 +15,14 @@ $dotnet = Join-Path $sdk 'dotnet.exe'
 $native = Join-Path $ToolchainRoot 'native'
 $linker = Join-Path $native 'bin/link.exe'
 $feed = Join-Path $ToolchainRoot 'nuget-packages'
+if ($Variant -eq 'Win32') {
+    foreach ($package in $lock.dotnet.nuget_packages | Where-Object id -in 'quickproxynet','yamldotnet') {
+        $file = Join-Path $feed "$($package.id).$($package.version).nupkg"
+        if ((Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash -ne $package.sha256) {
+            throw "Probe package checksum mismatch: $($package.id)"
+        }
+    }
+}
 $out = Join-Path $EvidenceDirectory $Variant.ToLowerInvariant()
 if (Test-Path -LiteralPath $out) { throw "Evidence already exists: $out" }
 $null = New-Item -ItemType Directory -Path $out
@@ -71,6 +79,7 @@ Invoke-Recorded publish @('publish',$project,'-c','Release','-r','win-x64','--se
 $exe = Join-Path $publish 'ProxyPartner.exe'
 if ($Variant -eq 'Win32') {
     Copy-Item -LiteralPath (Join-Path $repo 'build/DesktopBaseline/QuickProxyNet.LICENSE.txt') -Destination $publish
+    Copy-Item -LiteralPath (Join-Path $repo 'build/DesktopBaseline/YamlDotNet.LICENSE.txt') -Destination $publish
 }
 $data = [IO.File]::ReadAllBytes($exe)
 $pe = [BitConverter]::ToInt32($data,0x3c)

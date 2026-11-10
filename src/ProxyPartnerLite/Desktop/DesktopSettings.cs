@@ -495,7 +495,7 @@ public sealed unsafe partial class DesktopApp
         {
             if (sample is null) return;
             string label = L("出口", "Exit");
-            string changes = L($"本次运行变化 {sample.Changes} 次", $"{sample.Changes} changes this session");
+            string changes = L($"本次运行观测到 {sample.Changes} 次不同", $"{sample.Changes} observed changes this session");
             Line($"{label} {family} · {sample.Address} · {changes} · {Timestamp(sample.ObservedUtc)} UTC · ipify");
         }
         ExitIp("IPv4", row.ExitV4);

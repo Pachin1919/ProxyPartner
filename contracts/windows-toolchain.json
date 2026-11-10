@@ -15,6 +15,11 @@
         "sha256": "8892a407b5f313f89ef19fe7ab9357213f32f7520012a55986c935ee4476b5aa"
       },
       {
+        "id": "yamldotnet",
+        "version": "16.3.0",
+        "sha256": "e068bcc1243c46c8bfdfe2f27a026bfff03cde7c67d9f37c2cdd70bd24a9dfd4"
+      },
+      {
         "id": "microsoft.aspnetcore.app.runtime.win-x64",
         "version": "10.0.14",
         "sha256": "91638ac8382c437e71c0739a0e3123290f9bf48bcd01e616352a86add5571089"

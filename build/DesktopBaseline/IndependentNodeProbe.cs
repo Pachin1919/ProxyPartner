@@ -1,10 +1,13 @@
 using System.Diagnostics;
+using System.Collections.Concurrent;
 using System.Net;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using ProxyPartnerLite.Host;
 using QuickProxyNet;
+using YamlDotNet.Core;
+using YamlDotNet.RepresentationModel;
 
 internal sealed record ProbeProfile(IProxyClient Client, string Revision);
 
@@ -24,41 +27,115 @@ internal static class IndependentNodeProbe
             file.ReadExactly(bytes);
             try
             {
-                using var json = JsonDocument.Parse(bytes, new JsonDocumentOptions { MaxDepth = 2 });
-                if (json.RootElement.ValueKind != JsonValueKind.Object) return profiles;
-                foreach (var entry in json.RootElement.EnumerateObject())
+                bool yaml = Path.GetExtension(path).ToLowerInvariant() is ".yaml" or ".yml";
+                foreach (var (name, link) in yaml ? ReadClashLinks(bytes) : ReadLinks(bytes))
                 {
                     if (profiles.Count == 1000) break;
-                    if (entry.Name.Length is 0 or > 1024 || entry.Value.ValueKind != JsonValueKind.String ||
-                        entry.Value.GetString() is not { Length: <= 4096 } link ||
+                    if (name.Length is 0 or > 1024 || link.Length > 4096 ||
                         !link.StartsWith("vless://", StringComparison.OrdinalIgnoreCase) ||
                         !Proxy.TryCreate(link, out var client, out _) || client is not VlessClient vless ||
                         (vless.Options.Security is not (VlessSecurity.Tls or VlessSecurity.Reality) &&
                             (!IPAddress.TryParse(vless.Options.Host, out var local) || !IPAddress.IsLoopback(local))))
                         continue;
                     string revision = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(link)));
-                    profiles.TryAdd(entry.Name, new(vless, revision));
+                    profiles.TryAdd(name, new(vless, revision));
                 }
             }
             finally { CryptographicOperations.ZeroMemory(bytes); }
         }
-        catch (Exception error) when (error is IOException or UnauthorizedAccessException or JsonException or ArgumentException)
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or JsonException
+            or YamlException or ArgumentException)
         {
             profiles.Clear();
         }
         return profiles;
     }
 
+    private static IEnumerable<(string Name, string Link)> ReadLinks(byte[] bytes)
+    {
+        using var json = JsonDocument.Parse(bytes, new JsonDocumentOptions { MaxDepth = 2 });
+        if (json.RootElement.ValueKind != JsonValueKind.Object) yield break;
+        foreach (var entry in json.RootElement.EnumerateObject())
+            if (entry.Value.ValueKind == JsonValueKind.String && entry.Value.GetString() is { } link)
+                yield return (entry.Name, link);
+    }
+
+    private static IEnumerable<(string Name, string Link)> ReadClashLinks(byte[] bytes)
+    {
+        using var reader = new StreamReader(new MemoryStream(bytes, writable: false), new UTF8Encoding(false, true));
+        var yaml = new YamlStream();
+        yaml.Load(reader);
+        if (yaml.Documents.Count != 1 || yaml.Documents[0].RootNode is not YamlMappingNode root ||
+            Field(root, "proxies") is not YamlSequenceNode proxies)
+            yield break;
+
+        foreach (var entry in proxies.Children.OfType<YamlMappingNode>())
+        {
+            if (Text(entry, "type") != "vless" || Text(entry, "name") is not { } name ||
+                Text(entry, "server") is not { } server || Uri.CheckHostName(server) == UriHostNameType.Unknown ||
+                !int.TryParse(Text(entry, "port"), out int port) || port is < 1 or > 65535 ||
+                !Guid.TryParse(Text(entry, "uuid"), out Guid id) ||
+                Text(entry, "encryption") is not (null or "" or "none") ||
+                Text(entry, "dialer-proxy") is not (null or "") ||
+                Text(entry, "interface-name") is not (null or "") ||
+                Text(entry, "skip-cert-verify")?.ToLowerInvariant() == "true" ||
+                Field(entry, "ech-opts") is not null || Field(entry, "certificate") is not null ||
+                Field(entry, "fingerprint") is not null)
+                continue;
+            string network = Text(entry, "network") ?? "tcp";
+            if (network is not ("tcp" or "ws" or "httpupgrade")) continue;
+            var ws = Field(entry, "ws-opts") as YamlMappingNode;
+            var headers = Field(ws, "headers") as YamlMappingNode;
+            string? host = Text(headers, "Host") ?? Text(headers, "host");
+            if ((headers?.Children.Count ?? 0) > (host is null ? 0 : 1) ||
+                Text(ws, "max-early-data") is not (null or "" or "0") ||
+                Text(ws, "v2ray-http-upgrade-fast-open") == "true")
+                continue;
+            if (network == "ws" && Text(ws, "v2ray-http-upgrade") == "true") network = "httpupgrade";
+            var reality = Field(entry, "reality-opts") as YamlMappingNode;
+            string security = reality is not null ? "reality" :
+                Text(entry, "tls")?.ToLowerInvariant() == "true" ? "tls" : "none";
+            var parts = new List<string> { $"type={network}", $"security={security}", "encryption=none" };
+            void Option(string key, string? value)
+            {
+                if (!string.IsNullOrEmpty(value)) parts.Add($"{key}={Uri.EscapeDataString(value)}");
+            }
+            Option("sni", Text(entry, "servername"));
+            Option("fp", Text(entry, "client-fingerprint"));
+            Option("flow", Text(entry, "flow"));
+            Option("pbk", Text(reality, "public-key"));
+            Option("sid", Text(reality, "short-id"));
+            Option("path", Text(ws, "path"));
+            Option("host", host);
+            if (Field(entry, "alpn") is YamlSequenceNode alpn)
+                Option("alpn", string.Join(',', alpn.Children.OfType<YamlScalarNode>().Select(n => n.Value)));
+            var uri = new UriBuilder("vless", server, port) { UserName = id.ToString(), Query = string.Join('&', parts) };
+            yield return (name, uri.Uri.AbsoluteUri);
+        }
+    }
+
+    private static YamlNode? Field(YamlMappingNode? map, string name) =>
+        map?.Children.TryGetValue(new YamlScalarNode(name), out var node) == true ? node : null;
+
+    private static string? Text(YamlMappingNode? map, string name) =>
+        (Field(map, name) as YamlScalarNode)?.Value;
+
     internal static async Task<IPAddress?> MeasureAsync(string node, ProbeProfile profile,
         IReadOnlyList<(string Id, Uri Url)> targets, Uri echo, Action<WebsiteProbe> publish, CancellationToken stop)
     {
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(stop);
         deadline.CancelAfter(TimeSpan.FromSeconds(7));
+        var attempted = new ConcurrentDictionary<Uri, byte>();
         using var handler = new SocketsHttpHandler
         {
             UseProxy = false, UseCookies = false, AllowAutoRedirect = false,
             ActivityHeadersPropagator = null, MaxResponseDrainSize = 0, MaxResponseHeadersLength = 32,
-            ConnectCallback = (context, token) => profile.Client.ConnectAsync(context.DnsEndPoint, token)
+            ConnectCallback = (context, token) =>
+            {
+                if (!attempted.TryAdd(context.InitialRequestMessage.RequestUri!, 0))
+                    throw new HttpRequestException("Independent probe already dialed.");
+                return profile.Client.ConnectAsync(context.DnsEndPoint, token);
+            }
         };
         using var client = new HttpClient(handler);
 
