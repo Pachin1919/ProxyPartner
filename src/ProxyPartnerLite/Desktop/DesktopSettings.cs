@@ -462,6 +462,8 @@ public sealed unsafe partial class DesktopApp
             Line($"{name} · {value} · {observed} · {SourceLabel(result.Source)}");
         }
         Line(row.Name);
+        if (CurrentSiteLabel(row.CurrentTarget) is { } activeSite)
+            Line($"{L("当前测试线路", "Current tested route")} · {activeSite}");
         if (row.SelectedMember is { } member)
             Line($"{L("组内选中", "Selected group member")} · {member}");
         Line($"{L("评分", "Score")} {ScoreText(row)}  |  {L("来源", "Source")}: {SourceLabel(row.Quality?.Source ?? "—")}");
@@ -470,6 +472,9 @@ public sealed unsafe partial class DesktopApp
         Result(L("原生延迟", "Native latency"), row.Native);
         Result("OPENAI (OpenAI API)", row.OpenAi);
         Result("GPT (ChatGPT)", row.ChatGpt);
+        if (row.Google is { } google) Result("Google", google);
+        if (row.YouTube is { } youtube) Result("YouTube", youtube);
+        if (row.Anthropic is { } anthropic) Result("Anthropic", anthropic);
         Result("GitHub", row.GitHub);
         foreach (var target in preferences.CustomTargets) Line($"{target.Symbol} {target.ShortName} · {L("待测", "Untested")} · {target.Url}");
         Line();

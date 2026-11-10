@@ -160,6 +160,17 @@ static async Task ReadOnlyRoutesAsync()
         ["synthetic-group-bucket"] = new("Compatible", roster)
     }));
     Require(providerFacts.Length == 2 && providerFacts.All(p => p.Members.Count == 1000), "overlapping provider rosters");
+    const string samePortOtherHost = """{"metadata":{"network":"tcp","sourceIP":"127.0.0.1","sourcePort":"51823","host":"other.example","destinationPort":"443"},"chains":["wrong-node"]}""";
+    const string sameHostOtherPort = """{"metadata":{"network":"tcp","sourceIP":"127.0.0.1","sourcePort":"51822","host":"probe.example","destinationPort":"443"},"chains":["wrong-node"]}""";
+    const string ownRequest = """{"metadata":{"network":"tcp","sourceIP":"127.0.0.1","sourcePort":"51823","host":"probe.example","destinationPort":"443"},"chains":["right-node","policy"]}""";
+    var known = new HashSet<string>(StringComparer.Ordinal) { "wrong-node", "right-node" };
+    using var routes = new MemoryStream(Encoding.UTF8.GetBytes("{\"connections\":[" +
+        string.Join(',', Enumerable.Repeat(samePortOtherHost, 300).Append(sameHostOtherPort).Append(ownRequest)) + "]}"));
+    var route = await ProbeRouteReader.MatchAsync(routes, "probe.example", 443, 51823, known, CancellationToken.None);
+    Require(route is { Node: "right-node", Direct: false }, "only attribute the owned socket and target across chunks");
+    routes.Position = 0;
+    Require(await ProbeRouteReader.MatchAsync(routes, "probe.example", 443, 51824, known, CancellationToken.None) is null,
+        "unmatched source port does not get a node");
     Console.WriteLine("forbidden_routes=reject_at_send_guard; cancelled_requests=0; response_overflow=reject; pressure_leaves=1000");
 }
 

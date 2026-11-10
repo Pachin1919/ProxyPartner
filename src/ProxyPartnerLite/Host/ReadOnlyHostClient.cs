@@ -11,7 +11,7 @@ using ProxyPartnerLite.Discovery;
 namespace ProxyPartnerLite.Host;
 
 /// <summary>Reads typed, transient facts from the selected local Clash Verge core.</summary>
-public sealed class ReadOnlyHostClient
+public sealed partial class ReadOnlyHostClient
 {
     public async Task<HostReadResult> ReadAsync(HostReadOptions? options = null,
         LoopbackFallbackAuthorization? fallback = null, CancellationToken cancellationToken = default)
@@ -82,6 +82,20 @@ public sealed class ReadOnlyHostClient
         _ => HostStatus.TransportError
     };
 
+    private static async Task<Stream> OpenVerifiedPipeAsync(CoreIdentity core, string name, CancellationToken token)
+    {
+        var pipe = new NamedPipeClientStream(".", name, PipeDirection.InOut,
+            PipeOptions.Asynchronous, TokenImpersonationLevel.Identification);
+        try
+        {
+            try { await pipe.ConnectAsync(1200, token).ConfigureAwait(false); }
+            catch (TimeoutException) { throw new HostFailure(HostStatus.HostUnavailable); }
+            WindowsPeer.VerifyPipe(pipe.SafePipeHandle, core);
+            return pipe;
+        }
+        catch { pipe.Dispose(); throw; }
+    }
+
     private sealed class Session(CoreIdentity core, string pipeName, HostReadOptions options)
     {
         private int? verifiedPeer;
@@ -110,7 +124,7 @@ public sealed class ReadOnlyHostClient
             deadline.CancelAfter(TimeSpan.FromSeconds(5));
             var cancellation = deadline.Token;
             await using var stream = fallback is null
-                ? await OpenPipeAsync(cancellation).ConfigureAwait(false)
+                ? await OpenVerifiedPipeAsync(core, pipeName, cancellation).ConfigureAwait(false)
                 : await OpenLoopbackAsync(fallback.Endpoint, cancellation).ConfigureAwait(false);
             verifiedPeer = core.Pid;
 
@@ -150,20 +164,6 @@ public sealed class ReadOnlyHostClient
             using var limited = new LimitedBody(body, limit);
             return await JsonSerializer.DeserializeAsync(limited, type, cancellation).ConfigureAwait(false)
                 ?? throw new HostFailure(HostStatus.InvalidResponse);
-        }
-
-        private async Task<Stream> OpenPipeAsync(CancellationToken token)
-        {
-            var pipe = new NamedPipeClientStream(".", pipeName, PipeDirection.InOut,
-                PipeOptions.Asynchronous, TokenImpersonationLevel.Identification);
-            try
-            {
-                try { await pipe.ConnectAsync(1200, token).ConfigureAwait(false); }
-                catch (TimeoutException) { throw new HostFailure(HostStatus.HostUnavailable); }
-                WindowsPeer.VerifyPipe(pipe.SafePipeHandle, core);
-                return pipe;
-            }
-            catch { pipe.Dispose(); throw; }
         }
 
         private async Task<Stream> OpenLoopbackAsync(IPEndPoint endpoint, CancellationToken token)

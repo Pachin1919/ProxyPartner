@@ -256,7 +256,9 @@ public sealed unsafe partial class DesktopApp
             Label(dc, tone.Label, badgeLeft + Scale(17), at(28), right - Scale(4), Scale(20), tone.Text, smallFont);
             if (row.IsCurrent || row.Kind == NodeKind.Group)
                 Label(dc, row.SelectedMember is not null ? L("组内已选", "Member selected")
-                    : row.IsCurrent ? L("宿主当前", "Host current") : L("策略组", "Policy group"),
+                    : row.IsCurrent && CurrentSiteLabel(row.CurrentTarget) is { } site
+                        ? L($"{site} 当前", $"{site} current")
+                        : row.IsCurrent ? L("宿主当前", "Host current") : L("策略组", "Policy group"),
                     midpoint, at(38), right, Scale(16), Muted, smallFont, 2);
             Fill(dc, Box(left, at(48), Math.Max(0, right - left), 1), Border);
             DrawSites(dc, row, left, right, at(55), at(66), at(75));
@@ -312,7 +314,7 @@ public sealed unsafe partial class DesktopApp
 
     private static DesktopResult? SiteResult(DesktopRow row, int site) => site switch
     {
-        2 => row.OpenAi, 3 => row.ChatGpt, _ => null
+        0 => row.Google, 1 => row.YouTube, 2 => row.OpenAi, 3 => row.ChatGpt, 4 => row.Anthropic, _ => null
     };
 
     private string ShortResult(DesktopResult? result) => result?.State switch
@@ -320,6 +322,7 @@ public sealed unsafe partial class DesktopApp
         ResultState.AuthenticationRequired => L("鉴权", "Auth"),
         ResultState.Restricted => L("受限", "Blocked"),
         ResultState.Failed => L("失败", "Failed"),
+        ResultState.HttpError => result?.HttpStatus?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "—",
         ResultState.Stale => L("过期", "Stale"),
         ResultState.Incomparable => L("不可比", "N/A"),
         ResultState.Measured when result.ElapsedMs is int ms => $"{ms} ms",
@@ -414,7 +417,7 @@ public sealed unsafe partial class DesktopApp
 
     private void DrawToolbarButton(DrawItem* item)
     {
-        if (item->Id is not (Toggle or SortMenu or Groups or OpenSettings or OpenDetails)) return;
+        if (item->Id is not (Toggle or SortMenu or Groups or OpenSettings or OpenDetails or TestCurrent)) return;
         bool activeButton = item->Id == Toggle || item->Id == Groups && showGroups;
         string label = item->Id switch
         {
@@ -422,6 +425,7 @@ public sealed unsafe partial class DesktopApp
             Groups => showGroups ? L("✓ 策略组", "✓ Groups") : L("策略组", "Groups"),
             OpenSettings => L("设置", "Settings"),
             OpenDetails => L("详情", "Details"),
+            TestCurrent => source.GetSnapshot().CurrentTest?.Running == true ? L("测试中", "Testing") : L("重测线路", "Retest"),
             _ => descending ? L("排序 ↓", "Sort ↓") : L("排序 ↑", "Sort ↑")
         };
         DrawPanelButton(item, label, font, activeButton);

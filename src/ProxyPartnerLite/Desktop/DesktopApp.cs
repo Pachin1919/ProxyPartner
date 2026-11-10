@@ -9,6 +9,7 @@ public sealed unsafe partial class DesktopApp
     private const string TrayClass = "ProxyPartner.Tray", PanelClass = "ProxyPartner.Panel";
     private const uint TrayMessage = 0x8001, SnapshotMessage = 0x8002;
     private const int Open = 101, Exit = 102, Search = 103, Groups = 104, Toggle = 107, SortMenu = 108, SortFirst = 110;
+    private const int TestCurrent = 130;
     private static readonly string[] ZhColumns = ["节点", "当前", "原生延迟", "OPENAI", "GPT", "GitHub", "最近样本 (UTC)", "评分", "测试选择", "质量状态"];
     private static readonly string[] EnColumns = ["Node", "Current", "Native latency", "OPENAI", "GPT", "GitHub", "Last sample (UTC)", "Score", "Test selection", "Quality"];
     private string[] Columns => preferences.English ? EnColumns : ZhColumns;
@@ -20,6 +21,7 @@ public sealed unsafe partial class DesktopApp
     private DesktopPreferences preferences;
     private readonly nint module = GetModuleHandle(0);
     private nint tray, panel, status, search, groups, list, font, icon, smallIcon;
+    private nint testButton;
     private bool ownsIcons;
     private uint taskbarCreated;
     private int dpi = 96, sortColumn;
@@ -87,6 +89,11 @@ public sealed unsafe partial class DesktopApp
         int result;
         while ((result = GetMessage(&msg, 0, 0, 0)) > 0)
         {
+            if (panel != 0 && msg.Id == WmKeyDown && msg.WParam == 0x74 && source is IDesktopCurrentTestSource test)
+            {
+                test.RequestCurrentTest();
+                continue;
+            }
             if (panel != 0 && msg.Id == WmKeyDown && GetKeyState(0x11) < 0 &&
                 msg.WParam is >= 0x31 and <= 0x39)
             {
@@ -178,7 +185,7 @@ public sealed unsafe partial class DesktopApp
                     if (settingsWindow != 0) DestroyWindow(settingsWindow);
                     if (detailWindow != 0) DestroyWindow(detailWindow);
                     FreeCardArtwork();
-                    panel = status = search = groups = list = cards = toggle = title = searchLabel = sortButton = hint = settingsButton = detailButton = 0;
+                    panel = status = search = groups = list = cards = toggle = title = searchLabel = sortButton = hint = settingsButton = detailButton = testButton = 0;
                     FreeFonts();
                     if (editBrush != 0) DeleteObject(editBrush);
                     if (toolsBrush != 0) DeleteObject(toolsBrush);
@@ -224,6 +231,7 @@ public sealed unsafe partial class DesktopApp
                     if (id == SortMenu) ShowSortMenu();
                     if (id == OpenSettings) ShowSettings();
                     if (id == OpenDetails) ShowDetails();
+                    if (id == TestCurrent && source is IDesktopCurrentTestSource test) test.RequestCurrentTest();
                     if (id >= SortFirst && id < SortFirst + Columns.Length) Sort(id - SortFirst);
                     return 0;
                 case WmNotify:
@@ -299,6 +307,7 @@ public sealed unsafe partial class DesktopApp
         groups = Child("BUTTON", L("策略组", "Groups"), WsTabStop | 11, Groups);
         settingsButton = Child("BUTTON", L("设置", "Settings"), WsTabStop | 11, OpenSettings);
         detailButton = Child("BUTTON", L("详情", "Details"), WsTabStop | 11, OpenDetails);
+        if (source is IDesktopCurrentTestSource) testButton = Child("BUTTON", L("重测线路", "Retest"), WsTabStop | 11, TestCurrent);
         list = Child("SysListView32", "", WsTabStop | 0x1000 | 1 | 4 | 8, 105);
         cards = Child(CardsClass, L("节点卡片", "Node cards"), WsTabStop | 0x200000, 106);
         if (title == 0 || status == 0 || search == 0 || searchLabel == 0 || hint == 0 || groups == 0 || list == 0 ||
@@ -341,6 +350,7 @@ public sealed unsafe partial class DesktopApp
         }
         else ApplyDpi(initialDpi, null);
         source.SnapshotChanged += OnSnapshotChanged;
+        if (source is IDesktopCurrentTestSource test) test.RequestCurrentTest();
         Refresh();
         ShowWindow(panel, 5);
         UpdateWindow(panel);
@@ -409,21 +419,23 @@ public sealed unsafe partial class DesktopApp
         GetClientRect(panel, &size);
         int pad = Scale(14), width = Math.Max(0, size.Right - pad * 2), top = ToolbarHeight(size.Right);
         bool compact = size.Right < Scale(690);
-        int searchWidth = compact ? width : Math.Min(Scale(288), width - Scale(426));
+        int buttonCount = testButton == 0 ? 5 : 6;
+        int searchWidth = compact ? width : Math.Min(Scale(288), width - Scale(buttonCount == 6 ? 504 : 426));
         int controlX = compact ? pad : pad + searchWidth + Scale(10), controlY = Scale(compact ? 103 : 68);
         int labelWidth = Scale(preferences.English ? 50 : 42);
         MoveWindow(title, pad, Scale(11), width, Scale(24), 1);
         MoveWindow(status, pad, Scale(40), width, Scale(20), 1);
         MoveWindow(searchLabel, pad, Scale(68), labelWidth, Scale(28), 1);
         MoveWindow(search, pad + labelWidth, Scale(68), Math.Max(0, searchWidth - labelWidth), Scale(28), 1);
-        int slot = Math.Min(Scale(80), Math.Max(1, (size.Right - pad - controlX - Scale(28)) / 5));
+        int slot = Math.Min(Scale(80), Math.Max(1, (size.Right - pad - controlX - Scale(7 * (buttonCount - 1))) / buttonCount));
         int pitch = slot + Scale(7);
         MoveWindow(toggle, controlX, controlY, slot, Scale(28), 1);
         MoveWindow(sortButton, controlX + pitch, controlY, slot, Scale(28), 1);
         MoveWindow(groups, controlX + pitch * 2, controlY, slot, Scale(28), 1);
         MoveWindow(settingsButton, controlX + pitch * 3, controlY, slot, Scale(28), 1);
         MoveWindow(detailButton, controlX + pitch * 4, controlY, slot, Scale(28), 1);
-        int hintX = size.Right < Scale(940) ? pad : controlX + pitch * 5;
+        if (testButton != 0) MoveWindow(testButton, controlX + pitch * 5, controlY, slot, Scale(28), 1);
+        int hintX = size.Right < Scale(940) ? pad : controlX + pitch * buttonCount;
         int hintY = size.Right < Scale(940) ? controlY + Scale(30) : controlY;
         MoveWindow(hint, hintX, hintY, Math.Max(0, size.Right - pad - hintX), Scale(24), 1);
         int contentPad = Scale(24);
@@ -456,13 +468,18 @@ public sealed unsafe partial class DesktopApp
         var filter = filterText.AsSpan().Trim();
         CaptureSelection();
         var filtered = new List<DesktopRow>(snapshot.Rows.Count);
+        DesktopRow? pinned = null;
         foreach (var row in snapshot.Rows)
         {
             if ((showGroups || row.Kind == NodeKind.Leaf) &&
                 row.Name.AsSpan().Contains(filter, StringComparison.OrdinalIgnoreCase))
-                filtered.Add(row);
+            {
+                if (row.IsCurrent && snapshot.CurrentTest is not null) pinned = row;
+                else filtered.Add(row);
+            }
         }
         filtered.Sort(CompareRows);
+        if (pinned is not null) filtered.Insert(0, pinned);
         rows = filtered.ToArray();
         hoverIndex = hoverSite = -1;
         if (!tableMode) SetText(hint, HoverText());
@@ -515,7 +532,21 @@ public sealed unsafe partial class DesktopApp
                 ? (showGroups ? L($" · 显示 {rows.Length} 项", $" · {rows.Length} items shown")
                     : L($" · 显示 {rows.Length} 个节点", $" · {rows.Length} nodes shown"))
                 : "";
-            SetText(status, $"{snapshot.Host} · {connection}{count}");
+            string probe = "";
+            if (snapshot.CurrentTest is { } test)
+            {
+                probe = test.Running ? L($" · 测试中 {test.Completed}/{test.Total}", $" · Testing {test.Completed}/{test.Total}")
+                    : test.PathChanged ? L(" · 组选项已变，重测可确认当前节点", " · Group selection changed. Retest to verify.")
+                    : !test.Attempted ? L(" · 未发现本机代理入口", " · Local proxy unavailable")
+                    : L($" · 已核实 {test.Verified}/{test.Total} 条站点线路", $" · {test.Verified}/{test.Total} routes verified");
+                if (test.Direct) probe += L($" · {CurrentSiteLabel(test.CurrentTarget)} 直连", $" · {CurrentSiteLabel(test.CurrentTarget)} direct");
+            }
+            SetText(status, $"{snapshot.Host} · {connection}{count}{probe}");
+            if (testButton != 0)
+            {
+                SetText(testButton, snapshot.CurrentTest?.Running == true ? L("测试中", "Testing") : L("重测线路", "Retest"));
+                InvalidateRect(testButton, 0, 1);
+            }
             return;
         }
         string collection = snapshot.Collection switch
@@ -533,6 +564,12 @@ public sealed unsafe partial class DesktopApp
             ? $"{collection}  |  {host}  |  Route: {path}  |  {rows.Length} rows  |  Test checked {tested.Count}  |  Updated: {Timestamp(snapshot.UpdatedUtc)} UTC"
             : $"{collection}  |  {host}  |  实际链路：{path}  |  {rows.Length} 行  |  测试勾选 {tested.Count}  |  更新：{Timestamp(snapshot.UpdatedUtc)} UTC");
     }
+
+    private static string? CurrentSiteLabel(string? id) => id switch
+    {
+        "chatgpt_web" => "GPT", "openai_api" => "OPENAI", "google" => "Google", "youtube" => "YouTube",
+        "anthropic_api" => "Anthropic", _ => null
+    };
 
     private void SwitchView()
     {

@@ -78,7 +78,14 @@ internal static partial class WindowsPeer
 
     internal static void Verify(CoreIdentity expected, int actualPid)
     {
-        if (actualPid != expected.Pid || Inspect(actualPid) != expected)
+        if (actualPid != expected.Pid)
+            throw new HostFailure(HostStatus.IdentityRejected);
+        if (expected.Service is { } service)
+        {
+            if (Inspect(service.Ui.Pid) != service.Ui || DiscoverServiceCore(service.Ui) != expected)
+                throw new HostFailure(HostStatus.IdentityRejected);
+        }
+        else if (Inspect(actualPid) != expected)
             throw new HostFailure(HostStatus.IdentityRejected);
     }
 
@@ -115,13 +122,7 @@ internal static partial class WindowsPeer
     {
         if (GetNamedPipeServerProcessId(pipe, out int pid) == 0)
             throw new HostFailure(HostStatus.IdentityRejected);
-        if (expected.Service is not { } service)
-        {
-            Verify(expected, pid);
-            return;
-        }
-        if (pid != expected.Pid || Inspect(service.Ui.Pid) != service.Ui || DiscoverServiceCore(service.Ui) != expected)
-            throw new HostFailure(HostStatus.IdentityRejected);
+        Verify(expected, pid);
     }
 
     internal static unsafe string OpenedFilePath(SafeFileHandle file)
