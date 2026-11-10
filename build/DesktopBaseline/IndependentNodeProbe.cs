@@ -106,8 +106,7 @@ internal static class IndependentNodeProbe
             if (response.StatusCode != HttpStatusCode.OK) return null;
             await using var stream = await response.Content.ReadAsStreamAsync(token).ConfigureAwait(false);
             var buffer = new byte[65];
-            int count = await stream.ReadAtLeastAsync(buffer, buffer.Length, throwIfEndOfStream: false,
-                token).ConfigureAwait(false);
+            int count = await stream.ReadAtLeastAsync(buffer, buffer.Length, false, token).ConfigureAwait(false);
             if (count == buffer.Length ||
                 !IPAddress.TryParse(Encoding.ASCII.GetString(buffer, 0, count).Trim(), out var address))
                 return null;
