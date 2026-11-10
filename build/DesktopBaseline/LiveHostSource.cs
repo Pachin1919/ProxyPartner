@@ -7,7 +7,7 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
     private static readonly DesktopResult Untested = new(null, null, null, null, "—", ResultState.Missing);
     private static readonly TimeSpan NativeFreshness = TimeSpan.FromMinutes(15);
     private const int ParallelServerLimit = 5;
-    private const int ParallelWebsiteNodeLimit = 5;
+    private const int ParallelWebsiteNodeLimit = 2;
     private readonly CancellationTokenSource stop = new();
     private readonly SemaphoreSlim requested = new(0, 1);
     private readonly Task poll;
