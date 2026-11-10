@@ -7,7 +7,7 @@ namespace ProxyPartnerLite.Host;
 
 public sealed record WebsiteProbe(
     string TargetId, string? Node, bool Direct, bool Attempted, int? HttpStatus, int? ElapsedMs, DateTimeOffset ObservedUtc,
-    bool TimedOut = false);
+    bool TimedOut = false, bool Independent = false);
 
 public sealed partial class ReadOnlyHostClient
 {
@@ -21,6 +21,7 @@ public sealed partial class ReadOnlyHostClient
     ];
 
     public const int CurrentProbeTargetCount = 5;
+    public static IReadOnlyList<(string Id, Uri Url)> WebsiteTargets { get; } = Array.AsReadOnly(ProbeTargets);
 
     /// <summary>Checks the built-in targets concurrently and returns the first verified route in target order.</summary>
     public async Task<WebsiteProbe?> MeasureCurrentPathAsync(int corePid, HostFacts facts, Action<WebsiteProbe> publish, CancellationToken token)

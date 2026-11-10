@@ -360,6 +360,8 @@ public sealed unsafe partial class DesktopApp
             if (!liveLatency)
                 Label(dc, $"{L("内核", "Core")} {ShortResult(row.Native)}", left, at(89), midpoint, Scale(17),
                     row.Native.NoResponse ? TimeoutInk : Muted, smallFont);
+            else if ((row.ExitV4 ?? row.ExitV6) is { } exit)
+                Label(dc, exit.Address, left, at(89), midpoint, Scale(17), Muted, smallFont);
             Label(dc, Timestamp(row.LastObservedUtc), midpoint, at(89), right, Scale(17), Muted, smallFont, 2);
         }
     }

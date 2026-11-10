@@ -591,10 +591,13 @@ public sealed unsafe partial class DesktopApp
             {
                 if (sweep.UnavailableNode is not null)
                     probe += L(" · 该节点暂无独立测速入口", " · This node has no independent probe route");
-                else if (sweep.BatchTotal > 0)
-                    probe += L($" · 机房 {sweep.Completed}/{sweep.BatchTotal}", $" · Servers {sweep.Completed}/{sweep.BatchTotal}");
-                else if (sweep.Requested)
+                else if (sweep.Requested && sweep.WebsiteTotal == 0)
                     probe += L(" · 其余节点缺少独立测速入口", " · Other nodes have no independent probe route");
+                if (sweep.WebsiteTotal > 0)
+                    probe += L($" · 独立五站 {sweep.WebsiteCompleted}/{sweep.WebsiteTotal}",
+                        $" · Independent {sweep.WebsiteCompleted}/{sweep.WebsiteTotal}");
+                if (sweep.BatchTotal > 0)
+                    probe += L($" · 机房 {sweep.Completed}/{sweep.BatchTotal}", $" · Servers {sweep.Completed}/{sweep.BatchTotal}");
             }
             SetStatusText($"{snapshot.Host} · {connection}{count}{probe}");
             return;

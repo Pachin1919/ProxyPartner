@@ -8,3 +8,4 @@ runs/
 .source-cache/
 .private/
 # No real subscriptions, secrets, IP history or capture logs in Git.
+ProbeNodes.json

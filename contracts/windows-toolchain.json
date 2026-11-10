@@ -10,6 +10,11 @@
     "runtime_source_commit": "0427b9abbead3fa64c6655eb4290c537397131fa",
     "nuget_packages": [
       {
+        "id": "quickproxynet",
+        "version": "5.0.0",
+        "sha256": "8892a407b5f313f89ef19fe7ab9357213f32f7520012a55986c935ee4476b5aa"
+      },
+      {
         "id": "microsoft.aspnetcore.app.runtime.win-x64",
         "version": "10.0.14",
         "sha256": "91638ac8382c437e71c0739a0e3123290f9bf48bcd01e616352a86add5571089"

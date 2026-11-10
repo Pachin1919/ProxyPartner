@@ -69,6 +69,9 @@ Invoke-Recorded restore $restoreArgs
 Invoke-Recorded publish @('publish',$project,'-c','Release','-r','win-x64','--self-contained','--no-restore',
     '--disable-build-servers','-p:DebugType=none','-p:IlcUseEnvironmentalTools=true',"-p:CppLinker=$linker",'-o',$publish)
 $exe = Join-Path $publish 'ProxyPartner.exe'
+if ($Variant -eq 'Win32') {
+    Copy-Item -LiteralPath (Join-Path $repo 'build/DesktopBaseline/QuickProxyNet.LICENSE.txt') -Destination $publish
+}
 $data = [IO.File]::ReadAllBytes($exe)
 $pe = [BitConverter]::ToInt32($data,0x3c)
 if ([BitConverter]::ToUInt32($data,$pe) -ne 0x4550 -or [BitConverter]::ToUInt16($data,$pe+4) -ne 0x8664 -or

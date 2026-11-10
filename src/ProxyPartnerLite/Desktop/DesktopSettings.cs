@@ -491,6 +491,15 @@ public sealed unsafe partial class DesktopApp
         if (row.Google is { } google) Result("Google", google);
         if (row.YouTube is { } youtube) Result("YouTube", youtube);
         if (row.Anthropic is { } anthropic) Result("Anthropic", anthropic);
+        void ExitIp(string family, DesktopExitIp? sample)
+        {
+            if (sample is null) return;
+            string label = L("出口", "Exit");
+            string changes = L($"本次运行变化 {sample.Changes} 次", $"{sample.Changes} changes this session");
+            Line($"{label} {family} · {sample.Address} · {changes} · {Timestamp(sample.ObservedUtc)} UTC · ipify");
+        }
+        ExitIp("IPv4", row.ExitV4);
+        ExitIp("IPv6", row.ExitV6);
         Result("GitHub", row.GitHub);
         foreach (var target in preferences.CustomTargets) Line($"{target.Symbol} {target.ShortName} · {L("待测", "Untested")} · {target.Url}");
         Line();

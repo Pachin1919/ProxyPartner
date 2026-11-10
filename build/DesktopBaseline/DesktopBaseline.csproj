@@ -13,6 +13,7 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
   <ItemGroup>
+    <PackageReference Include="QuickProxyNet" Version="[5.0.0]" />
     <ProjectReference Include="../../src/ProxyPartnerLite/Desktop/ProxyPartnerLite.Desktop.csproj" />
     <ProjectReference Include="../../src/ProxyPartnerLite/Host/ProxyPartnerLite.Host.csproj" />
     <Compile Include="../../tests/ui/BaselineSource.cs" Link="BaselineSource.cs" />
