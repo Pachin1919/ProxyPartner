@@ -77,7 +77,17 @@ public sealed unsafe partial class DesktopApp
             case 0x0f: // WM_PAINT
                 Paint paint;
                 nint dc = BeginPaint(cards, &paint);
-                DrawCards(dc, paint.Bounds);
+                Rect area = paint.Bounds;
+                long pixels = (long)(area.Right - area.Left) * (area.Bottom - area.Top);
+                if (pixels > 0)
+                {
+                    nint paintDc = dc;
+                    // Keep the offscreen surface within 6 MiB even on a large desktop.
+                    nint buffer = bufferedPaint && pixels <= 1_500_000
+                        ? BeginBufferedPaint(dc, &area, 0, 0, out paintDc) : 0;
+                    DrawCards(buffer == 0 ? dc : paintDc, area);
+                    if (buffer != 0) EndBufferedPaint(buffer, 1);
+                }
                 EndPaint(cards, &paint);
                 return 0;
             case 0x318: // WM_PRINTCLIENT
@@ -192,6 +202,15 @@ public sealed unsafe partial class DesktopApp
 
     private int IndexOfSelection() => Array.FindIndex(rows, row => row.Id == selectedId);
 
+    private void InvalidateCard(int index)
+    {
+        int x = index % columns * (cardWidth + cardGap);
+        int y = index / columns * (cardHeight + cardGap) - scrollY;
+        if (y >= viewportHeight || y + cardHeight <= 0) return;
+        var dirty = Box(x, Math.Max(0, y), cardWidth, Math.Min(viewportHeight, y + cardHeight) - Math.Max(0, y));
+        InvalidateRect(cards, (nint)(&dirty), 0);
+    }
+
     private void SelectCard(int index)
     {
         selectedId = rows[index].Id;
@@ -268,28 +287,27 @@ public sealed unsafe partial class DesktopApp
             }
             int midpoint = (left + right) / 2;
             uint scoreColor = preferences.Light ? Text : DarkScoreColor(row.Quality?.Score) ?? Text;
-            var currentResult = row.CurrentTarget switch
+            if (source is IDesktopCurrentTestSource && row.Kind == NodeKind.Leaf && row.Quality?.Score is null)
             {
-                "chatgpt_web" => row.ChatGpt,
-                "openai_api" => row.OpenAi,
-                "google" => row.Google,
-                "youtube" => row.YouTube,
-                "anthropic_api" => row.Anthropic,
-                _ => null
-            };
-            var latency = currentResult?.ElapsedMs is > 0 ? currentResult :
-                row.ChatGpt.ElapsedMs is > 0 ? row.ChatGpt :
-                row.OpenAi.ElapsedMs is > 0 ? row.OpenAi :
-                row.Google?.ElapsedMs is > 0 ? row.Google :
-                row.YouTube?.ElapsedMs is > 0 ? row.YouTube :
-                row.Anthropic?.ElapsedMs is > 0 ? row.Anthropic : row.Native;
-            if (row.Quality?.Score is null && latency?.ElapsedMs is int ms && ms > 0)
+                string headline = row.ServerPing?.ElapsedMs is int rtt ? $"{rtt} ms" : row.ServerPing?.State switch
+                {
+                    ResultState.TimedOut => L("超时", "Timeout"),
+                    ResultState.Failed => L("无响应", "No reply"),
+                    _ => "—"
+                };
+                Label(dc, headline, left, at(23), right, Scale(38), Text, scoreFont);
+                int? median = MedianWebsiteTime(row);
+                string caption = median is int websiteMs
+                    ? L($"VPS（站点 {websiteMs} ms）", $"VPS (web {websiteMs} ms)")
+                    : "VPS Ping";
+                Label(dc, caption, left, at(38), current ? right - Scale(68) : right, Scale(16), Muted, smallFont);
+            }
+            else if (row.Quality?.Score is null && row.Native.ElapsedMs is > 0 and int nativeMs)
             {
-                Label(dc, $"{ms} ms", left, at(23), right, Scale(38),
-                    latency.State == ResultState.Stale ? Muted : Text, scoreFont);
-                string measurement = CurrentSiteLabel(latency.TargetId) is { } measuredSite
-                    ? L($"{measuredSite} 响应", $"{measuredSite} response")
-                    : latency.State == ResultState.Stale ? L("内核延迟 · 旧", "Core latency · stale") : L("内核延迟", "Core latency");
+                Label(dc, $"{nativeMs} ms", left, at(23), right, Scale(38),
+                    row.Native.State == ResultState.Stale ? Muted : Text, scoreFont);
+                string measurement = row.Native.State == ResultState.Stale
+                    ? L("内核延迟 · 旧", "Core latency · stale") : L("内核延迟", "Core latency");
                 Label(dc, measurement, left, at(38), right, Scale(16), Muted, smallFont);
             }
             else
@@ -313,6 +331,20 @@ public sealed unsafe partial class DesktopApp
             Label(dc, $"{L("内核", "Core")} {native}", left, at(89), midpoint, Scale(17), Muted, smallFont);
             Label(dc, Timestamp(row.LastObservedUtc), midpoint, at(89), right, Scale(17), Muted, smallFont, 2);
         }
+    }
+
+    private static int? MedianWebsiteTime(DesktopRow row)
+    {
+        Span<int> timings = stackalloc int[5];
+        int count = 0;
+        if (row.Google?.ElapsedMs is >= 0 and int google) timings[count++] = google;
+        if (row.YouTube?.ElapsedMs is >= 0 and int youtube) timings[count++] = youtube;
+        if (row.OpenAi.ElapsedMs is >= 0 and int openAi) timings[count++] = openAi;
+        if (row.ChatGpt.ElapsedMs is >= 0 and int chatGpt) timings[count++] = chatGpt;
+        if (row.Anthropic?.ElapsedMs is >= 0 and int anthropic) timings[count++] = anthropic;
+        if (count == 0) return null;
+        timings[..count].Sort();
+        return (int)(((long)timings[(count - 1) / 2] + timings[count / 2]) / 2);
     }
 
     private static uint? DarkScoreColor(int? score) => score switch
@@ -468,7 +500,7 @@ public sealed unsafe partial class DesktopApp
 
     private void DrawToolbarButton(DrawItem* item)
     {
-        if (item->Id is not (Toggle or SortMenu or Groups or OpenSettings or OpenDetails or TestCurrent)) return;
+        if (item->Id is not (Toggle or SortMenu or Groups or OpenSettings or OpenDetails or TestCurrent or TestServers)) return;
         bool activeButton = item->Id == Toggle || item->Id == Groups && showGroups;
         string label = item->Id switch
         {
@@ -476,7 +508,8 @@ public sealed unsafe partial class DesktopApp
             Groups => showGroups ? L("✓ 策略组", "✓ Groups") : L("策略组", "Groups"),
             OpenSettings => L("设置", "Settings"),
             OpenDetails => L("详情", "Details"),
-            TestCurrent => source.GetSnapshot().CurrentTest?.Running == true ? L("测试中", "Testing") : L("重测线路", "Retest"),
+            TestCurrent => source.GetSnapshot().CurrentTest?.Running == true ? L("测试中", "Testing") : L("重测网站", "Retest sites"),
+            TestServers => L("服务器全测", "Ping all"),
             _ => descending ? L("排序 ↓", "Sort ↓") : L("排序 ↑", "Sort ↑")
         };
         DrawPanelButton(item, label, font, activeButton);

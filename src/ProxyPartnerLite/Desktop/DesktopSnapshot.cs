@@ -37,18 +37,22 @@ public sealed record DesktopRow(
     DesktopResult Native, DesktopResult OpenAi, DesktopResult ChatGpt, DesktopResult GitHub,
     DateTimeOffset? LastObservedUtc, DesktopQuality? Quality = null, string? SelectedMember = null,
     DesktopResult? Google = null, DesktopResult? YouTube = null, DesktopResult? Anthropic = null,
-    string? CurrentTarget = null);
+    string? CurrentTarget = null, DesktopResult? ServerPing = null);
 
 public sealed record DesktopCurrentTest(bool Running, int Completed, int Total, int Verified, int TimedOut,
     bool Attempted, string? CurrentTarget, bool Direct, bool PathChanged);
 
+public sealed record DesktopServerSweep(int Eligible, int Observed, int Completed, int BatchTotal, bool Requested);
+
 public sealed record DesktopSnapshot(
     string Host, CollectionState Collection, string? VerifiedCurrentPath,
-    DateTimeOffset? UpdatedUtc, IReadOnlyList<DesktopRow> Rows, DesktopCurrentTest? CurrentTest = null);
+    DateTimeOffset? UpdatedUtc, IReadOnlyList<DesktopRow> Rows, DesktopCurrentTest? CurrentTest = null,
+    DesktopServerSweep? ServerSweep = null);
 
 public interface IDesktopCurrentTestSource
 {
     void RequestCurrentTest();
+    void RequestServerSweep();
 }
 
 public interface IDesktopSnapshotSource

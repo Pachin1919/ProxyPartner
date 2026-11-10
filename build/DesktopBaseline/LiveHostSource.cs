@@ -5,10 +5,13 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
 {
     private static readonly DesktopResult Untested = new(null, null, null, null, "—", ResultState.Missing);
     private static readonly TimeSpan NativeFreshness = TimeSpan.FromMinutes(15);
+    private static readonly TimeSpan ServerInterval = TimeSpan.FromSeconds(10);
     private readonly CancellationTokenSource stop = new();
     private readonly SemaphoreSlim requested = new(0, 1);
     private readonly Task poll;
+    private readonly object wakeGate = new();
     private int queuedOrRunning;
+    private int sweepRequested;
     private DesktopSnapshot snapshot = new("Clash Verge", CollectionState.Connecting, null, null, []);
 
     internal LiveHostSource() => poll = Task.Run(PollAsync);
@@ -19,41 +22,106 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
     public void RequestCurrentTest()
     {
         if (Interlocked.CompareExchange(ref queuedOrRunning, 1, 0) == 0)
-            requested.Release();
+            Wake();
+    }
+
+    public void RequestServerSweep()
+    {
+        Interlocked.Exchange(ref sweepRequested, 1);
+        Wake();
+    }
+
+    private void Wake()
+    {
+        lock (wakeGate)
+            if (requested.CurrentCount == 0) requested.Release();
     }
 
     private async Task PollAsync()
     {
         var client = new ReadOnlyHostClient();
         var samples = new List<WebsiteProbe>(ReadOnlyHostClient.CurrentProbeTargetCount);
+        var latest = new Dictionary<(string Node, string Target), WebsiteProbe>();
+        var serverResults = new Dictionary<string, DesktopResult>(StringComparer.Ordinal);
+        string serverPath = Environment.GetEnvironmentVariable("PROXYPARTNER_SERVER_TARGETS") ??
+            Path.Combine(AppContext.BaseDirectory, "ServerTargets.json");
+        var serverMap = ServerTargets.Load(serverPath);
+        var manual = new Queue<string>();
+        int batchTotal = 0, batchDone = 0;
+        bool manualRequested = false;
+        string? lastServer = null;
+        DateTimeOffset nextServer = DateTimeOffset.MinValue;
+        WebsiteProbe? current = null;
         IReadOnlyList<HostGroup>? testedGroups = null;
         int? previousPid = null;
-        bool pending = false;
         do
         {
             var read = await client.ReadAsync(cancellationToken: stop.Token).ConfigureAwait(false);
             if (stop.IsCancellationRequested) return;
-            if (!pending) pending = requested.Wait(0);
+            TimeSpan wait = TimeSpan.FromSeconds(30);
 
             if (read.Facts is { } facts && read.CoreProcessId is int corePid)
             {
                 if (previousPid != corePid)
                 {
                     samples.Clear();
+                    latest.Clear();
+                    serverResults.Clear();
+                    manual.Clear();
+                    batchTotal = batchDone = 0;
+                    manualRequested = false;
+                    lastServer = null;
+                    nextServer = DateTimeOffset.MinValue;
+                    current = null;
                     testedGroups = null;
                     previousPid = corePid;
                 }
-                if (pending)
+                bool startSweep = Interlocked.Exchange(ref sweepRequested, 0) == 1 && manual.Count == 0;
+                if (startSweep)
+                {
+                    var updatedMap = ServerTargets.Load(serverPath);
+                    foreach (string name in serverResults.Keys.ToArray())
+                        if (!updatedMap.TryGetValue(name, out string? host) || host != serverMap[name])
+                            serverResults.Remove(name);
+                    serverMap = updatedMap;
+                }
+                var eligible = facts.Nodes.Select(n => n.Name).Where(serverMap.ContainsKey)
+                    .Order(StringComparer.Ordinal).ToArray();
+                if (startSweep)
+                {
+                    manual = new Queue<string>(eligible);
+                    batchTotal = eligible.Length;
+                    batchDone = 0;
+                    manualRequested = true;
+                }
+                void Emit(bool running)
+                {
+                    var sweep = new DesktopServerSweep(eligible.Length,
+                        eligible.Count(serverResults.ContainsKey), batchDone, batchTotal, manualRequested);
+                    PublishFacts(facts, samples, latest.Values, serverResults, current, sweep,
+                        running, pathChanged: samples.Count != 0 && testedGroups is null);
+                }
+                if (Volatile.Read(ref queuedOrRunning) == 1)
                 {
                     samples.Clear();
                     testedGroups = facts.Groups;
-                    PublishFacts(facts, samples, running: true, pathChanged: false);
+                    bool verified = false;
+                    Emit(running: true);
                     await client.MeasureCurrentPathAsync(corePid, facts, sample =>
                     {
                         samples.Add(sample);
-                        PublishFacts(facts, samples, running: true, pathChanged: false);
+                        if (sample.Node is { } node) latest[(node, sample.TargetId)] = sample;
+                        if (!verified && (sample.Node is not null || sample.Direct))
+                        {
+                            current = sample;
+                            verified = true;
+                        }
+                        Emit(running: true);
                     }, stop.Token).ConfigureAwait(false);
-                    pending = false;
+                    if (!verified) current = null;
+                    var names = facts.Nodes.Select(n => n.Name).ToHashSet(StringComparer.Ordinal);
+                    foreach (var key in latest.Keys.ToArray())
+                        if (!names.Contains(key.Node)) latest.Remove(key);
                     Volatile.Write(ref queuedOrRunning, 0);
                     if (stop.IsCancellationRequested) return;
                 }
@@ -61,25 +129,47 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                     .SequenceEqual(facts.Groups.Select(g => (g.Name, g.Selected))))
                 {
                     testedGroups = null;
+                    current = null;
                 }
-                PublishFacts(facts, samples, running: false, pathChanged: samples.Count != 0 && testedGroups is null);
+                Emit(running: false);
+                if (eligible.Length != 0)
+                {
+                    if (DateTimeOffset.UtcNow >= nextServer)
+                    {
+                        while (manual.TryPeek(out string? skipped) &&
+                            Array.BinarySearch(eligible, skipped, StringComparer.Ordinal) < 0)
+                        {
+                            manual.Dequeue();
+                            batchTotal--;
+                        }
+                        bool manualStep = manual.TryDequeue(out string? name);
+                        name ??= eligible.FirstOrDefault(n => StringComparer.Ordinal.Compare(n, lastServer) > 0)
+                            ?? eligible[0];
+                        lastServer = name;
+                        nextServer = DateTimeOffset.UtcNow + ServerInterval;
+                        serverResults[name] = await ServerTargets.MeasureAsync(serverMap[name], stop.Token)
+                            .ConfigureAwait(false);
+                        if (manualStep) batchDone++;
+                        Emit(running: false);
+                    }
+                    wait = nextServer - DateTimeOffset.UtcNow;
+                    if (wait < TimeSpan.Zero) wait = TimeSpan.Zero;
+                }
             }
             else if (GetSnapshot().Collection != CollectionState.Disconnected)
             {
-                samples.Clear();
-                testedGroups = null;
                 previousPid = null;
                 Publish(new("Clash Verge", CollectionState.Disconnected, null, null, []));
             }
-            if (await requested.WaitAsync(TimeSpan.FromSeconds(30), stop.Token).ConfigureAwait(false))
-                pending = true;
+            await requested.WaitAsync(wait, stop.Token).ConfigureAwait(false);
         } while (!stop.IsCancellationRequested);
     }
 
-    private void PublishFacts(HostFacts facts, List<WebsiteProbe> samples, bool running, bool pathChanged)
+    private void PublishFacts(HostFacts facts, List<WebsiteProbe> samples, IEnumerable<WebsiteProbe> latest,
+        Dictionary<string, DesktopResult> serverResults, WebsiteProbe? current, DesktopServerSweep sweep,
+        bool running, bool pathChanged)
     {
-        WebsiteProbe? current = pathChanged ? null : samples.FirstOrDefault(s => s.Node is not null || s.Direct);
-        var byNode = samples.Where(s => s.Node is not null).ToLookup(s => s.Node, StringComparer.Ordinal);
+        var byNode = latest.ToLookup(s => s.Node, StringComparer.Ordinal);
         var rows = new DesktopRow[facts.Nodes.Count + facts.Groups.Count];
         int index = 0;
         foreach (var node in facts.Nodes)
@@ -90,9 +180,13 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                     facts.ObservedAtUtc - last.ObservedUtc > NativeFreshness ? ResultState.Stale :
                     last.ElapsedMs.HasValue ? ResultState.Measured : ResultState.Failed)
                 : Untested;
+            var server = serverResults.GetValueOrDefault(node.Name);
+            DateTimeOffset? lastObserved = native.ObservedUtc;
+            if (server?.ObservedUtc is { } serverTime && (lastObserved is null || serverTime > lastObserved))
+                lastObserved = serverTime;
             var row = new DesktopRow("node:" + node.Name, node.Name, NodeKind.Leaf,
-                isCurrent, native, Untested, Untested, Untested, native.ObservedUtc,
-                CurrentTarget: isCurrent ? current?.TargetId : null);
+                isCurrent, native, Untested, Untested, Untested, lastObserved,
+                CurrentTarget: isCurrent ? current?.TargetId : null, ServerPing: server);
             foreach (var sample in byNode[node.Name])
             {
                 var result = new DesktopResult(sample.TargetId, sample.ElapsedMs, sample.HttpStatus, sample.ObservedUtc,
@@ -113,7 +207,8 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                     "anthropic_api" => row with { Anthropic = result },
                     _ => row
                 };
-                row = row with { LastObservedUtc = sample.ObservedUtc };
+                if (row.LastObservedUtc is null || sample.ObservedUtc > row.LastObservedUtc)
+                    row = row with { LastObservedUtc = sample.ObservedUtc };
             }
             rows[index++] = row;
         }
@@ -127,7 +222,7 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                 samples.Any(s => s.Attempted), current?.TargetId,
                 current?.Direct == true, pathChanged)
             : null;
-        Publish(new("Mihomo " + facts.Version, CollectionState.Observing, current?.Node, facts.ObservedAtUtc, rows, test));
+        Publish(new("Mihomo " + facts.Version, CollectionState.Observing, current?.Node, facts.ObservedAtUtc, rows, test, sweep));
     }
 
     private void Publish(DesktopSnapshot next)

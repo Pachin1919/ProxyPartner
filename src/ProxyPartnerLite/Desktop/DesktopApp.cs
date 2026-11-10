@@ -10,6 +10,7 @@ public sealed unsafe partial class DesktopApp
     private const uint TrayMessage = 0x8001, SnapshotMessage = 0x8002;
     private const int Open = 101, Exit = 102, Search = 103, Groups = 104, Toggle = 107, SortMenu = 108, SortFirst = 110;
     private const int TestCurrent = 130;
+    private const int TestServers = 131;
     private static readonly string[] ZhColumns = ["节点", "当前", "原生延迟", "OPENAI", "GPT", "GitHub", "最近样本 (UTC)", "评分", "测试选择", "质量状态"];
     private static readonly string[] EnColumns = ["Node", "Current", "Native latency", "OPENAI", "GPT", "GitHub", "Last sample (UTC)", "Score", "Test selection", "Quality"];
     private string[] Columns => preferences.English ? EnColumns : ZhColumns;
@@ -21,8 +22,10 @@ public sealed unsafe partial class DesktopApp
     private DesktopPreferences preferences;
     private readonly nint module = GetModuleHandle(0);
     private nint tray, panel, status, search, groups, list, font, icon, smallIcon;
-    private nint testButton;
+    private nint testButton, serverTestButton;
     private bool ownsIcons;
+    private bool bufferedPaint;
+    private string? lastStatusText, lastTestCaption, lastSweepCaption;
     private uint taskbarCreated;
     private int dpi = 96, sortColumn;
     private bool descending;
@@ -55,6 +58,7 @@ public sealed unsafe partial class DesktopApp
         {
             if (app.panel != 0) DestroyWindow(app.panel);
             if (app.tray != 0) DestroyWindow(app.tray);
+            if (app.bufferedPaint) BufferedPaintUnInit();
             if (app.ownsIcons)
             {
                 DestroyIcon(app.icon);
@@ -68,6 +72,7 @@ public sealed unsafe partial class DesktopApp
     {
         uint* common = stackalloc uint[] { 8, 1 | 4 };
         if (InitCommonControlsEx(common) == 0) return 1;
+        bufferedPaint = BufferedPaintInit() == 0;
         if (Environment.ProcessPath is { } path &&
             ExtractIconEx(path, 0, out icon, out smallIcon, 1) is > 0 and < uint.MaxValue && icon != 0)
             ownsIcons = true;
@@ -185,7 +190,8 @@ public sealed unsafe partial class DesktopApp
                     if (settingsWindow != 0) DestroyWindow(settingsWindow);
                     if (detailWindow != 0) DestroyWindow(detailWindow);
                     FreeCardArtwork();
-                    panel = status = search = groups = list = cards = toggle = title = searchLabel = sortButton = hint = settingsButton = detailButton = testButton = 0;
+                    panel = status = search = groups = list = cards = toggle = title = searchLabel = sortButton = hint = settingsButton = detailButton = testButton = serverTestButton = 0;
+                    lastStatusText = lastTestCaption = lastSweepCaption = null;
                     FreeFonts();
                     if (editBrush != 0) DeleteObject(editBrush);
                     if (toolsBrush != 0) DeleteObject(toolsBrush);
@@ -232,6 +238,7 @@ public sealed unsafe partial class DesktopApp
                     if (id == OpenSettings) ShowSettings();
                     if (id == OpenDetails) ShowDetails();
                     if (id == TestCurrent && source is IDesktopCurrentTestSource test) test.RequestCurrentTest();
+                    if (id == TestServers && source is IDesktopCurrentTestSource servers) servers.RequestServerSweep();
                     if (id >= SortFirst && id < SortFirst + Columns.Length) Sort(id - SortFirst);
                     return 0;
                 case WmNotify:
@@ -307,7 +314,11 @@ public sealed unsafe partial class DesktopApp
         groups = Child("BUTTON", L("策略组", "Groups"), WsTabStop | 11, Groups);
         settingsButton = Child("BUTTON", L("设置", "Settings"), WsTabStop | 11, OpenSettings);
         detailButton = Child("BUTTON", L("详情", "Details"), WsTabStop | 11, OpenDetails);
-        if (source is IDesktopCurrentTestSource) testButton = Child("BUTTON", L("重测线路", "Retest"), WsTabStop | 11, TestCurrent);
+        if (source is IDesktopCurrentTestSource)
+        {
+            testButton = Child("BUTTON", L("重测网站", "Retest sites"), WsTabStop | 11, TestCurrent);
+            serverTestButton = Child("BUTTON", L("服务器全测", "Ping all"), WsTabStop | 11, TestServers);
+        }
         list = Child("SysListView32", "", WsTabStop | 0x1000 | 1 | 4 | 8, 105);
         cards = Child(CardsClass, L("节点卡片", "Node cards"), WsTabStop | 0x200000, 106);
         if (title == 0 || status == 0 || search == 0 || searchLabel == 0 || hint == 0 || groups == 0 || list == 0 ||
@@ -419,8 +430,8 @@ public sealed unsafe partial class DesktopApp
         GetClientRect(panel, &size);
         int pad = Scale(14), width = Math.Max(0, size.Right - pad * 2), top = ToolbarHeight(size.Right);
         bool compact = size.Right < Scale(690);
-        int buttonCount = testButton == 0 ? 5 : 6;
-        int searchWidth = compact ? width : Math.Min(Scale(288), width - Scale(buttonCount == 6 ? 504 : 426));
+        int buttonCount = testButton == 0 ? 5 : 7;
+        int searchWidth = compact ? width : Math.Min(Scale(288), width - Scale(buttonCount == 7 ? 585 : 426));
         int controlX = compact ? pad : pad + searchWidth + Scale(10), controlY = Scale(compact ? 103 : 68);
         int labelWidth = Scale(preferences.English ? 50 : 42);
         MoveWindow(title, pad, Scale(11), width, Scale(24), 1);
@@ -435,6 +446,7 @@ public sealed unsafe partial class DesktopApp
         MoveWindow(settingsButton, controlX + pitch * 3, controlY, slot, Scale(28), 1);
         MoveWindow(detailButton, controlX + pitch * 4, controlY, slot, Scale(28), 1);
         if (testButton != 0) MoveWindow(testButton, controlX + pitch * 5, controlY, slot, Scale(28), 1);
+        if (serverTestButton != 0) MoveWindow(serverTestButton, controlX + pitch * 6, controlY, slot, Scale(28), 1);
         int hintX = size.Right < Scale(940) ? pad : controlX + pitch * buttonCount;
         int hintY = size.Right < Scale(940) ? controlY + Scale(30) : controlY;
         MoveWindow(hint, hintX, hintY, Math.Max(0, size.Right - pad - hintX), Scale(24), 1);
@@ -480,13 +492,36 @@ public sealed unsafe partial class DesktopApp
         }
         filtered.Sort(CompareRows);
         if (pinned is not null) filtered.Insert(0, pinned);
+        DesktopRow[] previous = rows;
         rows = filtered.ToArray();
-        hoverIndex = hoverSite = -1;
-        if (!tableMode) SetText(hint, HoverText());
-        SyncTable();
-        ScrollCards(preserveScroll ? scrollY : 0);
-        if (!preserveScroll && !tableMode && IndexOfSelection() is int selected && selected >= 0) SelectCard(selected);
-        if (detailWindow != 0) RefreshDetails();
+        bool sameOrder = preserveScroll && rows.Length == previous.Length;
+        for (int i = 0; sameOrder && i < rows.Length; i++)
+            sameOrder = previous[i].Id == rows[i].Id;
+        if (sameOrder)
+        {
+            bool detailsChanged = false;
+            for (int i = 0; i < rows.Length; i++)
+            {
+                if (previous[i] == rows[i]) continue;
+                if (tableMode) Send(list, LvmRedrawItems, (nuint)i, i);
+                else
+                {
+                    InvalidateCard(i);
+                    if (hoverIndex == i) SetText(hint, HoverText());
+                }
+                detailsChanged |= rows[i].Id == selectedId;
+            }
+            if (detailWindow != 0 && detailsChanged) RefreshDetails();
+        }
+        else
+        {
+            hoverIndex = hoverSite = -1;
+            if (!tableMode) SetText(hint, HoverText());
+            SyncTable();
+            ScrollCards(preserveScroll ? scrollY : 0);
+            if (!preserveScroll && !tableMode && IndexOfSelection() is int selected && selected >= 0) SelectCard(selected);
+            if (detailWindow != 0) RefreshDetails();
+        }
         UpdateStatus(snapshot);
     }
 
@@ -542,11 +577,35 @@ public sealed unsafe partial class DesktopApp
                 if (test.TimedOut > 0) probe += L($" · 超时 {test.TimedOut} 项", $" · {test.TimedOut} timed out");
                 if (test.Direct) probe += L($" · {CurrentSiteLabel(test.CurrentTarget)} 直连", $" · {CurrentSiteLabel(test.CurrentTarget)} direct");
             }
-            SetText(status, $"{snapshot.Host} · {connection}{count}{probe}");
+            if (snapshot.ServerSweep is { } sweep)
+            {
+                if (sweep.Eligible > 0)
+                    probe += $" · VPS {sweep.Observed}/{sweep.Eligible}";
+                if (sweep.BatchTotal > 0)
+                    probe += L($" · 全测 {sweep.Completed}/{sweep.BatchTotal}", $" · Sweep {sweep.Completed}/{sweep.BatchTotal}");
+                else if (sweep.Requested)
+                    probe += L(" · 服务器全测缺地址清单", " · Ping all needs ServerTargets.json");
+            }
+            SetStatusText($"{snapshot.Host} · {connection}{count}{probe}");
             if (testButton != 0)
             {
-                SetText(testButton, snapshot.CurrentTest?.Running == true ? L("测试中", "Testing") : L("重测线路", "Retest"));
-                InvalidateRect(testButton, 0, 1);
+                string caption = snapshot.CurrentTest?.Running == true ? L("测试中", "Testing") : L("重测网站", "Retest sites");
+                if (caption != lastTestCaption)
+                {
+                    lastTestCaption = caption;
+                    SetText(testButton, caption);
+                    InvalidateRect(testButton, 0, 0);
+                }
+            }
+            if (serverTestButton != 0)
+            {
+                string caption = L("服务器全测", "Ping all");
+                if (caption != lastSweepCaption)
+                {
+                    lastSweepCaption = caption;
+                    SetText(serverTestButton, caption);
+                    InvalidateRect(serverTestButton, 0, 0);
+                }
             }
             return;
         }
@@ -561,9 +620,16 @@ public sealed unsafe partial class DesktopApp
         };
         string host = snapshot.Host == "未接入宿主" ? L("未接入宿主", "Host disconnected") : snapshot.Host;
         string path = snapshot.VerifiedCurrentPath ?? L("未知", "Unknown");
-        SetText(status, preferences.English
+        SetStatusText(preferences.English
             ? $"{collection}  |  {host}  |  Route: {path}  |  {rows.Length} rows  |  Test checked {tested.Count}  |  Updated: {Timestamp(snapshot.UpdatedUtc)} UTC"
             : $"{collection}  |  {host}  |  实际链路：{path}  |  {rows.Length} 行  |  测试勾选 {tested.Count}  |  更新：{Timestamp(snapshot.UpdatedUtc)} UTC");
+    }
+
+    private void SetStatusText(string text)
+    {
+        if (text == lastStatusText) return;
+        lastStatusText = text;
+        SetText(status, text);
     }
 
     private static string? CurrentSiteLabel(string? id) => id switch

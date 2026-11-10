@@ -7,6 +7,7 @@ internal static unsafe partial class Win32
     internal const int WmClose = 0x10, WmDestroy = 2, WmSize = 5, WmNotify = 0x4e,
         WmCommand = 0x111, WmSetFont = 0x30, WmDpiChanged = 0x2e0, WmKeyDown = 0x100;
     internal const int LvmFirst = 0x1000, LvmGetNextItem = LvmFirst + 12,
+        LvmRedrawItems = LvmFirst + 21,
         LvmSetItemCount = LvmFirst + 47, LvmSetItemState = LvmFirst + 43,
         LvmEnsureVisible = LvmFirst + 19, LvmInsertColumn = LvmFirst + 97,
         LvmSetColumnWidth = LvmFirst + 30, LvmSetExtendedStyle = LvmFirst + 54;
@@ -250,6 +251,18 @@ internal static unsafe partial class Win32
     internal static partial nint BeginPaint(nint window, Paint* paint);
     [LibraryImport("user32")]
     internal static partial int EndPaint(nint window, Paint* paint);
+
+    [LibraryImport("uxtheme")]
+    internal static partial int BufferedPaintInit();
+
+    [LibraryImport("uxtheme")]
+    internal static partial int BufferedPaintUnInit();
+
+    [LibraryImport("uxtheme")]
+    internal static partial nint BeginBufferedPaint(nint dc, Rect* area, int format, nint parameters, out nint paintDc);
+
+    [LibraryImport("uxtheme")]
+    internal static partial int EndBufferedPaint(nint buffer, int update);
     [LibraryImport("user32")]
     internal static partial int FillRect(nint dc, Rect* rect, nint brush);
     [LibraryImport("user32", EntryPoint = "DrawTextW")]
