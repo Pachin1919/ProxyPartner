@@ -315,12 +315,15 @@ public sealed unsafe partial class DesktopApp
             }
             else
                 Label(dc, ScoreText(row), left, at(23), midpoint, Scale(38), scoreColor, scoreFont);
-            int badgeLeft = Math.Max(midpoint, right - Scale(102));
-            Rounded(dc, Box(badgeLeft, at(28), right - badgeLeft, Scale(20)), Scale(8), Control);
-            Rounded(dc, Box(badgeLeft + Scale(7), at(28) + Scale(8), Scale(5), Scale(5)), Scale(5), tone.Accent);
-            Label(dc, row.Quality?.Cap is not null ? ScoreText(row) : tone.Label,
-                badgeLeft + Scale(17), at(28), right - Scale(4), Scale(20),
-                row.Quality?.Cap is not null ? TimeoutInk : tone.Text, smallFont);
+            bool capped = row.Quality?.Cap is not null;
+            if (!liveLatency || capped)
+            {
+                int badgeLeft = Math.Max(midpoint, right - Scale(102));
+                Rounded(dc, Box(badgeLeft, at(28), right - badgeLeft, Scale(20)), Scale(8), Control);
+                Rounded(dc, Box(badgeLeft + Scale(7), at(28) + Scale(8), Scale(5), Scale(5)), Scale(5), tone.Accent);
+                Label(dc, capped ? ScoreText(row) : tone.Label, badgeLeft + Scale(17),
+                    at(28), right - Scale(4), Scale(20), capped ? TimeoutInk : tone.Text, smallFont);
+            }
             if (row.IsCurrent || row.Kind == NodeKind.Group)
                 Label(dc, row.SelectedMember is not null ? L("组内已选", "Member selected")
                     : row.IsCurrent && CurrentSiteLabel(row.CurrentTarget) is { } site

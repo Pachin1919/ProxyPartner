@@ -158,7 +158,13 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
             }
             else if (GetSnapshot() is { Collection: not CollectionState.Disconnected } previous)
             {
-                Publish(previous with { Collection = CollectionState.Disconnected });
+                Publish(previous with
+                {
+                    Collection = CollectionState.Disconnected,
+                    VerifiedCurrentPath = null,
+                    Rows = previous.Rows.Select(row => row.IsCurrent
+                        ? row with { IsCurrent = false, CurrentTarget = null } : row).ToArray()
+                });
             }
             await requested.WaitAsync(wait, stop.Token).ConfigureAwait(false);
         } while (!stop.IsCancellationRequested);
