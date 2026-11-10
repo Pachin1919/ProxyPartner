@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -5,7 +6,8 @@ using System.Text.Json.Serialization;
 namespace ProxyPartnerLite.Host;
 
 internal sealed record VersionWire(string? Version);
-internal sealed record ProxyWire(string? Name, string? Type, string? Now, string[]? All);
+internal sealed record NativeHistoryWire(string? Time, int? Delay);
+internal sealed record ProxyWire(string? Name, string? Type, string? Now, string[]? All, NativeHistoryWire?[]? History = null);
 internal sealed record ProxiesWire(Dictionary<string, ProxyWire?>? Proxies);
 internal sealed record ProviderMemberWire(string? Name);
 internal sealed record ProviderWire(string? VehicleType, ProviderMemberWire?[]? Proxies);
@@ -49,7 +51,14 @@ internal static class HostProjection
                 groups.Add(new HostGroup(name, type, selected, members));
             }
             else if (type is not ("Direct" or "Reject" or "RejectDrop" or "Pass" or "Compatible"))
-                nodes.Add(new HostNode(name, type));
+            {
+                HostNativeSample? native = null;
+                if (proxy.History is [.., { Time: { } time, Delay: >= 0 and < 65535 } sample] &&
+                    DateTimeOffset.TryParse(time, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var observed) &&
+                    observed > DateTimeOffset.UnixEpoch && observed <= DateTimeOffset.UtcNow.AddMinutes(1))
+                    native = new HostNativeSample(observed, sample.Delay is > 0 ? sample.Delay : null);
+                nodes.Add(new HostNode(name, type, native));
+            }
         }
         if (nodes.Count > 1000 || groups.Count > 1000)
             throw new HostFailure(HostStatus.InvalidResponse);

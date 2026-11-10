@@ -6,7 +6,8 @@ using ProxyPartnerLite.Discovery;
 namespace ProxyPartnerLite.Host;
 
 public sealed record WebsiteProbe(
-    string TargetId, string? Node, bool Direct, bool Attempted, int? HttpStatus, int? ElapsedMs, DateTimeOffset ObservedUtc);
+    string TargetId, string? Node, bool Direct, bool Attempted, int? HttpStatus, int? ElapsedMs, DateTimeOffset ObservedUtc,
+    bool TimedOut = false);
 
 public sealed partial class ReadOnlyHostClient
 {
@@ -95,6 +96,7 @@ public sealed partial class ReadOnlyHostClient
                 request.Headers.TryAddWithoutValidation("anthropic-version", "2026-10-21");
             long started = Stopwatch.GetTimestamp();
             HttpResponseMessage? response = null;
+            bool timedOut = false;
             try
             {
                 response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, deadline.Token)
@@ -102,12 +104,17 @@ public sealed partial class ReadOnlyHostClient
                 status = (int)response.StatusCode;
                 elapsed = (int)Stopwatch.GetElapsedTime(started).TotalMilliseconds;
             }
+            catch (OperationCanceledException) when (deadline.IsCancellationRequested && !token.IsCancellationRequested)
+            {
+                timedOut = true;
+            }
             catch (Exception error) when (IsBoundaryError(error)) { }
 
             using (response)
             {
                 MatchedProbeRoute? matched = route is null ? null : await route.ConfigureAwait(false);
-                return new(target.Id, matched?.Node, matched?.Direct ?? false, attempted, status, elapsed, DateTimeOffset.UtcNow);
+                return new(target.Id, matched?.Node, matched?.Direct ?? false, attempted, status, elapsed,
+                    DateTimeOffset.UtcNow, timedOut);
             }
         }
         catch (Exception error) when (IsBoundaryError(error))

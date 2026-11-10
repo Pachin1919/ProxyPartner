@@ -160,6 +160,19 @@ static async Task ReadOnlyRoutesAsync()
         ["synthetic-group-bucket"] = new("Compatible", roster)
     }));
     Require(providerFacts.Length == 2 && providerFacts.All(p => p.Members.Count == 1000), "overlapping provider rosters");
+    string time = DateTimeOffset.UtcNow.AddMinutes(-1).ToString("o");
+    var nativeFacts = HostProjection.Proxies(new(new()
+    {
+        ["positive"] = new("positive", "Vless", null, null, [new(time, 270)]),
+        ["zero"] = new("zero", "Vless", null, null, [new(time, 0)]),
+        ["negative"] = new("negative", "Vless", null, null, [new(time, -8)]),
+        ["unknown"] = new("unknown", "Vless", null, null),
+        ["malformed"] = new("malformed", "Vless", null, null, [new("invalid", 12)])
+    })).Nodes.ToDictionary(node => node.Name);
+    Require(nativeFacts["positive"].Native?.ElapsedMs == 270 &&
+        nativeFacts["zero"].Native is { ElapsedMs: null } && nativeFacts["negative"].Native is null &&
+        nativeFacts["unknown"].Native is null && nativeFacts["malformed"].Native is null,
+        "native milliseconds, invalid, zero-failure and missing remain distinct");
     const string samePortOtherHost = """{"metadata":{"network":"tcp","sourceIP":"127.0.0.1","sourcePort":"51823","host":"other.example","destinationPort":"443"},"chains":["wrong-node"]}""";
     const string sameHostOtherPort = """{"metadata":{"network":"tcp","sourceIP":"127.0.0.1","sourcePort":"51822","host":"probe.example","destinationPort":"443"},"chains":["wrong-node"]}""";
     const string ownRequest = """{"metadata":{"network":"tcp","sourceIP":"127.0.0.1","sourcePort":"51823","host":"probe.example","destinationPort":"443"},"chains":["right-node","policy"]}""";

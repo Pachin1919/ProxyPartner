@@ -539,6 +539,7 @@ public sealed unsafe partial class DesktopApp
                     : test.PathChanged ? L(" · 组选项已变，重测可确认当前节点", " · Group selection changed. Retest to verify.")
                     : !test.Attempted ? L(" · 未发现本机代理入口", " · Local proxy unavailable")
                     : L($" · 已核实 {test.Verified}/{test.Total} 条站点线路", $" · {test.Verified}/{test.Total} routes verified");
+                if (test.TimedOut > 0) probe += L($" · 超时 {test.TimedOut} 项", $" · {test.TimedOut} timed out");
                 if (test.Direct) probe += L($" · {CurrentSiteLabel(test.CurrentTarget)} 直连", $" · {CurrentSiteLabel(test.CurrentTarget)} direct");
             }
             SetText(status, $"{snapshot.Host} · {connection}{count}{probe}");

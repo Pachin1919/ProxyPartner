@@ -11,8 +11,6 @@ public sealed unsafe partial class DesktopApp
         ("google", "Google", "GO"), ("youtube", "YouTube", "YT"), ("openai_api", "OpenAI API", "OPENAI"),
         ("chatgpt_web", "ChatGPT", "GPT"), ("anthropic_api", "Anthropic API", "ANT")
     ];
-    // Only the API and GPT slots contain measured results. Reserve room for
-    // three Chinese characters there while keeping the other marks aligned.
     private static readonly int[] SiteEdges = [0, 18, 36, 59, 82, 100];
     private uint Background => Color(preferences.Light ? 0xE6EBF1u : 0x222933u);
     private uint Tools => Color(preferences.Light ? 0xF1F4F8u : 0x29313Du);
@@ -21,6 +19,9 @@ public sealed unsafe partial class DesktopApp
     private uint Text => Color(preferences.Light ? 0x202B3Bu : 0xF2F4F7u);
     private uint Muted => Color(preferences.Light ? 0x475A70u : 0xC3CEDBu);
     private uint Focus => Color(preferences.Light ? 0x285C9Eu : 0xA6C3F3u);
+    private uint CurrentBackground => Color(preferences.Light ? 0xEEEAFEu : 0x35334Cu);
+    private uint CurrentBorder => Color(preferences.Light ? 0x7664BBu : 0xA99AE9u);
+    private uint CurrentInk => Color(preferences.Light ? 0x58429Cu : 0xDDD3FFu);
     private static readonly uint Active = Color(0x315AC9), ActiveText = Color(0xF7F9FF);
     private nint cards, toggle, sortButton, title, searchLabel, hint, smallFont, boldFont, scoreFont, siteStatusFont, editBrush, toolsBrush;
     private nint tooltip, tipBuffer;
@@ -48,7 +49,16 @@ public sealed unsafe partial class DesktopApp
             QualityState.Restricted => new Tone(Color(light ? 0xF5E9CAu : 0x3C3021u), Color(light ? 0x96621Eu : 0xCBA769u),
                 Color(light ? 0x734815u : 0xF6CF83u), L("服务受限", "Restricted")),
             _ => new Tone(Color(light ? 0xE6EDF4u : 0x242831u), Color(light ? 0x60768Bu : 0x99ADBFu),
-                Color(light ? 0x475A70u : 0xBEC6D3u), L("样本不足", "Low samples"))
+                Color(light ? 0x475A70u : 0xBEC6D3u),
+                row.Quality is not null ? L("样本不足", "Low samples") :
+                row.OpenAi.State != ResultState.Missing || row.ChatGpt.State != ResultState.Missing ||
+                    row.Google is not null || row.YouTube is not null || row.Anthropic is not null
+                    ? L("本轮已测", "Round tested") :
+                row.Native.State == ResultState.Stale ? row.Native.ElapsedMs.HasValue
+                    ? L("历史延迟", "Past latency") : L("历史未响应", "Past failure") :
+                row.Native.State == ResultState.Measured ? L("延迟已测", "Latency read") :
+                row.Native.State == ResultState.Failed ? L("内核未响应", "No response") :
+                L("待测", "Untested"))
         };
         return !light && !table ? tone with { Background = Color(0x303741), Text = Muted } : tone;
     }
@@ -219,13 +229,22 @@ public sealed unsafe partial class DesktopApp
         {
             int x = index % columns * (cardWidth + cardGap);
             int y = index / columns * pitch - scrollY;
-            var tone = GetTone(rows[index]);
+            var row = rows[index];
+            var tone = GetTone(row);
             var bounds = Box(x, y, cardWidth, cardHeight);
-            uint? outline = rows[index].Id == selectedId ? GetFocus() == cards ? Focus : Active : null;
+            bool current = row.CurrentTarget is not null;
+            uint background = current ? CurrentBackground : tone.Background;
+            uint? outline = current ? CurrentBorder :
+                row.Id == selectedId ? GetFocus() == cards ? Focus : Active : null;
             if (preferences.Light)
                 CardFinish.Draw(finish, Box(x, y + Scale(2), cardWidth, cardHeight), Scale(12), Color(0xCCD6E0), null, 1);
-            if (!CardFinish.Draw(finish, bounds, Scale(12), tone.Background, outline, Scale(2), preferences.Light))
-                Fill(dc, bounds, outline ?? tone.Background);
+            if (!CardFinish.Draw(finish, bounds, Scale(12), background, outline, Scale(2), preferences.Light))
+            {
+                Fill(dc, bounds, outline ?? background);
+                if (outline is not null)
+                    Fill(dc, Box(bounds.Left + Scale(2), bounds.Top + Scale(2),
+                        cardWidth - Scale(4), cardHeight - Scale(4)), background);
+            }
         }
         if (finish != 0) CardFinish.End(finish);
         SetBkMode(dc, 1);
@@ -249,7 +268,32 @@ public sealed unsafe partial class DesktopApp
             }
             int midpoint = (left + right) / 2;
             uint scoreColor = preferences.Light ? Text : DarkScoreColor(row.Quality?.Score) ?? Text;
-            Label(dc, ScoreText(row), left, at(23), midpoint, Scale(38), scoreColor, scoreFont);
+            var currentResult = row.CurrentTarget switch
+            {
+                "chatgpt_web" => row.ChatGpt,
+                "openai_api" => row.OpenAi,
+                "google" => row.Google,
+                "youtube" => row.YouTube,
+                "anthropic_api" => row.Anthropic,
+                _ => null
+            };
+            var latency = currentResult?.ElapsedMs is > 0 ? currentResult :
+                row.ChatGpt.ElapsedMs is > 0 ? row.ChatGpt :
+                row.OpenAi.ElapsedMs is > 0 ? row.OpenAi :
+                row.Google?.ElapsedMs is > 0 ? row.Google :
+                row.YouTube?.ElapsedMs is > 0 ? row.YouTube :
+                row.Anthropic?.ElapsedMs is > 0 ? row.Anthropic : row.Native;
+            if (row.Quality?.Score is null && latency?.ElapsedMs is int ms && ms > 0)
+            {
+                Label(dc, $"{ms} ms", left, at(23), right, Scale(38),
+                    latency.State == ResultState.Stale ? Muted : Text, scoreFont);
+                string measurement = CurrentSiteLabel(latency.TargetId) is { } measuredSite
+                    ? L($"{measuredSite} 响应", $"{measuredSite} response")
+                    : latency.State == ResultState.Stale ? L("内核延迟 · 旧", "Core latency · stale") : L("内核延迟", "Core latency");
+                Label(dc, measurement, left, at(38), right, Scale(16), Muted, smallFont);
+            }
+            else
+                Label(dc, ScoreText(row), left, at(23), midpoint, Scale(38), scoreColor, scoreFont);
             int badgeLeft = Math.Max(midpoint, right - Scale(102));
             Rounded(dc, Box(badgeLeft, at(28), right - badgeLeft, Scale(20)), Scale(8), Control);
             Rounded(dc, Box(badgeLeft + Scale(7), at(28) + Scale(8), Scale(5), Scale(5)), Scale(5), tone.Accent);
@@ -259,11 +303,14 @@ public sealed unsafe partial class DesktopApp
                     : row.IsCurrent && CurrentSiteLabel(row.CurrentTarget) is { } site
                         ? L($"{site} 当前", $"{site} current")
                         : row.IsCurrent ? L("宿主当前", "Host current") : L("策略组", "Policy group"),
-                    midpoint, at(38), right, Scale(16), Muted, smallFont, 2);
+                    midpoint, at(38), right, Scale(16), row.CurrentTarget is not null ? CurrentInk : Muted, smallFont, 2);
             Fill(dc, Box(left, at(48), Math.Max(0, right - left), 1), Border);
-            DrawSites(dc, row, left, right, at(55), at(66), at(75));
+            DrawSites(dc, row, left, right, at(52), at(63), at(71), at(79));
             Fill(dc, Box(left, at(86), Math.Max(0, right - left), 1), Border);
-            Label(dc, $"{L("原生", "Native")} {ShortResult(row.Native)}", left, at(89), midpoint, Scale(17), Muted, smallFont);
+            string native = row.Native.State == ResultState.Stale
+                ? row.Native.ElapsedMs is int old ? L($"旧 {old} ms", $"Old {old} ms") : L("旧失败", "Past failure")
+                : ShortResult(row.Native);
+            Label(dc, $"{L("内核", "Core")} {native}", left, at(89), midpoint, Scale(17), Muted, smallFont);
             Label(dc, Timestamp(row.LastObservedUtc), midpoint, at(89), right, Scale(17), Muted, smallFont, 2);
         }
     }
@@ -319,9 +366,11 @@ public sealed unsafe partial class DesktopApp
 
     private string ShortResult(DesktopResult? result) => result?.State switch
     {
-        ResultState.AuthenticationRequired => L("鉴权", "Auth"),
+        ResultState.AuthenticationRequired => result?.TargetId is "openai_api" or "anthropic_api"
+            ? L("需密钥", "Key needed") : L("需认证", "Auth needed"),
         ResultState.Restricted => L("受限", "Blocked"),
         ResultState.Failed => L("失败", "Failed"),
+        ResultState.TimedOut => L("超时", "Timeout"),
         ResultState.HttpError => result?.HttpStatus?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "—",
         ResultState.Stale => L("过期", "Stale"),
         ResultState.Incomparable => L("不可比", "N/A"),
@@ -329,7 +378,7 @@ public sealed unsafe partial class DesktopApp
         _ => L("待测", "N/T")
     };
 
-    private void DrawSites(nint dc, DesktopRow row, int left, int right, int iconY, int labelY, int statusY)
+    private void DrawSites(nint dc, DesktopRow row, int left, int right, int iconY, int labelY, int statusY, int noteY)
     {
         int size = Scale(18);
         for (int index = 0; index < Sites.Length; index++)
@@ -351,8 +400,10 @@ public sealed unsafe partial class DesktopApp
                 Label(dc, Sites[index].Short, start, iconY, end, Scale(23), Text, siteStatusFont, 1);
             }
             var result = SiteResult(row, index);
-            string state = result is { State: ResultState.Measured, ElapsedMs: int ms } ? $"{ms}ms" : ShortResult(result);
-            Label(dc, state, start, statusY, end, Scale(18), result is null ? Muted : Text, siteStatusFont, 1);
+            string state = result?.ElapsedMs is int ms && ms > 0 ? $"{ms}ms" : ShortResult(result);
+            Label(dc, state, start, statusY, end, Scale(16), result is null ? Muted : Text, siteStatusFont, 1);
+            if (result is { ElapsedMs: > 0, State: not ResultState.Measured })
+                Label(dc, ShortResult(result), start, noteY, end, Scale(15), Muted, siteStatusFont, 1);
         }
     }
 

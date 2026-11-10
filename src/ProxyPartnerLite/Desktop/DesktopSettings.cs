@@ -455,8 +455,8 @@ public sealed unsafe partial class DesktopApp
         void Result(string name, DesktopResult result)
         {
             string value = result.Format(preferences.English);
-            if (result.ElapsedMs is int ms && result.State != ResultState.Measured) value += $" · {ms} ms";
-            if (result.HttpStatus is int http && result.State is not (ResultState.AuthenticationRequired or ResultState.Restricted))
+            if (result.HttpStatus is int http &&
+                result.State is not (ResultState.AuthenticationRequired or ResultState.Restricted or ResultState.HttpError))
                 value += $" · HTTP {http}";
             string observed = result.ObservedUtc.HasValue ? Timestamp(result.ObservedUtc) + " UTC" : L("时间未知", "Time unknown");
             Line($"{name} · {value} · {observed} · {SourceLabel(result.Source)}");
@@ -478,8 +478,8 @@ public sealed unsafe partial class DesktopApp
         Result("GitHub", row.GitHub);
         foreach (var target in preferences.CustomTargets) Line($"{target.Symbol} {target.ShortName} · {L("待测", "Untested")} · {target.Url}");
         Line();
-        Line(L("401：已到达鉴权。403：服务可能受限。两者均与超时不同。",
-            "401 reached authentication. 403 may indicate a restricted service. Both differ from a timeout."));
+        Line(L("401 表示服务已响应且需要认证。OpenAI API 和 Anthropic API 需要 API 密钥。403 表示服务拒绝访问或需要验证。",
+            "401 means the service responded and requires authentication. OpenAI and Anthropic APIs require API keys. 403 means access is denied or challenged."));
         Line(L("高延迟：看可比成功样本的均值。间歇失败：看跨轮次失败率及异常次数。",
             "High latency: compare mean successful latency. Intermittent failure: inspect failure rate and incident count across rounds."));
         Line(L("无法连接：需要可比的连接失败证据。样本不足：覆盖期或有效尝试不足。",

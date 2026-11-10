@@ -13,7 +13,8 @@ public sealed record HostReadOptions(bool IncludeProviders = false);
 public sealed record LoopbackFallbackAuthorization(
     int CoreProcessId, DateTimeOffset CoreStartedAtUtc, string FilePath, string ApprovedSha256);
 
-public sealed record HostNode(string Name, string Type);
+public sealed record HostNativeSample(DateTimeOffset ObservedUtc, int? ElapsedMs);
+public sealed record HostNode(string Name, string Type, HostNativeSample? Native = null);
 public sealed record HostGroup(string Name, string Type, string? Selected, IReadOnlyList<string> Members);
 public sealed record HostProvider(string Name, IReadOnlyList<string> Members);
 public sealed record HostFacts(

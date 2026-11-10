@@ -2,7 +2,7 @@ namespace ProxyPartnerLite.Desktop;
 
 public enum NodeKind { Leaf, Group }
 public enum CollectionState { Synthetic, Disconnected, Observing, Idle, SleepGap, SourceStopped, Connecting }
-public enum ResultState { Missing, Measured, Stale, Incomparable, AuthenticationRequired, Restricted, Failed, HttpError }
+public enum ResultState { Missing, Measured, Stale, Incomparable, AuthenticationRequired, Restricted, Failed, HttpError, TimedOut }
 public enum QualityState { Insufficient, Good, Poor, Restricted }
 
 public sealed record DesktopQuality(int? Score, QualityState State, string Source);
@@ -16,14 +16,20 @@ public sealed record DesktopResult(
     internal string Format(bool english) => State switch
     {
         ResultState.Missing => english ? "Untested" : "未测",
+        ResultState.Stale when ElapsedMs is > 0 => english ? $"{ElapsedMs} ms · Stale" : $"{ElapsedMs} ms · 已过期",
         ResultState.Stale => english ? "Stale" : "已过期",
         ResultState.Incomparable => english ? "Not comparable" : "不可比较",
-        ResultState.AuthenticationRequired => english ? $"{HttpStatus} Auth response" : $"{HttpStatus} 鉴权响应",
-        ResultState.Restricted => english ? $"{HttpStatus} Restricted" : $"{HttpStatus} 受限",
+        ResultState.AuthenticationRequired => (TargetId is "openai_api" or "anthropic_api"
+            ? english ? $"{HttpStatus} API key required" : $"{HttpStatus} 需 API 密钥"
+            : english ? $"{HttpStatus} Authentication required" : $"{HttpStatus} 需认证") + TimingSuffix,
+        ResultState.Restricted => (english ? $"{HttpStatus} Restricted" : $"{HttpStatus} 受限") + TimingSuffix,
         ResultState.HttpError => $"HTTP {HttpStatus}",
         ResultState.Failed => english ? "Measurement failed" : "测量失败",
+        ResultState.TimedOut => english ? "Timed out" : "超时",
         _ => ElapsedMs is int ms ? $"{ms} ms" : english ? "No timing" : "无耗时"
     };
+
+    private string TimingSuffix => ElapsedMs is int ms ? $" · {ms} ms" : "";
 }
 
 public sealed record DesktopRow(
@@ -33,7 +39,7 @@ public sealed record DesktopRow(
     DesktopResult? Google = null, DesktopResult? YouTube = null, DesktopResult? Anthropic = null,
     string? CurrentTarget = null);
 
-public sealed record DesktopCurrentTest(bool Running, int Completed, int Total, int Verified,
+public sealed record DesktopCurrentTest(bool Running, int Completed, int Total, int Verified, int TimedOut,
     bool Attempted, string? CurrentTarget, bool Direct, bool PathChanged);
 
 public sealed record DesktopSnapshot(

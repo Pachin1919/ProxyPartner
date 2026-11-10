@@ -4,6 +4,7 @@ using ProxyPartnerLite.Host;
 internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTestSource, IDisposable
 {
     private static readonly DesktopResult Untested = new(null, null, null, null, "—", ResultState.Missing);
+    private static readonly TimeSpan NativeFreshness = TimeSpan.FromMinutes(15);
     private readonly CancellationTokenSource stop = new();
     private readonly SemaphoreSlim requested = new(0, 1);
     private readonly Task poll;
@@ -84,8 +85,14 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
         foreach (var node in facts.Nodes)
         {
             bool isCurrent = current?.Node == node.Name;
+            DesktopResult native = node.Native is { } last
+                ? new("native_unknown", last.ElapsedMs, null, last.ObservedUtc, "Mihomo",
+                    facts.ObservedAtUtc - last.ObservedUtc > NativeFreshness ? ResultState.Stale :
+                    last.ElapsedMs.HasValue ? ResultState.Measured : ResultState.Failed)
+                : Untested;
             var row = new DesktopRow("node:" + node.Name, node.Name, NodeKind.Leaf,
-                isCurrent, Untested, Untested, Untested, Untested, null, CurrentTarget: isCurrent ? current?.TargetId : null);
+                isCurrent, native, Untested, Untested, Untested, native.ObservedUtc,
+                CurrentTarget: isCurrent ? current?.TargetId : null);
             foreach (var sample in byNode[node.Name])
             {
                 var result = new DesktopResult(sample.TargetId, sample.ElapsedMs, sample.HttpStatus, sample.ObservedUtc,
@@ -94,7 +101,7 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                         401 => ResultState.AuthenticationRequired,
                         403 => ResultState.Restricted,
                         < 400 => ResultState.Measured,
-                        null => ResultState.Failed,
+                        null => sample.TimedOut ? ResultState.TimedOut : ResultState.Failed,
                         _ => ResultState.HttpError
                     });
                 row = sample.TargetId switch
@@ -116,7 +123,8 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
 
         var test = running || samples.Count != 0
             ? new DesktopCurrentTest(running, samples.Count, ReadOnlyHostClient.CurrentProbeTargetCount,
-                samples.Count(s => s.Node is not null || s.Direct), samples.Any(s => s.Attempted), current?.TargetId,
+                samples.Count(s => s.Node is not null || s.Direct), samples.Count(s => s.TimedOut),
+                samples.Any(s => s.Attempted), current?.TargetId,
                 current?.Direct == true, pathChanged)
             : null;
         Publish(new("Mihomo " + facts.Version, CollectionState.Observing, current?.Node, facts.ObservedAtUtc, rows, test));

@@ -47,7 +47,7 @@ $summary.narrow_checkbox = [ordered]@{ viewport_width=$narrow.Right; card_height
 $null = [DesktopWindows]::MoveWindow($ui.panel,$screen.Left+10,$screen.Top+10,(800+$frame),720,$true)
 $hint = [DesktopWindows]::GetDlgItem($ui.panel,121)
 $cardSize = $checks[-1]
-$summary.site_hover_text = @(foreach ($site in @(@{slot=2;text='OpenAI API · 未测'},@{slot=3;text='ChatGPT · 已过期'})) {
+$summary.site_hover_text = @(foreach ($site in @(@{slot=2;text='OpenAI API · 未测'},@{slot=3;text='ChatGPT · 105 ms · 已过期'})) {
     $x = 17 + [int](($cardSize.card_width-34)*($site.slot+0.5)/5)
     $y = [int]($cardSize.card_height*0.63)
     $null = Send-Number $cards 0x200 0 ($x -bor ($y -shl 16))

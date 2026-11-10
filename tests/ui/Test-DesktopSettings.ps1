@@ -45,7 +45,7 @@ $summary.dark_zh = Save-Window $ui.id $ui.panel $ui.exe 'dark-zh'
 Select-SampleNode '节点 004'
 $details = Open-Auxiliary 125
 $detailZh = Read-Control $details 240
-Assert ($detailZh -like '*节点 004*OPENAI*401 鉴权响应*GPT*403 受限*无法判定*' -and
+Assert ($detailZh -like '*节点 004*OPENAI*401 需 API 密钥*GPT*403 受限*无法判定*' -and
     $detailZh -like '*合成*') "Missing evidence in Chinese node details: $detailZh"
 $summary.details_zh = Save-Window $ui.id $details $ui.exe 'details-zh'
 Close-Panel $details
