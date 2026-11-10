@@ -308,7 +308,8 @@ public sealed unsafe partial class DesktopApp
             {
                 int? rtt = row.ServerPing is null ? row.Native.ElapsedMs : row.ServerPing.ElapsedMs;
                 bool timedOut = row.ServerPing?.State == ResultState.TimedOut;
-                string? delay = rtt is >= 0 ? $"{rtt}ms" : timedOut ? L("超时", "Timeout") : null;
+                string? delay = rtt is >= 0 ? $"{(row.ServerPing is null ? "≈" : "")}{rtt}ms" :
+                    timedOut ? L("超时", "Timeout") : null;
                 string? grade = row.Quality?.Score is int score ? $"S={score}" :
                     row.Quality?.Cap is int cap ? $"S≤{cap}" : null;
                 string headline = delay is not null && grade is not null ? $"{delay} ({grade})" :

@@ -43,7 +43,7 @@ public sealed record DesktopRow(
 public sealed record DesktopCurrentTest(bool Running, int Completed, int Total, int Verified, int TimedOut,
     bool Attempted, string? CurrentTarget, bool Direct, bool PathChanged);
 
-public sealed record DesktopServerSweep(int Eligible, int Observed, int Completed, int BatchTotal, bool Requested,
+public sealed record DesktopServerSweep(int Completed, int BatchTotal, bool Requested,
     string? UnavailableNode = null);
 
 public sealed record DesktopSnapshot(

@@ -467,7 +467,8 @@ public sealed unsafe partial class DesktopApp
             Line($"{L("当前测试线路", "Current tested route")} · {activeSite}");
         if (row.SelectedMember is { } member)
             Line($"{L("组内选中", "Selected group member")} · {member}");
-        Line($"{L("评分", "Score")} {ScoreText(row)}  |  {L("来源", "Source")}: {SourceLabel(row.Quality?.Source ?? "—")}");
+        string scoreLabel = row.Quality is { TargetCount: > 0 } ? L("即时评分", "Live score") : L("评分", "Score");
+        Line($"{scoreLabel} {ScoreText(row)}  |  {L("来源", "Source")}: {SourceLabel(row.Quality?.Source ?? "—")}");
         if (row.Quality is { TargetCount: > 0 } quality)
         {
             Line(L($"评分覆盖 {quality.TargetCount}/5 站 · 已有波动样本 {quality.StableTargetCount}/5 站",

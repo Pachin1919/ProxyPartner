@@ -102,8 +102,7 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                 if (startSweep) unavailableNode = null;
                 void Emit(bool running, string? testingNode = null)
                 {
-                    var sweep = new DesktopServerSweep(eligible.Length,
-                        eligible.Count(serverResults.ContainsKey), batchDone, batchTotal, sweepStarted, unavailableNode);
+                    var sweep = new DesktopServerSweep(batchDone, batchTotal, sweepStarted, unavailableNode);
                     PublishFacts(facts, samples, history.Values, serverResults, current, sweep,
                         running, pathChanged: samples.Count != 0 && testedGroups is null, testingNode);
                 }
