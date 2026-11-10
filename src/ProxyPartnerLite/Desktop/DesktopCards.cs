@@ -64,6 +64,7 @@ public sealed unsafe partial class DesktopApp
     }
 
     private static uint Color(uint rgb) => ((rgb & 0xff) << 16) | (rgb & 0xff00) | (rgb >> 16);
+    private uint TimeoutInk => Color(preferences.Light ? 0x9F253E : 0xFFABA9);
 
     private nint HandleCards(uint msg, nuint wParam, nint lParam)
     {
@@ -287,7 +288,8 @@ public sealed unsafe partial class DesktopApp
             }
             int midpoint = (left + right) / 2;
             uint scoreColor = preferences.Light ? Text : DarkScoreColor(row.Quality?.Score) ?? Text;
-            if (source is IDesktopCurrentTestSource && row.Kind == NodeKind.Leaf && row.Quality?.Score is null)
+            bool liveLatency = source is IDesktopCurrentTestSource && row.Kind == NodeKind.Leaf && row.Quality?.Score is null;
+            if (liveLatency)
             {
                 string headline = row.ServerPing?.ElapsedMs is int rtt ? $"{rtt} ms" : row.ServerPing?.State switch
                 {
@@ -295,7 +297,8 @@ public sealed unsafe partial class DesktopApp
                     ResultState.Failed => L("无响应", "No reply"),
                     _ => "—"
                 };
-                Label(dc, headline, left, at(23), right, Scale(38), Text, scoreFont);
+                Label(dc, headline, left, at(23), right, Scale(38),
+                    row.ServerPing?.State == ResultState.TimedOut ? TimeoutInk : Text, scoreFont);
                 int? median = MedianWebsiteTime(row);
                 string caption = median is int websiteMs
                     ? L($"VPS（站点 {websiteMs} ms）", $"VPS (web {websiteMs} ms)")
@@ -315,7 +318,9 @@ public sealed unsafe partial class DesktopApp
             int badgeLeft = Math.Max(midpoint, right - Scale(102));
             Rounded(dc, Box(badgeLeft, at(28), right - badgeLeft, Scale(20)), Scale(8), Control);
             Rounded(dc, Box(badgeLeft + Scale(7), at(28) + Scale(8), Scale(5), Scale(5)), Scale(5), tone.Accent);
-            Label(dc, tone.Label, badgeLeft + Scale(17), at(28), right - Scale(4), Scale(20), tone.Text, smallFont);
+            Label(dc, row.Quality?.Cap is not null ? ScoreText(row) : tone.Label,
+                badgeLeft + Scale(17), at(28), right - Scale(4), Scale(20),
+                row.Quality?.Cap is not null ? TimeoutInk : tone.Text, smallFont);
             if (row.IsCurrent || row.Kind == NodeKind.Group)
                 Label(dc, row.SelectedMember is not null ? L("组内已选", "Member selected")
                     : row.IsCurrent && CurrentSiteLabel(row.CurrentTarget) is { } site
@@ -323,12 +328,13 @@ public sealed unsafe partial class DesktopApp
                         : row.IsCurrent ? L("宿主当前", "Host current") : L("策略组", "Policy group"),
                     midpoint, at(38), right, Scale(16), row.CurrentTarget is not null ? CurrentInk : Muted, smallFont, 2);
             Fill(dc, Box(left, at(48), Math.Max(0, right - left), 1), Border);
-            DrawSites(dc, row, left, right, at(52), at(63), at(71), at(79));
+            DrawSites(dc, row, left, right, at(52), at(63), at(73));
             Fill(dc, Box(left, at(86), Math.Max(0, right - left), 1), Border);
             string native = row.Native.State == ResultState.Stale
                 ? row.Native.ElapsedMs is int old ? L($"旧 {old} ms", $"Old {old} ms") : L("旧失败", "Past failure")
                 : ShortResult(row.Native);
-            Label(dc, $"{L("内核", "Core")} {native}", left, at(89), midpoint, Scale(17), Muted, smallFont);
+            if (!liveLatency)
+                Label(dc, $"{L("内核", "Core")} {native}", left, at(89), midpoint, Scale(17), Muted, smallFont);
             Label(dc, Timestamp(row.LastObservedUtc), midpoint, at(89), right, Scale(17), Muted, smallFont, 2);
         }
     }
@@ -398,8 +404,7 @@ public sealed unsafe partial class DesktopApp
 
     private string ShortResult(DesktopResult? result) => result?.State switch
     {
-        ResultState.AuthenticationRequired => result?.TargetId is "openai_api" or "anthropic_api"
-            ? L("需密钥", "Key needed") : L("需认证", "Auth needed"),
+        ResultState.AuthenticationRequired => "—",
         ResultState.Restricted => L("受限", "Blocked"),
         ResultState.Failed => L("失败", "Failed"),
         ResultState.TimedOut => L("超时", "Timeout"),
@@ -410,7 +415,15 @@ public sealed unsafe partial class DesktopApp
         _ => L("待测", "N/T")
     };
 
-    private void DrawSites(nint dc, DesktopRow row, int left, int right, int iconY, int labelY, int statusY, int noteY)
+    private string FormatSiteLatency(DesktopResult? result) => result switch
+    {
+        { ElapsedMs: >= 0 and int ms, State: ResultState.Measured or ResultState.AuthenticationRequired
+            or ResultState.Restricted or ResultState.HttpError } => $"{ms} ms",
+        { State: ResultState.AuthenticationRequired } => "—",
+        _ => result?.Format(preferences.English) ?? L("待测", "Untested")
+    };
+
+    private void DrawSites(nint dc, DesktopRow row, int left, int right, int iconY, int labelY, int statusY)
     {
         int size = Scale(18);
         for (int index = 0; index < Sites.Length; index++)
@@ -432,10 +445,10 @@ public sealed unsafe partial class DesktopApp
                 Label(dc, Sites[index].Short, start, iconY, end, Scale(23), Text, siteStatusFont, 1);
             }
             var result = SiteResult(row, index);
-            string state = result?.ElapsedMs is int ms && ms > 0 ? $"{ms}ms" : ShortResult(result);
-            Label(dc, state, start, statusY, end, Scale(16), result is null ? Muted : Text, siteStatusFont, 1);
-            if (result is { ElapsedMs: > 0, State: not ResultState.Measured })
-                Label(dc, ShortResult(result), start, noteY, end, Scale(15), Muted, siteStatusFont, 1);
+            string state = result?.ElapsedMs is >= 0 and int ms && result.State != ResultState.TimedOut
+                ? $"{ms}ms" : ShortResult(result);
+            uint ink = result?.State == ResultState.TimedOut ? TimeoutInk : result is null ? Muted : Text;
+            Label(dc, state, start, statusY, end, Scale(16), ink, siteStatusFont, 1);
         }
     }
 
@@ -484,7 +497,7 @@ public sealed unsafe partial class DesktopApp
         if ((uint)hoverIndex >= rows.Length) return L("悬停查看站点状态", "Hover to see target details");
         var row = rows[hoverIndex];
         return hoverSite < 0 ? row.Name :
-            $"{Sites[hoverSite].Name} · {SiteResult(row, hoverSite)?.Format(preferences.English) ?? L("待测", "Untested")}";
+            $"{Sites[hoverSite].Name} · {FormatSiteLatency(SiteResult(row, hoverSite))}";
     }
 
     private void GetTooltipText(TooltipInfo* info)

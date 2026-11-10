@@ -467,6 +467,12 @@ public sealed unsafe partial class DesktopApp
         if (row.SelectedMember is { } member)
             Line($"{L("组内选中", "Selected group member")} · {member}");
         Line($"{L("评分", "Score")} {ScoreText(row)}  |  {L("来源", "Source")}: {SourceLabel(row.Quality?.Source ?? "—")}");
+        if (row.Quality is { Cap: int cap, CapTarget: { } target })
+        {
+            string site = CurrentSiteLabel(target) ?? target;
+            string reason = cap == 20 ? L("超时", "timed out") : L("响应超过 2500 ms", "response exceeded 2500 ms");
+            Line(L($"评分上限 {cap} · {site} {reason}", $"Score cap {cap} · {site} {reason}"));
+        }
         if (synthetic) Line(L("以下为合成样例。编辑权重只更新设置内的算例。", "Synthetic sample. Changing weights updates the Settings example only."));
         Line();
         if (row.ServerPing is { } server) Result("VPS Ping", server);

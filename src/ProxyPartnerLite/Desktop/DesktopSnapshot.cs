@@ -5,7 +5,8 @@ public enum CollectionState { Synthetic, Disconnected, Observing, Idle, SleepGap
 public enum ResultState { Missing, Measured, Stale, Incomparable, AuthenticationRequired, Restricted, Failed, HttpError, TimedOut }
 public enum QualityState { Insufficient, Good, Poor, Restricted }
 
-public sealed record DesktopQuality(int? Score, QualityState State, string Source);
+public sealed record DesktopQuality(int? Score, QualityState State, string Source,
+    int? Cap = null, string? CapTarget = null);
 
 public sealed record DesktopResult(
     string? TargetId, int? ElapsedMs, int? HttpStatus, DateTimeOffset? ObservedUtc,

@@ -568,7 +568,7 @@ public sealed unsafe partial class DesktopApp
                     : L($" · 显示 {rows.Length} 个节点", $" · {rows.Length} nodes shown"))
                 : "";
             string probe = "";
-            if (snapshot.CurrentTest is { } test)
+            if (snapshot.Collection == CollectionState.Observing && snapshot.CurrentTest is { } test)
             {
                 probe = test.Running ? L($" · 测试中 {test.Completed}/{test.Total}", $" · Testing {test.Completed}/{test.Total}")
                     : test.PathChanged ? L(" · 组选项已变，重测可确认当前节点", " · Group selection changed. Retest to verify.")
@@ -577,7 +577,7 @@ public sealed unsafe partial class DesktopApp
                 if (test.TimedOut > 0) probe += L($" · 超时 {test.TimedOut} 项", $" · {test.TimedOut} timed out");
                 if (test.Direct) probe += L($" · {CurrentSiteLabel(test.CurrentTarget)} 直连", $" · {CurrentSiteLabel(test.CurrentTarget)} direct");
             }
-            if (snapshot.ServerSweep is { } sweep)
+            if (snapshot.Collection == CollectionState.Observing && snapshot.ServerSweep is { } sweep)
             {
                 if (sweep.Eligible > 0)
                     probe += $" · VPS {sweep.Observed}/{sweep.Eligible}";
@@ -682,8 +682,8 @@ public sealed unsafe partial class DesktopApp
         {
             0 => row.Kind == NodeKind.Group ? $"{L("[组]", "[Group]")} {row.Name}" : row.Name,
             1 => row.SelectedMember ?? (row.IsCurrent ? L("当前", "Current") : "—"),
-            2 => row.Native.Format(preferences.English), 3 => row.OpenAi.Format(preferences.English),
-            4 => row.ChatGpt.Format(preferences.English), 5 => row.GitHub.Format(preferences.English),
+            2 => row.Native.Format(preferences.English), 3 => FormatSiteLatency(row.OpenAi),
+            4 => FormatSiteLatency(row.ChatGpt), 5 => FormatSiteLatency(row.GitHub),
             6 => Timestamp(row.LastObservedUtc), 7 => ScoreText(row),
             8 => row.Kind == NodeKind.Group ? "—" : tested.Contains(row.Id) ? L("已勾选", "Checked") : L("未勾选", "Unchecked"),
             9 => GetTone(row).Label, _ => ""
@@ -696,6 +696,10 @@ public sealed unsafe partial class DesktopApp
     private string Timestamp(DateTimeOffset? timestamp) =>
         timestamp?.UtcDateTime.ToString("MM-dd HH:mm", System.Globalization.CultureInfo.InvariantCulture) ?? L("未知", "Unknown");
 
-    private string ScoreText(DesktopRow row) => row.Quality?.Score is int score
-        ? preferences.English ? score.ToString(System.Globalization.CultureInfo.InvariantCulture) : $"{score} 分" : "—";
+    private string ScoreText(DesktopRow row) => row.Quality switch
+    {
+        { Score: int score } => L($"{score} 分", $"{score}"),
+        { Cap: int cap } => L($"≤{cap} 分", $"≤{cap}"),
+        _ => "—"
+    };
 }

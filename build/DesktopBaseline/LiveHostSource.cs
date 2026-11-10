@@ -156,10 +156,9 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                     if (wait < TimeSpan.Zero) wait = TimeSpan.Zero;
                 }
             }
-            else if (GetSnapshot().Collection != CollectionState.Disconnected)
+            else if (GetSnapshot() is { Collection: not CollectionState.Disconnected } previous)
             {
-                previousPid = null;
-                Publish(new("Clash Verge", CollectionState.Disconnected, null, null, []));
+                Publish(previous with { Collection = CollectionState.Disconnected });
             }
             await requested.WaitAsync(wait, stop.Token).ConfigureAwait(false);
         } while (!stop.IsCancellationRequested);
@@ -187,6 +186,8 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
             var row = new DesktopRow("node:" + node.Name, node.Name, NodeKind.Leaf,
                 isCurrent, native, Untested, Untested, Untested, lastObserved,
                 CurrentTarget: isCurrent ? current?.TargetId : null, ServerPing: server);
+            int? cap = null;
+            string? capTarget = null;
             foreach (var sample in byNode[node.Name])
             {
                 var result = new DesktopResult(sample.TargetId, sample.ElapsedMs, sample.HttpStatus, sample.ObservedUtc,
@@ -209,7 +210,19 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                 };
                 if (row.LastObservedUtc is null || sample.ObservedUtc > row.LastObservedUtc)
                     row = row with { LastObservedUtc = sample.ObservedUtc };
+                if (sample.TargetId is "openai_api" or "chatgpt_web" or "anthropic_api" &&
+                    facts.ObservedAtUtc - sample.ObservedUtc <= NativeFreshness)
+                {
+                    int? targetCap = sample.TimedOut ? 20 : sample.ElapsedMs > 2500 ? 40 : null;
+                    if (targetCap.HasValue && (cap is null || targetCap < cap))
+                    {
+                        cap = targetCap;
+                        capTarget = sample.TargetId;
+                    }
+                }
             }
+            if (cap.HasValue)
+                row = row with { Quality = new(null, QualityState.Poor, "HTTPS", cap, capTarget) };
             rows[index++] = row;
         }
         foreach (var group in facts.Groups)
