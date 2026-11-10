@@ -87,7 +87,7 @@ function Find-Tray([int]$Id) {
     [DesktopWindows]::Find($Id,'ProxyPartner.Tray',$false)
 }
 function Start-Panel($Artifact, [string]$Name = 'launch') {
-    $run = Start-Recorded $Name $Artifact.exe @()
+    $run = Start-Recorded $Name $Artifact.exe @('--demo')
     $panel = Wait-Value { Find-Panel $run.process.Id } 'Product window did not appear.'
     $tray = Wait-Value { Find-Tray $run.process.Id } 'Product tray HWND did not appear.'
     [pscustomobject]@{ run=$run; panel=$panel; tray=$tray; id=$run.process.Id; exe=$Artifact.exe }

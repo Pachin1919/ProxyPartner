@@ -8,7 +8,9 @@ using ProxyPartnerLite.Host;
 
 namespace ProxyPartnerLite.Discovery;
 
-internal sealed record CoreIdentity(int Pid, DateTimeOffset StartedAtUtc, string Image, string Owner, int Session);
+internal sealed record CoreIdentity(int Pid, DateTimeOffset? StartedAtUtc, string? Image, string? Owner, int Session,
+    VergeServicePeer? Service = null);
+internal sealed record VergeServicePeer(CoreIdentity Ui, int Pid);
 
 internal static partial class WindowsPeer
 {
@@ -19,10 +21,12 @@ internal static partial class WindowsPeer
         string owner = user.User?.Value ?? throw new HostFailure(HostStatus.AccessDenied);
         var ui = CurrentImages("clash-verge", self.SessionId, owner);
         var cores = CurrentImages("verge-mihomo", self.SessionId, owner);
-        if (ui.Count == 0 || cores.Count == 0)
+        if (ui.Count == 0)
             throw new HostFailure(HostStatus.HostUnavailable);
-        if (ui.Count != 1 || cores.Count != 1)
+        if (ui.Count != 1 || cores.Count > 1)
             throw new HostFailure(HostStatus.Ambiguous);
+        if (cores.Count == 0)
+            return DiscoverServiceCore(ui[0]);
         if (!Path.GetDirectoryName(ui[0].Image)!.Equals(Path.GetDirectoryName(cores[0].Image),
             StringComparison.OrdinalIgnoreCase) || cores[0].StartedAtUtc < ui[0].StartedAtUtc ||
             ParentOf(cores[0].Pid) != ui[0].Pid)
@@ -42,7 +46,7 @@ internal static partial class WindowsPeer
                 var image = Inspect(process.Id);
                 if (image.Owner != owner)
                     continue;
-                if (!Path.GetFileName(image.Image).Equals(name + ".exe", StringComparison.OrdinalIgnoreCase))
+                if (!string.Equals(Path.GetFileName(image.Image), name + ".exe", StringComparison.OrdinalIgnoreCase))
                     throw new HostFailure(HostStatus.IdentityRejected);
                 selected.Add(image);
             }
@@ -111,7 +115,13 @@ internal static partial class WindowsPeer
     {
         if (GetNamedPipeServerProcessId(pipe, out int pid) == 0)
             throw new HostFailure(HostStatus.IdentityRejected);
-        Verify(expected, pid);
+        if (expected.Service is not { } service)
+        {
+            Verify(expected, pid);
+            return;
+        }
+        if (pid != expected.Pid || Inspect(service.Ui.Pid) != service.Ui || DiscoverServiceCore(service.Ui) != expected)
+            throw new HostFailure(HostStatus.IdentityRejected);
     }
 
     internal static unsafe string OpenedFilePath(SafeFileHandle file)

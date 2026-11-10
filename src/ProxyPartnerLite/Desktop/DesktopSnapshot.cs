@@ -1,7 +1,7 @@
 namespace ProxyPartnerLite.Desktop;
 
 public enum NodeKind { Leaf, Group }
-public enum CollectionState { Synthetic, Disconnected, Observing, Idle, SleepGap, SourceStopped }
+public enum CollectionState { Synthetic, Disconnected, Observing, Idle, SleepGap, SourceStopped, Connecting }
 public enum ResultState { Missing, Measured, Stale, Incomparable, AuthenticationRequired, Restricted, Failed }
 public enum QualityState { Insufficient, Good, Poor, Restricted }
 
@@ -28,7 +28,7 @@ public sealed record DesktopResult(
 public sealed record DesktopRow(
     string Id, string Name, NodeKind Kind, bool IsCurrent,
     DesktopResult Native, DesktopResult OpenAi, DesktopResult ChatGpt, DesktopResult GitHub,
-    DateTimeOffset? LastObservedUtc, DesktopQuality? Quality = null);
+    DateTimeOffset? LastObservedUtc, DesktopQuality? Quality = null, string? SelectedMember = null);
 
 public sealed record DesktopSnapshot(
     string Host, CollectionState Collection, string? VerifiedCurrentPath,

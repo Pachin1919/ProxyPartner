@@ -255,7 +255,9 @@ public sealed unsafe partial class DesktopApp
             Rounded(dc, Box(badgeLeft + Scale(7), at(28) + Scale(8), Scale(5), Scale(5)), Scale(5), tone.Accent);
             Label(dc, tone.Label, badgeLeft + Scale(17), at(28), right - Scale(4), Scale(20), tone.Text, smallFont);
             if (row.IsCurrent || row.Kind == NodeKind.Group)
-                Label(dc, row.IsCurrent ? L("宿主当前", "Host current") : L("策略组", "Policy group"), midpoint, at(38), right, Scale(16), Muted, smallFont, 2);
+                Label(dc, row.SelectedMember is not null ? L("组内已选", "Member selected")
+                    : row.IsCurrent ? L("宿主当前", "Host current") : L("策略组", "Policy group"),
+                    midpoint, at(38), right, Scale(16), Muted, smallFont, 2);
             Fill(dc, Box(left, at(48), Math.Max(0, right - left), 1), Border);
             DrawSites(dc, row, left, right, at(55), at(66), at(75));
             Fill(dc, Box(left, at(86), Math.Max(0, right - left), 1), Border);

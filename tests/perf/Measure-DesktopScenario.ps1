@@ -75,7 +75,7 @@ try {
 $summary.win32_cold = @()
 foreach ($iteration in 1..3) {
     $name = "win32-cold-0$iteration"
-    $job = Start-DesktopJob $name $artifact.exe @() 1500
+    $job = Start-DesktopJob $name $artifact.exe @('--demo') 1500
     $rootId = Get-JobRoot $job
     $panel = Wait-Value { Find-Panel $rootId } "No Win32 window in $name."
     $tray = Wait-Value { Find-Tray $rootId } "No Win32 tray HWND in $name."

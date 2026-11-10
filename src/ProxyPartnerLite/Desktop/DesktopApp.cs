@@ -19,7 +19,8 @@ public sealed unsafe partial class DesktopApp
     private readonly string settingsPath;
     private DesktopPreferences preferences;
     private readonly nint module = GetModuleHandle(0);
-    private nint tray, panel, status, search, groups, list, font, icon;
+    private nint tray, panel, status, search, groups, list, font, icon, smallIcon;
+    private bool ownsIcons;
     private uint taskbarCreated;
     private int dpi = 96, sortColumn;
     private bool descending;
@@ -52,6 +53,11 @@ public sealed unsafe partial class DesktopApp
         {
             if (app.panel != 0) DestroyWindow(app.panel);
             if (app.tray != 0) DestroyWindow(app.tray);
+            if (app.ownsIcons)
+            {
+                DestroyIcon(app.icon);
+                if (app.smallIcon != 0 && app.smallIcon != app.icon) DestroyIcon(app.smallIcon);
+            }
             active = null;
         }
     }
@@ -60,7 +66,16 @@ public sealed unsafe partial class DesktopApp
     {
         uint* common = stackalloc uint[] { 8, 1 | 4 };
         if (InitCommonControlsEx(common) == 0) return 1;
-        icon = LoadIcon(0, 32512);
+        if (Environment.ProcessPath is { } path &&
+            ExtractIconEx(path, 0, out icon, out smallIcon, 1) is > 0 and < uint.MaxValue && icon != 0)
+            ownsIcons = true;
+        else
+        {
+            if (icon != 0) DestroyIcon(icon);
+            if (smallIcon != 0 && smallIcon != icon) DestroyIcon(smallIcon);
+            icon = LoadIcon(0, 32512);
+            smallIcon = 0;
+        }
         if (!Register(TrayClass) || !Register(PanelClass) || !Register(CardsClass) || !Register(AuxClass)) return 1;
         taskbarCreated = RegisterWindowMessage("TaskbarCreated");
         tray = CreateWindow(0, TrayClass, L("ProxyPartner · 托盘", "ProxyPartner · Tray"), 0, 0, 0, 0, 0, 0, 0, module, 0);
@@ -94,7 +109,7 @@ public sealed unsafe partial class DesktopApp
             var cls = new WindowClass
             {
                 Size = (uint)sizeof(WindowClass), Proc = &WindowProc, Instance = module,
-                Icon = icon, Cursor = LoadCursor(0, 32512), Background = 16, Name = className
+                Icon = icon, SmallIcon = smallIcon, Cursor = LoadCursor(0, 32512), Background = 16, Name = className
             };
             return RegisterClass(&cls) != 0;
         }
@@ -131,7 +146,7 @@ public sealed unsafe partial class DesktopApp
             }
             if (msg == SnapshotMessage)
             {
-                if (panel != 0) Refresh();
+                if (panel != 0) Refresh(preserveScroll: true);
                 return 0;
             }
             if (msg == WmCommand)
@@ -238,7 +253,7 @@ public sealed unsafe partial class DesktopApp
         var data = new NotifyIcon
         {
             Size = (uint)sizeof(NotifyIcon), Window = tray, Id = 1, Flags = 1 | 2 | 4 | 0x80,
-            Callback = TrayMessage, Icon = icon, Version = 4
+            Callback = TrayMessage, Icon = smallIcon != 0 ? smallIcon : icon, Version = 4
         };
         PanelTitle.AsSpan().CopyTo(new Span<char>(data.Tip, 128));
         return ShellNotifyIcon(message, &data) != 0;
@@ -434,7 +449,7 @@ public sealed unsafe partial class DesktopApp
         Refresh();
     }
 
-    private void Refresh()
+    private void Refresh(bool preserveScroll = false)
     {
         if (list == 0) return;
         var snapshot = source.GetSnapshot();
@@ -452,8 +467,9 @@ public sealed unsafe partial class DesktopApp
         hoverIndex = hoverSite = -1;
         if (!tableMode) SetText(hint, HoverText());
         SyncTable();
-        ScrollCards(0);
-        if (!tableMode && IndexOfSelection() is int selected && selected >= 0) SelectCard(selected);
+        ScrollCards(preserveScroll ? scrollY : 0);
+        if (!preserveScroll && !tableMode && IndexOfSelection() is int selected && selected >= 0) SelectCard(selected);
+        if (detailWindow != 0) RefreshDetails();
         UpdateStatus(snapshot);
     }
 
@@ -487,6 +503,21 @@ public sealed unsafe partial class DesktopApp
     private void UpdateStatus(DesktopSnapshot? snapshot = null)
     {
         snapshot ??= source.GetSnapshot();
+        if (snapshot.Collection is CollectionState.Connecting or CollectionState.Disconnected or CollectionState.Observing)
+        {
+            string connection = snapshot.Collection switch
+            {
+                CollectionState.Connecting => L("正在连接", "Connecting"),
+                CollectionState.Observing => L("已连接", "Connected"),
+                _ => L("未连接", "Disconnected")
+            };
+            string count = snapshot.Collection == CollectionState.Observing
+                ? (showGroups ? L($" · 显示 {rows.Length} 项", $" · {rows.Length} items shown")
+                    : L($" · 显示 {rows.Length} 个节点", $" · {rows.Length} nodes shown"))
+                : "";
+            SetText(status, $"{snapshot.Host} · {connection}{count}");
+            return;
+        }
         string collection = snapshot.Collection switch
         {
             CollectionState.Synthetic => L("合成数据 · 桌面基线", "Synthetic data · Desktop baseline"),
@@ -546,7 +577,7 @@ public sealed unsafe partial class DesktopApp
         string value = item->SubItem switch
         {
             0 => row.Kind == NodeKind.Group ? $"{L("[组]", "[Group]")} {row.Name}" : row.Name,
-            1 => row.IsCurrent ? L("当前", "Current") : "—",
+            1 => row.SelectedMember ?? (row.IsCurrent ? L("当前", "Current") : "—"),
             2 => row.Native.Format(preferences.English), 3 => row.OpenAi.Format(preferences.English),
             4 => row.ChatGpt.Format(preferences.English), 5 => row.GitHub.Format(preferences.English),
             6 => Timestamp(row.LastObservedUtc), 7 => ScoreText(row),

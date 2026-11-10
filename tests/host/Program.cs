@@ -221,7 +221,8 @@ static LoopbackFallbackAuthorization Grant(CoreIdentity core, string path, strin
 {
     byte[] yaml = Encoding.UTF8.GetBytes($"external-controller: {endpoint}\nsecret: {secret}\n");
     File.WriteAllBytes(path, yaml);
-    return new(core.Pid, core.StartedAtUtc, path, Convert.ToHexString(SHA256.HashData(yaml)));
+    return new(core.Pid, core.StartedAtUtc ?? throw new CheckFailed("fixture process start time"), path,
+        Convert.ToHexString(SHA256.HashData(yaml)));
 }
 
 static Process StartFixture(int port)

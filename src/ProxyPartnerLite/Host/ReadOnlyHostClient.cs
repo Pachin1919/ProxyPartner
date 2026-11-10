@@ -43,6 +43,8 @@ public sealed class ReadOnlyHostClient
             }
             catch (HostFailure failure) when (failure.Status == HostStatus.HostUnavailable && read.Requests.Count == 0)
             {
+                if (core.Service is not null)
+                    return read.Result(HostStatus.HostUnavailable);
                 if (fallback is null)
                     return read.Result(HostStatus.FallbackAuthorizationRequired);
             }

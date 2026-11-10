@@ -209,6 +209,9 @@ internal static unsafe partial class Win32
     internal static partial nint Send(nint window, uint msg, nuint wParam, nint lParam);
     [LibraryImport("user32", EntryPoint = "LoadIconW")]
     internal static partial nint LoadIcon(nint module, nint id);
+
+    [LibraryImport("shell32", EntryPoint = "ExtractIconExW", StringMarshalling = StringMarshalling.Utf16)]
+    internal static partial uint ExtractIconEx(string path, int index, out nint large, out nint small, uint count);
     [LibraryImport("user32", EntryPoint = "LoadCursorW")]
     internal static partial nint LoadCursor(nint module, nint id);
     [LibraryImport("user32", EntryPoint = "RegisterWindowMessageW", StringMarshalling = StringMarshalling.Utf16)]

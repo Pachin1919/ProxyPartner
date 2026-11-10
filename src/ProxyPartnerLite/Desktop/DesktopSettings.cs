@@ -462,6 +462,8 @@ public sealed unsafe partial class DesktopApp
             Line($"{name} · {value} · {observed} · {SourceLabel(result.Source)}");
         }
         Line(row.Name);
+        if (row.SelectedMember is { } member)
+            Line($"{L("组内选中", "Selected group member")} · {member}");
         Line($"{L("评分", "Score")} {ScoreText(row)}  |  {L("来源", "Source")}: {SourceLabel(row.Quality?.Source ?? "—")}");
         if (synthetic) Line(L("以下为合成样例。编辑权重只更新设置内的算例。", "Synthetic sample. Changing weights updates the Settings example only."));
         Line();
