@@ -15,6 +15,14 @@ internal static class IndependentNodeProbe
 {
     private const int MaxProfileBytes = 1024 * 1024;
     internal static readonly Uri EchoUrl = new("https://api64.ipify.org/");
+    private static readonly string[] ClashFields =
+    [
+        "name", "type", "server", "port", "uuid", "network", "tls", "servername", "client-fingerprint",
+        "flow", "encryption", "reality-opts", "ws-opts", "alpn", "udp", "xudp", "packet-addr", "packet-encoding",
+        "dialer-proxy", "interface-name", "ip-version", "routing-mark", "skip-cert-verify", "tfo", "mptcp"
+    ];
+    private static readonly string[] WsFields = ["path", "headers", "max-early-data", "v2ray-http-upgrade", "v2ray-http-upgrade-fast-open"];
+    private static readonly string[] RealityFields = ["public-key", "short-id"];
 
     internal static Dictionary<string, ProbeProfile> Load(string path)
     {
@@ -71,20 +79,23 @@ internal static class IndependentNodeProbe
 
         foreach (var entry in proxies.Children.OfType<YamlMappingNode>())
         {
-            if (Text(entry, "type") != "vless" || Text(entry, "name") is not { } name ||
+            if (Text(entry, "type") != "vless" || !HasOnly(entry, ClashFields) || Text(entry, "name") is not { } name ||
                 Text(entry, "server") is not { } server || Uri.CheckHostName(server) == UriHostNameType.Unknown ||
                 !int.TryParse(Text(entry, "port"), out int port) || port is < 1 or > 65535 ||
                 !Guid.TryParse(Text(entry, "uuid"), out Guid id) ||
                 Text(entry, "encryption") is not (null or "" or "none") ||
                 Text(entry, "dialer-proxy") is not (null or "") ||
                 Text(entry, "interface-name") is not (null or "") ||
-                Text(entry, "skip-cert-verify")?.ToLowerInvariant() == "true" ||
-                Field(entry, "ech-opts") is not null || Field(entry, "certificate") is not null ||
-                Field(entry, "fingerprint") is not null)
+                Text(entry, "ip-version") is not (null or "" or "dual") ||
+                Text(entry, "routing-mark") is not (null or "" or "0") ||
+                Text(entry, "skip-cert-verify")?.ToLowerInvariant() is not (null or "" or "false") ||
+                Text(entry, "tfo")?.ToLowerInvariant() is not (null or "" or "false") ||
+                Text(entry, "mptcp")?.ToLowerInvariant() is not (null or "" or "false"))
                 continue;
             string network = Text(entry, "network") ?? "tcp";
             if (network is not ("tcp" or "ws" or "httpupgrade")) continue;
             var ws = Field(entry, "ws-opts") as YamlMappingNode;
+            if (!HasOnly(ws, WsFields)) continue;
             var headers = Field(ws, "headers") as YamlMappingNode;
             string? host = Text(headers, "Host") ?? Text(headers, "host");
             if ((headers?.Children.Count ?? 0) > (host is null ? 0 : 1) ||
@@ -93,6 +104,7 @@ internal static class IndependentNodeProbe
                 continue;
             if (network == "ws" && Text(ws, "v2ray-http-upgrade") == "true") network = "httpupgrade";
             var reality = Field(entry, "reality-opts") as YamlMappingNode;
+            if (!HasOnly(reality, RealityFields)) continue;
             string security = reality is not null ? "reality" :
                 Text(entry, "tls")?.ToLowerInvariant() == "true" ? "tls" : "none";
             var parts = new List<string> { $"type={network}", $"security={security}", "encryption=none" };
@@ -119,6 +131,10 @@ internal static class IndependentNodeProbe
 
     private static string? Text(YamlMappingNode? map, string name) =>
         (Field(map, name) as YamlScalarNode)?.Value;
+
+    private static bool HasOnly(YamlMappingNode? map, string[] fields) =>
+        map is null || map.Children.Keys.All(key =>
+            key is YamlScalarNode { Value: { } name } && fields.Contains(name, StringComparer.Ordinal));
 
     internal static async Task<IPAddress?> MeasureAsync(string node, ProbeProfile profile,
         IReadOnlyList<(string Id, Uri Url)> targets, Uri echo, Action<WebsiteProbe> publish, CancellationToken stop)
