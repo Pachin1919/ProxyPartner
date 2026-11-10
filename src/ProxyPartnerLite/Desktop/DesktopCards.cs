@@ -300,7 +300,7 @@ public sealed unsafe partial class DesktopApp
                 string caption = median is int websiteMs
                     ? L($"VPS（站点 {websiteMs} ms）", $"VPS (web {websiteMs} ms)")
                     : "VPS Ping";
-                Label(dc, caption, left, at(38), current ? right - Scale(68) : right, Scale(16), Muted, smallFont);
+                Label(dc, caption, left, at(38), row.IsCurrent ? right - Scale(68) : right, Scale(16), Muted, smallFont);
             }
             else if (row.Quality?.Score is null && row.Native.ElapsedMs is > 0 and int nativeMs)
             {
