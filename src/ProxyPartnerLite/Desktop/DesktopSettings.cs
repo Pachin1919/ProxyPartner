@@ -406,6 +406,7 @@ public sealed unsafe partial class DesktopApp
         SetText(groups, L("策略组", "Groups"));
         SetText(settingsButton, L("设置", "Settings"));
         SetText(detailButton, L("详情", "Details"));
+        if (serverTestButton != 0) SetText(serverTestButton, L("全部测速", "Test all"));
         SetText(cards, L("节点卡片", "Node cards"));
         SetText(hint, tableMode ? TableHint : HoverText());
         Send(list, LvmFirst + 1, 0, (nint)Background);
@@ -467,6 +468,11 @@ public sealed unsafe partial class DesktopApp
         if (row.SelectedMember is { } member)
             Line($"{L("组内选中", "Selected group member")} · {member}");
         Line($"{L("评分", "Score")} {ScoreText(row)}  |  {L("来源", "Source")}: {SourceLabel(row.Quality?.Source ?? "—")}");
+        if (row.Quality is { TargetCount: > 0 } quality)
+        {
+            Line(L($"评分覆盖 {quality.TargetCount}/5 站 · 已有波动样本 {quality.StableTargetCount}/5 站",
+                $"Score covers {quality.TargetCount}/5 sites · Variability measured for {quality.StableTargetCount}/5"));
+        }
         if (row.Quality is { Cap: int cap, CapTarget: { } capTarget })
         {
             string site = CurrentSiteLabel(capTarget) ?? capTarget;
@@ -476,8 +482,8 @@ public sealed unsafe partial class DesktopApp
         if (synthetic) Line(L("以下为合成样例。编辑权重只更新设置内的算例。", "Synthetic sample. Changing weights updates the Settings example only."));
         Line();
         if (row.ServerPing is { } server) Result("VPS Ping", server);
-        else if (!synthetic && row.Kind == NodeKind.Leaf)
-            Line(L("VPS Ping · 暂无 ICMP 结果", "VPS Ping · No ICMP result yet"));
+        else if (!synthetic && row.Kind == NodeKind.Leaf && row.Native.ElapsedMs is >= 0)
+            Line(L("卡片延迟来源 · Mihomo 内核 URLTest 参考值", "Card latency source · Mihomo URLTest reference"));
         Result(L("内核延迟", "Core latency"), row.Native);
         Result("OPENAI (OpenAI API)", row.OpenAi);
         Result("GPT (ChatGPT)", row.ChatGpt);

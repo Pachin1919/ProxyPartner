@@ -6,7 +6,7 @@ public enum ResultState { Missing, Measured, Stale, Incomparable, Authentication
 public enum QualityState { Insufficient, Good, Poor, Restricted }
 
 public sealed record DesktopQuality(int? Score, QualityState State, string Source,
-    int? Cap = null, string? CapTarget = null);
+    int? Cap = null, string? CapTarget = null, int TargetCount = 0, int StableTargetCount = 0);
 
 public sealed record DesktopResult(
     string? TargetId, int? ElapsedMs, int? HttpStatus, DateTimeOffset? ObservedUtc,
@@ -38,12 +38,13 @@ public sealed record DesktopRow(
     DesktopResult Native, DesktopResult OpenAi, DesktopResult ChatGpt, DesktopResult GitHub,
     DateTimeOffset? LastObservedUtc, DesktopQuality? Quality = null, string? SelectedMember = null,
     DesktopResult? Google = null, DesktopResult? YouTube = null, DesktopResult? Anthropic = null,
-    string? CurrentTarget = null, DesktopResult? ServerPing = null);
+    string? CurrentTarget = null, DesktopResult? ServerPing = null, bool Testing = false);
 
 public sealed record DesktopCurrentTest(bool Running, int Completed, int Total, int Verified, int TimedOut,
     bool Attempted, string? CurrentTarget, bool Direct, bool PathChanged);
 
-public sealed record DesktopServerSweep(int Eligible, int Observed, int Completed, int BatchTotal, bool Requested);
+public sealed record DesktopServerSweep(int Eligible, int Observed, int Completed, int BatchTotal, bool Requested,
+    string? UnavailableNode = null);
 
 public sealed record DesktopSnapshot(
     string Host, CollectionState Collection, string? VerifiedCurrentPath,
@@ -53,7 +54,8 @@ public sealed record DesktopSnapshot(
 public interface IDesktopCurrentTestSource
 {
     void RequestCurrentTest();
-    void RequestServerSweep();
+    void RequestSweep();
+    void RequestNodeTest(string node);
 }
 
 public interface IDesktopSnapshotSource

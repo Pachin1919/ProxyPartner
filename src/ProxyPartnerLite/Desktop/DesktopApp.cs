@@ -9,7 +9,6 @@ public sealed unsafe partial class DesktopApp
     private const string TrayClass = "ProxyPartner.Tray", PanelClass = "ProxyPartner.Panel";
     private const uint TrayMessage = 0x8001, SnapshotMessage = 0x8002;
     private const int Open = 101, Exit = 102, Search = 103, Groups = 104, Toggle = 107, SortMenu = 108, SortFirst = 110;
-    private const int TestCurrent = 130;
     private const int TestServers = 131;
     private static readonly string[] ZhColumns = ["节点", "当前", "原生延迟", "OPENAI", "GPT", "GitHub", "最近样本 (UTC)", "评分", "测试选择", "质量状态"];
     private static readonly string[] EnColumns = ["Node", "Current", "Native latency", "OPENAI", "GPT", "GitHub", "Last sample (UTC)", "Score", "Test selection", "Quality"];
@@ -22,10 +21,10 @@ public sealed unsafe partial class DesktopApp
     private DesktopPreferences preferences;
     private readonly nint module = GetModuleHandle(0);
     private nint tray, panel, status, search, groups, list, font, icon, smallIcon;
-    private nint testButton, serverTestButton;
+    private nint serverTestButton, combinedFont;
     private bool ownsIcons;
     private bool bufferedPaint;
-    private string? lastStatusText, lastTestCaption, lastSweepCaption;
+    private string? lastStatusText;
     private uint taskbarCreated;
     private int dpi = 96, sortColumn;
     private bool descending;
@@ -190,8 +189,8 @@ public sealed unsafe partial class DesktopApp
                     if (settingsWindow != 0) DestroyWindow(settingsWindow);
                     if (detailWindow != 0) DestroyWindow(detailWindow);
                     FreeCardArtwork();
-                    panel = status = search = groups = list = cards = toggle = title = searchLabel = sortButton = hint = settingsButton = detailButton = testButton = serverTestButton = 0;
-                    lastStatusText = lastTestCaption = lastSweepCaption = null;
+                    panel = status = search = groups = list = cards = toggle = title = searchLabel = sortButton = hint = settingsButton = detailButton = serverTestButton = 0;
+                    lastStatusText = null;
                     FreeFonts();
                     if (editBrush != 0) DeleteObject(editBrush);
                     if (toolsBrush != 0) DeleteObject(toolsBrush);
@@ -237,8 +236,7 @@ public sealed unsafe partial class DesktopApp
                     if (id == SortMenu) ShowSortMenu();
                     if (id == OpenSettings) ShowSettings();
                     if (id == OpenDetails) ShowDetails();
-                    if (id == TestCurrent && source is IDesktopCurrentTestSource test) test.RequestCurrentTest();
-                    if (id == TestServers && source is IDesktopCurrentTestSource servers) servers.RequestServerSweep();
+                    if (id == TestServers && source is IDesktopCurrentTestSource servers) servers.RequestSweep();
                     if (id >= SortFirst && id < SortFirst + Columns.Length) Sort(id - SortFirst);
                     return 0;
                 case WmNotify:
@@ -315,10 +313,7 @@ public sealed unsafe partial class DesktopApp
         settingsButton = Child("BUTTON", L("设置", "Settings"), WsTabStop | 11, OpenSettings);
         detailButton = Child("BUTTON", L("详情", "Details"), WsTabStop | 11, OpenDetails);
         if (source is IDesktopCurrentTestSource)
-        {
-            testButton = Child("BUTTON", L("重测网站", "Retest sites"), WsTabStop | 11, TestCurrent);
-            serverTestButton = Child("BUTTON", L("服务器全测", "Ping all"), WsTabStop | 11, TestServers);
-        }
+            serverTestButton = Child("BUTTON", L("全部测速", "Test all"), WsTabStop | 11, TestServers);
         list = Child("SysListView32", "", WsTabStop | 0x1000 | 1 | 4 | 8, 105);
         cards = Child(CardsClass, L("节点卡片", "Node cards"), WsTabStop | 0x200000, 106);
         if (title == 0 || status == 0 || search == 0 || searchLabel == 0 || hint == 0 || groups == 0 || list == 0 ||
@@ -361,7 +356,7 @@ public sealed unsafe partial class DesktopApp
         }
         else ApplyDpi(initialDpi, null);
         source.SnapshotChanged += OnSnapshotChanged;
-        if (source is IDesktopCurrentTestSource test) test.RequestCurrentTest();
+        if (source is IDesktopCurrentTestSource test) test.RequestSweep();
         Refresh();
         ShowWindow(panel, 5);
         UpdateWindow(panel);
@@ -397,6 +392,7 @@ public sealed unsafe partial class DesktopApp
             boldFont = nextBold;
             smallFont = nextSmall;
             scoreFont = nextScore;
+            combinedFont = Face(22, 650);
             siteStatusFont = nextSiteStatus;
         }
         for (int i = 0; i < Columns.Length; i++)
@@ -417,8 +413,9 @@ public sealed unsafe partial class DesktopApp
         if (boldFont != 0) DeleteObject(boldFont);
         if (smallFont != 0) DeleteObject(smallFont);
         if (scoreFont != 0) DeleteObject(scoreFont);
+        if (combinedFont != 0) DeleteObject(combinedFont);
         if (siteStatusFont != 0) DeleteObject(siteStatusFont);
-        font = boldFont = smallFont = scoreFont = siteStatusFont = 0;
+        font = boldFont = smallFont = scoreFont = combinedFont = siteStatusFont = 0;
     }
 
     private int ToolbarHeight(int width) => Scale((width >= Scale(690) ? 112 : 147) + (width < Scale(940) ? 22 : 0));
@@ -430,8 +427,8 @@ public sealed unsafe partial class DesktopApp
         GetClientRect(panel, &size);
         int pad = Scale(14), width = Math.Max(0, size.Right - pad * 2), top = ToolbarHeight(size.Right);
         bool compact = size.Right < Scale(690);
-        int buttonCount = testButton == 0 ? 5 : 7;
-        int searchWidth = compact ? width : Math.Min(Scale(288), width - Scale(buttonCount == 7 ? 585 : 426));
+        int buttonCount = serverTestButton == 0 ? 5 : 6;
+        int searchWidth = compact ? width : Math.Min(Scale(288), width - Scale(buttonCount == 6 ? 470 : 426));
         int controlX = compact ? pad : pad + searchWidth + Scale(10), controlY = Scale(compact ? 103 : 68);
         int labelWidth = Scale(preferences.English ? 50 : 42);
         MoveWindow(title, pad, Scale(11), width, Scale(24), 1);
@@ -445,9 +442,9 @@ public sealed unsafe partial class DesktopApp
         MoveWindow(groups, controlX + pitch * 2, controlY, slot, Scale(28), 1);
         MoveWindow(settingsButton, controlX + pitch * 3, controlY, slot, Scale(28), 1);
         MoveWindow(detailButton, controlX + pitch * 4, controlY, slot, Scale(28), 1);
-        if (testButton != 0) MoveWindow(testButton, controlX + pitch * 5, controlY, slot, Scale(28), 1);
-        if (serverTestButton != 0) MoveWindow(serverTestButton, controlX + pitch * 6, controlY, slot, Scale(28), 1);
-        int hintX = size.Right < Scale(940) ? pad : controlX + pitch * buttonCount;
+        if (serverTestButton != 0) MoveWindow(serverTestButton, controlX + pitch * 5, controlY, Math.Min(slot, Scale(36)), Scale(28), 1);
+        int hintX = size.Right < Scale(940) ? pad : controlX + pitch * 5 +
+            (serverTestButton == 0 ? 0 : Math.Min(slot, Scale(36)) + Scale(7));
         int hintY = size.Right < Scale(940) ? controlY + Scale(30) : controlY;
         MoveWindow(hint, hintX, hintY, Math.Max(0, size.Right - pad - hintX), Scale(24), 1);
         int contentPad = Scale(24);
@@ -579,34 +576,14 @@ public sealed unsafe partial class DesktopApp
             }
             if (snapshot.Collection == CollectionState.Observing && snapshot.ServerSweep is { } sweep)
             {
-                if (sweep.Eligible > 0)
-                    probe += $" · VPS {sweep.Observed}/{sweep.Eligible}";
-                if (sweep.BatchTotal > 0)
-                    probe += L($" · 全测 {sweep.Completed}/{sweep.BatchTotal}", $" · Sweep {sweep.Completed}/{sweep.BatchTotal}");
+                if (sweep.UnavailableNode is not null)
+                    probe += L(" · 该节点暂无独立测速入口", " · This node has no independent probe route");
+                else if (sweep.BatchTotal > 0)
+                    probe += L($" · 机房 {sweep.Completed}/{sweep.BatchTotal}", $" · Servers {sweep.Completed}/{sweep.BatchTotal}");
                 else if (sweep.Requested)
-                    probe += L(" · 服务器全测缺地址清单", " · Ping all needs ServerTargets.json");
+                    probe += L(" · 其余节点缺少独立测速入口", " · Other nodes have no independent probe route");
             }
             SetStatusText($"{snapshot.Host} · {connection}{count}{probe}");
-            if (testButton != 0)
-            {
-                string caption = snapshot.CurrentTest?.Running == true ? L("测试中", "Testing") : L("重测网站", "Retest sites");
-                if (caption != lastTestCaption)
-                {
-                    lastTestCaption = caption;
-                    SetText(testButton, caption);
-                    InvalidateRect(testButton, 0, 0);
-                }
-            }
-            if (serverTestButton != 0)
-            {
-                string caption = L("服务器全测", "Ping all");
-                if (caption != lastSweepCaption)
-                {
-                    lastSweepCaption = caption;
-                    SetText(serverTestButton, caption);
-                    InvalidateRect(serverTestButton, 0, 0);
-                }
-            }
             return;
         }
         string collection = snapshot.Collection switch

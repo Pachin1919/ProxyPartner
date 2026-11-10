@@ -5,13 +5,13 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
 {
     private static readonly DesktopResult Untested = new(null, null, null, null, "—", ResultState.Missing);
     private static readonly TimeSpan NativeFreshness = TimeSpan.FromMinutes(15);
-    private static readonly TimeSpan ServerInterval = TimeSpan.FromSeconds(10);
     private readonly CancellationTokenSource stop = new();
     private readonly SemaphoreSlim requested = new(0, 1);
     private readonly Task poll;
     private readonly object wakeGate = new();
     private int queuedOrRunning;
     private int sweepRequested;
+    private string? nodeRequested;
     private DesktopSnapshot snapshot = new("Clash Verge", CollectionState.Connecting, null, null, []);
 
     internal LiveHostSource() => poll = Task.Run(PollAsync);
@@ -25,9 +25,16 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
             Wake();
     }
 
-    public void RequestServerSweep()
+    public void RequestSweep()
     {
         Interlocked.Exchange(ref sweepRequested, 1);
+        Interlocked.CompareExchange(ref queuedOrRunning, 1, 0);
+        Wake();
+    }
+
+    public void RequestNodeTest(string node)
+    {
+        Interlocked.Exchange(ref nodeRequested, node);
         Wake();
     }
 
@@ -41,16 +48,15 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
     {
         var client = new ReadOnlyHostClient();
         var samples = new List<WebsiteProbe>(ReadOnlyHostClient.CurrentProbeTargetCount);
-        var latest = new Dictionary<(string Node, string Target), WebsiteProbe>();
+        var history = new Dictionary<(string Node, string Target), WebsiteWindow>();
         var serverResults = new Dictionary<string, DesktopResult>(StringComparer.Ordinal);
         string serverPath = Environment.GetEnvironmentVariable("PROXYPARTNER_SERVER_TARGETS") ??
             Path.Combine(AppContext.BaseDirectory, "ServerTargets.json");
         var serverMap = ServerTargets.Load(serverPath);
-        var manual = new Queue<string>();
+        var batch = new Queue<string>();
         int batchTotal = 0, batchDone = 0;
-        bool manualRequested = false;
-        string? lastServer = null;
-        DateTimeOffset nextServer = DateTimeOffset.MinValue;
+        bool sweepStarted = false;
+        string? unavailableNode = null;
         WebsiteProbe? current = null;
         IReadOnlyList<HostGroup>? testedGroups = null;
         int? previousPid = null;
@@ -58,26 +64,24 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
         {
             var read = await client.ReadAsync(cancellationToken: stop.Token).ConfigureAwait(false);
             if (stop.IsCancellationRequested) return;
-            TimeSpan wait = TimeSpan.FromSeconds(30);
-
             if (read.Facts is { } facts && read.CoreProcessId is int corePid)
             {
                 if (previousPid != corePid)
                 {
                     samples.Clear();
-                    latest.Clear();
+                    history.Clear();
                     serverResults.Clear();
-                    manual.Clear();
+                    batch.Clear();
                     batchTotal = batchDone = 0;
-                    manualRequested = false;
-                    lastServer = null;
-                    nextServer = DateTimeOffset.MinValue;
+                    sweepStarted = false;
+                    unavailableNode = null;
                     current = null;
                     testedGroups = null;
                     previousPid = corePid;
                 }
-                bool startSweep = Interlocked.Exchange(ref sweepRequested, 0) == 1 && manual.Count == 0;
-                if (startSweep)
+                bool startSweep = Interlocked.Exchange(ref sweepRequested, 0) == 1 && batch.Count == 0;
+                string? priority = Interlocked.Exchange(ref nodeRequested, null);
+                if (startSweep || priority is not null)
                 {
                     var updatedMap = ServerTargets.Load(serverPath);
                     foreach (string name in serverResults.Keys.ToArray())
@@ -87,19 +91,21 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                 }
                 var eligible = facts.Nodes.Select(n => n.Name).Where(serverMap.ContainsKey)
                     .Order(StringComparer.Ordinal).ToArray();
-                if (startSweep)
+                if (priority is not null)
                 {
-                    manual = new Queue<string>(eligible);
-                    batchTotal = eligible.Length;
-                    batchDone = 0;
-                    manualRequested = true;
+                    bool currentRequested = priority == current?.Node;
+                    if (currentRequested) Interlocked.CompareExchange(ref queuedOrRunning, 1, 0);
+                    bool canPing = Array.BinarySearch(eligible, priority, StringComparer.Ordinal) >= 0;
+                    unavailableNode = canPing || currentRequested ? null : priority;
+                    if (!canPing) priority = null;
                 }
-                void Emit(bool running)
+                if (startSweep) unavailableNode = null;
+                void Emit(bool running, string? testingNode = null)
                 {
                     var sweep = new DesktopServerSweep(eligible.Length,
-                        eligible.Count(serverResults.ContainsKey), batchDone, batchTotal, manualRequested);
-                    PublishFacts(facts, samples, latest.Values, serverResults, current, sweep,
-                        running, pathChanged: samples.Count != 0 && testedGroups is null);
+                        eligible.Count(serverResults.ContainsKey), batchDone, batchTotal, sweepStarted, unavailableNode);
+                    PublishFacts(facts, samples, history.Values, serverResults, current, sweep,
+                        running, pathChanged: samples.Count != 0 && testedGroups is null, testingNode);
                 }
                 if (Volatile.Read(ref queuedOrRunning) == 1)
                 {
@@ -110,7 +116,12 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                     await client.MeasureCurrentPathAsync(corePid, facts, sample =>
                     {
                         samples.Add(sample);
-                        if (sample.Node is { } node) latest[(node, sample.TargetId)] = sample;
+                        if (sample.Node is { } node)
+                        {
+                            var key = (node, sample.TargetId);
+                            if (history.TryGetValue(key, out var window)) window.Add(sample);
+                            else history[key] = new(sample);
+                        }
                         if (!verified && (sample.Node is not null || sample.Direct))
                         {
                             current = sample;
@@ -120,8 +131,8 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                     }, stop.Token).ConfigureAwait(false);
                     if (!verified) current = null;
                     var names = facts.Nodes.Select(n => n.Name).ToHashSet(StringComparer.Ordinal);
-                    foreach (var key in latest.Keys.ToArray())
-                        if (!names.Contains(key.Node)) latest.Remove(key);
+                    foreach (var key in history.Keys.ToArray())
+                        if (!names.Contains(key.Node)) history.Remove(key);
                     Volatile.Write(ref queuedOrRunning, 0);
                     if (stop.IsCancellationRequested) return;
                 }
@@ -131,29 +142,35 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                     testedGroups = null;
                     current = null;
                 }
-                Emit(running: false);
-                if (eligible.Length != 0)
+                if (startSweep)
                 {
-                    if (DateTimeOffset.UtcNow >= nextServer)
+                    batch = new Queue<string>(eligible.OrderBy(name => name != current?.Node));
+                    batchTotal = batch.Count;
+                    batchDone = 0;
+                    sweepStarted = true;
+                }
+                if (priority is not null && batch.Contains(priority, StringComparer.Ordinal))
+                    batch = new Queue<string>(batch.Where(name => name != priority).Prepend(priority));
+                else if (priority is not null)
+                {
+                    Emit(running: false, testingNode: priority);
+                    serverResults[priority] = await ServerTargets.MeasureAsync(serverMap[priority], stop.Token)
+                        .ConfigureAwait(false);
+                }
+                Emit(running: false);
+                while (Volatile.Read(ref nodeRequested) is null && Volatile.Read(ref queuedOrRunning) == 0 &&
+                    batch.TryDequeue(out string? name))
+                {
+                    if (Array.BinarySearch(eligible, name, StringComparer.Ordinal) < 0)
                     {
-                        while (manual.TryPeek(out string? skipped) &&
-                            Array.BinarySearch(eligible, skipped, StringComparer.Ordinal) < 0)
-                        {
-                            manual.Dequeue();
-                            batchTotal--;
-                        }
-                        bool manualStep = manual.TryDequeue(out string? name);
-                        name ??= eligible.FirstOrDefault(n => StringComparer.Ordinal.Compare(n, lastServer) > 0)
-                            ?? eligible[0];
-                        lastServer = name;
-                        nextServer = DateTimeOffset.UtcNow + ServerInterval;
-                        serverResults[name] = await ServerTargets.MeasureAsync(serverMap[name], stop.Token)
-                            .ConfigureAwait(false);
-                        if (manualStep) batchDone++;
-                        Emit(running: false);
+                        batchTotal--;
+                        continue;
                     }
-                    wait = nextServer - DateTimeOffset.UtcNow;
-                    if (wait < TimeSpan.Zero) wait = TimeSpan.Zero;
+                    Emit(running: false, testingNode: name);
+                    serverResults[name] = await ServerTargets.MeasureAsync(serverMap[name], stop.Token)
+                        .ConfigureAwait(false);
+                    batchDone++;
+                    Emit(running: false);
                 }
             }
             else if (GetSnapshot() is { Collection: not CollectionState.Disconnected } previous)
@@ -166,15 +183,16 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                         ? row with { IsCurrent = false, CurrentTarget = null } : row).ToArray()
                 });
             }
-            await requested.WaitAsync(wait, stop.Token).ConfigureAwait(false);
+            await requested.WaitAsync(TimeSpan.FromSeconds(30), stop.Token).ConfigureAwait(false);
         } while (!stop.IsCancellationRequested);
     }
 
-    private void PublishFacts(HostFacts facts, List<WebsiteProbe> samples, IEnumerable<WebsiteProbe> latest,
+    private void PublishFacts(HostFacts facts, List<WebsiteProbe> samples, IEnumerable<WebsiteWindow> history,
         Dictionary<string, DesktopResult> serverResults, WebsiteProbe? current, DesktopServerSweep sweep,
-        bool running, bool pathChanged)
+        bool running, bool pathChanged, string? testingNode)
     {
-        var byNode = latest.ToLookup(s => s.Node, StringComparer.Ordinal);
+        var byNode = history.ToLookup(s => s.Latest.Node, StringComparer.Ordinal);
+        DateTimeOffset now = DateTimeOffset.UtcNow;
         var rows = new DesktopRow[facts.Nodes.Count + facts.Groups.Count];
         int index = 0;
         foreach (var node in facts.Nodes)
@@ -191,11 +209,15 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                 lastObserved = serverTime;
             var row = new DesktopRow("node:" + node.Name, node.Name, NodeKind.Leaf,
                 isCurrent, native, Untested, Untested, Untested, lastObserved,
-                CurrentTarget: isCurrent ? current?.TargetId : null, ServerPing: server);
+                CurrentTarget: isCurrent ? current?.TargetId : null, ServerPing: server,
+                Testing: node.Name == testingNode || isCurrent && running);
             int? cap = null;
             string? capTarget = null;
-            foreach (var sample in byNode[node.Name])
+            double points = 0;
+            int siteCount = 0, stableCount = 0;
+            foreach (var window in byNode[node.Name])
             {
+                var sample = window.Latest;
                 var result = new DesktopResult(sample.TargetId, sample.ElapsedMs, sample.HttpStatus, sample.ObservedUtc,
                     "HTTPS", sample.HttpStatus switch
                     {
@@ -216,8 +238,14 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                 };
                 if (row.LastObservedUtc is null || sample.ObservedUtc > row.LastObservedUtc)
                     row = row with { LastObservedUtc = sample.ObservedUtc };
+                if (window.Score(now) is { } score)
+                {
+                    points += score.Score;
+                    siteCount++;
+                    if (score.HasStability) stableCount++;
+                }
                 if (sample.TargetId is "openai_api" or "chatgpt_web" or "anthropic_api" &&
-                    facts.ObservedAtUtc - sample.ObservedUtc <= NativeFreshness)
+                    now - sample.ObservedUtc <= WebsiteWindow.Freshness)
                 {
                     int? targetCap = sample.TimedOut ? 20 : sample.ElapsedMs > 2500 ? 40 : null;
                     if (targetCap.HasValue && (cap is null || targetCap < cap))
@@ -227,8 +255,14 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                     }
                 }
             }
-            if (cap.HasValue)
-                row = row with { Quality = new(null, QualityState.Poor, "HTTPS", cap, capTarget) };
+            if (siteCount != 0)
+            {
+                int? score = siteCount == ReadOnlyHostClient.CurrentProbeTargetCount
+                    ? Math.Min((int)Math.Round(points / siteCount), cap ?? 100) : null;
+                QualityState state = score is >= 80 ? QualityState.Good : score is < 60 || cap.HasValue
+                    ? QualityState.Poor : score.HasValue ? QualityState.Restricted : QualityState.Insufficient;
+                row = row with { Quality = new(score, state, "HTTPS", cap, capTarget, siteCount, stableCount) };
+            }
             rows[index++] = row;
         }
         foreach (var group in facts.Groups)

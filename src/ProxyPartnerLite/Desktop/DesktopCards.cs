@@ -139,7 +139,7 @@ public sealed unsafe partial class DesktopApp
                     var check = CardCheckBounds(0, 0);
                     if (localX >= check.Left && localX < check.Right &&
                         localY >= check.Top && localY < check.Bottom)
-                        ToggleTest(index);
+                        ActivateCardAction(index);
                 }
                 return 0;
             case WmKeyDown:
@@ -151,7 +151,7 @@ public sealed unsafe partial class DesktopApp
                 }
                 if (wParam == 0x20)
                 {
-                    ToggleTest(selected);
+                    ActivateCardAction(selected);
                     return 0;
                 }
                 int step = Math.Max(1, viewportHeight / (cardHeight + cardGap)) * columns;
@@ -167,6 +167,13 @@ public sealed unsafe partial class DesktopApp
                 return 0;
         }
         return Default(cards, msg, wParam, lParam);
+    }
+
+    private void ActivateCardAction(int index)
+    {
+        if ((uint)index >= rows.Length || rows[index].Kind != NodeKind.Leaf) return;
+        if (source is IDesktopCurrentTestSource test) test.RequestNodeTest(rows[index].Name);
+        else ToggleTest(index);
     }
 
     private void LayoutCards()
@@ -280,30 +287,35 @@ public sealed unsafe partial class DesktopApp
             Label(dc, row.Name, left + Scale(preferences.Light ? 9 : 0), at(8), right - Scale(25), Scale(24), Text, boldFont);
             if (row.Kind == NodeKind.Leaf)
             {
-                bool tick = tested.Contains(row.Id);
                 var check = CardCheckBounds(x, y);
-                Rounded(dc, check, Scale(5), tick ? Active : Border);
-                Label(dc, tick ? "✓" : "□", check.Left + Scale(1), check.Top, check.Right,
-                    check.Bottom - check.Top, tick ? ActiveText : Muted, smallFont, 1);
+                if (source is IDesktopCurrentTestSource)
+                {
+                    Rounded(dc, check, Scale(5), row.Testing ? Active : Control);
+                    DrawSpeedometer(dc, check, row.Testing ? ActiveText : Text, all: false);
+                }
+                else
+                {
+                    bool tick = tested.Contains(row.Id);
+                    Rounded(dc, check, Scale(5), tick ? Active : Border);
+                    Label(dc, tick ? "✓" : "□", check.Left + Scale(1), check.Top, check.Right,
+                        check.Bottom - check.Top, tick ? ActiveText : Muted, smallFont, 1);
+                }
             }
             int midpoint = (left + right) / 2;
             uint scoreColor = preferences.Light ? Text : DarkScoreColor(row.Quality?.Score) ?? Text;
-            bool liveLatency = source is IDesktopCurrentTestSource && row.Kind == NodeKind.Leaf && row.Quality?.Score is null;
+            bool liveLatency = source is IDesktopCurrentTestSource && row.Kind == NodeKind.Leaf;
             if (liveLatency)
             {
-                string headline = row.ServerPing?.ElapsedMs is int rtt ? $"{rtt} ms" : row.ServerPing?.State switch
-                {
-                    ResultState.TimedOut => L("超时", "Timeout"),
-                    ResultState.Failed => L("无响应", "No reply"),
-                    _ => "—"
-                };
-                Label(dc, headline, left, at(23), right, Scale(38),
-                    row.ServerPing?.State == ResultState.TimedOut ? TimeoutInk : Text, scoreFont);
-                int? median = MedianWebsiteTime(row);
-                string caption = median is int websiteMs
-                    ? L($"VPS（站点 {websiteMs} ms）", $"VPS (web {websiteMs} ms)")
-                    : "VPS Ping";
-                Label(dc, caption, left, at(38), row.IsCurrent ? right - Scale(68) : right, Scale(16), Muted, smallFont);
+                int? rtt = row.ServerPing is null ? row.Native.ElapsedMs : row.ServerPing.ElapsedMs;
+                bool timedOut = row.ServerPing?.State == ResultState.TimedOut;
+                string? delay = rtt is >= 0 ? $"{rtt}ms" : timedOut ? L("超时", "Timeout") : null;
+                string? grade = row.Quality?.Score is int score ? $"S={score}" :
+                    row.Quality?.Cap is int cap ? $"S≤{cap}" : null;
+                string headline = delay is not null && grade is not null ? $"{delay} ({grade})" :
+                    delay ?? grade ?? (row.Testing ? L("测速中", "Testing") : L("待测速", "Untested"));
+                uint ink = timedOut ? TimeoutInk : ScoreInk(row.Quality?.Score ?? row.Quality?.Cap) ??
+                    (delay is not null ? Text : Muted);
+                Label(dc, headline, left, at(25), right, Scale(35), ink, combinedFont);
             }
             else if (row.Quality?.Score is null && row.Native.ElapsedMs is > 0 and int nativeMs)
             {
@@ -315,16 +327,15 @@ public sealed unsafe partial class DesktopApp
             }
             else
                 Label(dc, ScoreText(row), left, at(23), midpoint, Scale(38), scoreColor, scoreFont);
-            bool capped = row.Quality?.Cap is not null;
-            if (!liveLatency || capped)
+            if (!liveLatency)
             {
                 int badgeLeft = Math.Max(midpoint, right - Scale(102));
                 Rounded(dc, Box(badgeLeft, at(28), right - badgeLeft, Scale(20)), Scale(8), Control);
                 Rounded(dc, Box(badgeLeft + Scale(7), at(28) + Scale(8), Scale(5), Scale(5)), Scale(5), tone.Accent);
-                Label(dc, capped ? ScoreText(row) : tone.Label, badgeLeft + Scale(17),
-                    at(28), right - Scale(4), Scale(20), capped ? TimeoutInk : tone.Text, smallFont);
+                Label(dc, tone.Label, badgeLeft + Scale(17),
+                    at(28), right - Scale(4), Scale(20), tone.Text, smallFont);
             }
-            if (row.IsCurrent || row.Kind == NodeKind.Group)
+            if (!liveLatency && (row.IsCurrent || row.Kind == NodeKind.Group))
                 Label(dc, row.SelectedMember is not null ? L("组内已选", "Member selected")
                     : row.IsCurrent && CurrentSiteLabel(row.CurrentTarget) is { } site
                         ? L($"{site} 当前", $"{site} current")
@@ -342,19 +353,13 @@ public sealed unsafe partial class DesktopApp
         }
     }
 
-    private static int? MedianWebsiteTime(DesktopRow row)
+    private uint? ScoreInk(int? score) => !preferences.Light ? DarkScoreColor(score) : score switch
     {
-        Span<int> timings = stackalloc int[5];
-        int count = 0;
-        if (row.Google?.ElapsedMs is >= 0 and int google) timings[count++] = google;
-        if (row.YouTube?.ElapsedMs is >= 0 and int youtube) timings[count++] = youtube;
-        if (row.OpenAi.ElapsedMs is >= 0 and int openAi) timings[count++] = openAi;
-        if (row.ChatGpt.ElapsedMs is >= 0 and int chatGpt) timings[count++] = chatGpt;
-        if (row.Anthropic?.ElapsedMs is >= 0 and int anthropic) timings[count++] = anthropic;
-        if (count == 0) return null;
-        timings[..count].Sort();
-        return (int)(((long)timings[(count - 1) / 2] + timings[count / 2]) / 2);
-    }
+        >= 0 and < 60 => Color(0x9F253Eu),
+        >= 60 and < 80 => Color(0x78520Du),
+        >= 80 and <= 100 => Color(0x176446u),
+        _ => null
+    };
 
     private static uint? DarkScoreColor(int? score) => score switch
     {
@@ -464,6 +469,12 @@ public sealed unsafe partial class DesktopApp
         var tool = new TooltipTool { Size = (uint)sizeof(TooltipTool), Flags = 1, Window = panel,
             Id = (nuint)cards, Text = -1 };
         Send(tooltip, 0x432, 0, (nint)(&tool)); // TTM_ADDTOOLW
+        if (serverTestButton != 0)
+        {
+            tool.Flags = 0x11; // TTF_IDISHWND | TTF_SUBCLASS
+            tool.Id = (nuint)serverTestButton;
+            Send(tooltip, 0x432, 0, (nint)(&tool));
+        }
         Send(tooltip, 0x418, 0, Scale(420)); // TTM_SETMAXTIPWIDTH
     }
 
@@ -475,6 +486,10 @@ public sealed unsafe partial class DesktopApp
         int localX = x % (cardWidth + cardGap), localY = y % pitch;
         int index = y / pitch * columns + col, site = -1;
         if (col >= columns || localX >= cardWidth || localY >= cardHeight || index >= rows.Length) index = -1;
+        else if (source is IDesktopCurrentTestSource && rows[index].Kind == NodeKind.Leaf &&
+            CardCheckBounds(0, 0) is var button && localX >= button.Left && localX < button.Right &&
+            localY >= button.Top && localY < button.Bottom)
+            site = -2;
         else if (localY >= cardHeight * 52 / 100 && localY < cardHeight * 86 / 100)
         {
             int inset = Scale(17), available = cardWidth - inset * 2;
@@ -499,24 +514,32 @@ public sealed unsafe partial class DesktopApp
     {
         if ((uint)hoverIndex >= rows.Length) return L("悬停查看站点状态", "Hover to see target details");
         var row = rows[hoverIndex];
+        if (hoverSite == -2) return L("优先测速此节点", "Test this node first");
         return hoverSite < 0 ? row.Name :
             $"{Sites[hoverSite].Name} · {FormatSiteLatency(SiteResult(row, hoverSite))}";
     }
 
     private void GetTooltipText(TooltipInfo* info)
     {
-        Point point;
-        GetCursorPos(&point);
-        ScreenToClient(cards, &point);
-        UpdateHover(point.X, point.Y, dismiss: false);
+        string value;
+        if (serverTestButton != 0 && info->Header.Id == (nuint)serverTestButton)
+            value = L("全部测速", "Test all");
+        else
+        {
+            Point point;
+            GetCursorPos(&point);
+            ScreenToClient(cards, &point);
+            UpdateHover(point.X, point.Y, dismiss: false);
+            value = HoverText();
+        }
         if (tipBuffer != 0) Marshal.FreeHGlobal(tipBuffer);
-        tipBuffer = Marshal.StringToHGlobalUni(HoverText());
+        tipBuffer = Marshal.StringToHGlobalUni(value);
         info->Text = tipBuffer;
     }
 
     private void DrawToolbarButton(DrawItem* item)
     {
-        if (item->Id is not (Toggle or SortMenu or Groups or OpenSettings or OpenDetails or TestCurrent or TestServers)) return;
+        if (item->Id is not (Toggle or SortMenu or Groups or OpenSettings or OpenDetails or TestServers)) return;
         bool activeButton = item->Id == Toggle || item->Id == Groups && showGroups;
         string label = item->Id switch
         {
@@ -524,11 +547,31 @@ public sealed unsafe partial class DesktopApp
             Groups => showGroups ? L("✓ 策略组", "✓ Groups") : L("策略组", "Groups"),
             OpenSettings => L("设置", "Settings"),
             OpenDetails => L("详情", "Details"),
-            TestCurrent => source.GetSnapshot().CurrentTest?.Running == true ? L("测试中", "Testing") : L("重测网站", "Retest sites"),
-            TestServers => L("服务器全测", "Ping all"),
+            TestServers => "",
             _ => descending ? L("排序 ↓", "Sort ↓") : L("排序 ↑", "Sort ↑")
         };
         DrawPanelButton(item, label, font, activeButton);
+        if (item->Id == TestServers)
+            DrawSpeedometer(item->Dc, item->Bounds, (item->State & 1) != 0 ? ActiveText : Text, all: true);
+    }
+
+    private void DrawSpeedometer(nint dc, Rect bounds, uint ink, bool all)
+    {
+        int x = (bounds.Left + bounds.Right) / 2, y = (bounds.Top + bounds.Bottom) / 2 + Scale(2);
+        int radius = Scale(6);
+        nint pen = CreatePen(0, Scale(1), ink);
+        if (pen == 0) return;
+        nint previous = SelectObject(dc, pen);
+        Arc(dc, x - radius, y - radius, x + radius + 1, y + radius + 1, x + radius, y, x - radius, y);
+        Point* needle = stackalloc Point[2]
+        {
+            new() { X = x, Y = y + 1 }, new() { X = x + Scale(4), Y = y - Scale(4) }
+        };
+        Polyline(dc, needle, 2);
+        if (all)
+            Fill(dc, Box(x - radius, y + Scale(4), radius * 2 + 1, Scale(1)), ink);
+        SelectObject(dc, previous);
+        DeleteObject(pen);
     }
 
     private void DrawPanelButton(DrawItem* item, string label, nint face, bool primary)
