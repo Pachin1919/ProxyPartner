@@ -9,7 +9,8 @@ using QuickProxyNet;
 using YamlDotNet.Core;
 using YamlDotNet.RepresentationModel;
 
-internal sealed record ProbeProfile(IProxyClient Client, string Revision);
+internal sealed record ProbeProfile(VlessClient Client, string Revision);
+internal readonly record struct IndependentMeasurement(WebsiteProbe[] Sites, IPAddress? First, IPAddress? Second);
 
 internal static class IndependentNodeProbe
 {
@@ -42,8 +43,7 @@ internal static class IndependentNodeProbe
                     if (Path.IsPathFullyQualified(path)) return Load(path);
                 }
             }
-            catch (IOException) { }
-            catch (UnauthorizedAccessException) { }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
             return new(StringComparer.Ordinal);
         }
         return Load(Path.Combine(AppContext.BaseDirectory, "ProbeNodes.json"));
@@ -57,9 +57,9 @@ internal static class IndependentNodeProbe
             using var file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
             if (file.Length is <= 0 or > MaxProfileBytes) return profiles;
             byte[] bytes = new byte[(int)file.Length];
-            file.ReadExactly(bytes);
             try
             {
+                file.ReadExactly(bytes);
                 bool yaml = Path.GetExtension(path).ToLowerInvariant() is ".yaml" or ".yml";
                 foreach (var (name, link) in yaml ? ReadClashLinks(bytes) : ReadLinks(bytes))
                 {
@@ -163,9 +163,8 @@ internal static class IndependentNodeProbe
         map is null || map.Children.Keys.All(key =>
             key is YamlScalarNode { Value: { } name } && fields.Contains(name, StringComparer.Ordinal));
 
-    internal static async Task<(IPAddress? First, IPAddress? Second)> MeasureAsync(string node, ProbeProfile profile,
-        IReadOnlyList<(string Id, Uri Url)> targets, Uri echo, Uri corroboration,
-        Action<WebsiteProbe> publish, CancellationToken stop)
+    internal static async Task<IndependentMeasurement> MeasureAsync(string node, ProbeProfile profile,
+        IReadOnlyList<(string Id, Uri Url)> targets, Uri echo, Uri corroboration, CancellationToken stop)
     {
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(stop);
         deadline.CancelAfter(TimeSpan.FromSeconds(7));
@@ -207,19 +206,13 @@ internal static class IndependentNodeProbe
             }
         }
 
-        var pending = targets.Select(MeasureSite).ToList();
-        var ip = MeasureExitAsync(client, echo, deadline.Token);
+        var sites = targets.Select(MeasureSite).ToArray();
+        var firstIp = MeasureExitAsync(client, echo, deadline.Token);
         // Leave a connection slot free before starting the second observer.
-        await Task.WhenAny(pending.Cast<Task>().Append(ip)).ConfigureAwait(false);
+        await Task.WhenAny(sites.Cast<Task>().Append(firstIp)).ConfigureAwait(false);
         var secondIp = MeasureExitAsync(client, corroboration, deadline.Token);
-        while (pending.Count != 0)
-        {
-            var finished = await Task.WhenAny(pending).ConfigureAwait(false);
-            pending.Remove(finished);
-            var sample = await finished.ConfigureAwait(false);
-            if (!stop.IsCancellationRequested) publish(sample);
-        }
-        return (await ip.ConfigureAwait(false), await secondIp.ConfigureAwait(false));
+        return new(await Task.WhenAll(sites).ConfigureAwait(false),
+            await firstIp.ConfigureAwait(false), await secondIp.ConfigureAwait(false));
     }
 
     private static async Task<IPAddress?> MeasureExitAsync(HttpClient client, Uri echo, CancellationToken token)

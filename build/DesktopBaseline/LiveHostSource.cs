@@ -1,6 +1,7 @@
 using ProxyPartnerLite.Desktop;
 using ProxyPartnerLite.Host;
 using System.Collections.Concurrent;
+using System.Diagnostics.CodeAnalysis;
 using System.Net;
 using System.Net.Sockets;
 
@@ -57,12 +58,13 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
             if (requested.CurrentCount == 0) requested.Release();
     }
 
-    private static bool TryTakeNode(ref string? priority, ref Queue<string> queue, out string name, out bool counted)
+    private static bool TryTakeNode(ref string? priority, ref Queue<string> queue,
+        [NotNullWhen(true)] out string? name, out bool counted)
     {
         if (priority is not { } requested)
         {
             counted = true;
-            return queue.TryDequeue(out name!);
+            return queue.TryDequeue(out name);
         }
         name = requested;
         priority = null;
@@ -87,8 +89,9 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
         var batch = new Queue<string>();
         var websiteBatch = new Queue<string>();
         var serverActive = new Dictionary<Task<DesktopResult>, (string Name, string Host, bool Counted)>(ParallelServerLimit);
-        var websiteActive = new Dictionary<Task<(List<WebsiteProbe> Sites, IPAddress? First, IPAddress? Second)>,
+        var websiteActive = new Dictionary<Task<IndependentMeasurement>,
             (string Name, string Revision, bool Counted)>(ParallelWebsiteNodeLimit);
+        var pending = new List<Task>(ParallelServerLimit + ParallelWebsiteNodeLimit + 2);
         string? serverPriority = null, websitePriority = null;
         int batchTotal = 0, batchDone = 0;
         int websiteTotal = 0, websiteDone = 0;
@@ -240,19 +243,8 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                             window.Add(sample);
                         else history[key] = new(sample);
                     }
-                    async Task<(List<WebsiteProbe> Sites, IPAddress? First, IPAddress? Second)> MeasureIndependentAsync(
-                        string name, ProbeProfile profile)
+                    void RecordIndependent(string name, IndependentMeasurement measured)
                     {
-                        var sites = new List<WebsiteProbe>(ReadOnlyHostClient.CurrentProbeTargetCount);
-                        var observed = await IndependentNodeProbe.MeasureAsync(name, profile,
-                            ReadOnlyHostClient.WebsiteTargets, IndependentNodeProbe.EchoUrl,
-                            IndependentNodeProbe.CorroboratingEchoUrl, sites.Add, stop.Token)
-                            .ConfigureAwait(false);
-                        return (sites, observed.First, observed.Second);
-                    }
-                    void RecordIndependent(string name, (List<WebsiteProbe> Sites, IPAddress? First, IPAddress? Second) measured)
-                    {
-                        if (stop.IsCancellationRequested) return;
                         foreach (var sample in measured.Sites) RecordSite(sample);
                         if (measured.First is { } first)
                             RecordExit(name, first, measured.Second?.AddressFamily == first.AddressFamily ? measured.Second : null);
@@ -299,7 +291,7 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                     while (!stop.IsCancellationRequested && !HasPendingRequest())
                     {
                         while (serverActive.Count < ParallelServerLimit &&
-                            TryTakeNode(ref serverPriority, ref batch, out string name, out bool counted))
+                            TryTakeNode(ref serverPriority, ref batch, out string? name, out bool counted))
                         {
                             if (Array.BinarySearch(eligible, name, StringComparer.Ordinal) < 0)
                             {
@@ -310,7 +302,7 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                             serverActive.Add(ServerTargets.MeasureAsync(host, stop.Token), (name, host, counted));
                         }
                         while (websiteActive.Count < ParallelWebsiteNodeLimit &&
-                            TryTakeNode(ref websitePriority, ref websiteBatch, out string name, out bool counted))
+                            TryTakeNode(ref websitePriority, ref websiteBatch, out string? name, out bool counted))
                         {
                             if (!websiteEligible.Contains(name))
                             {
@@ -318,23 +310,30 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                                 continue;
                             }
                             var profile = profiles[name];
-                            websiteActive.Add(MeasureIndependentAsync(name, profile), (name, profile.Revision, counted));
+                            var probe = IndependentNodeProbe.MeasureAsync(name, profile, ReadOnlyHostClient.WebsiteTargets,
+                                IndependentNodeProbe.EchoUrl, IndependentNodeProbe.CorroboratingEchoUrl, stop.Token);
+                            websiteActive.Add(probe, (name, profile.Revision, counted));
                         }
                         Emit();
                         if (serverActive.Count == 0 && websiteActive.Count == 0 && currentTask is null) break;
 
                         wake ??= requested.WaitAsync(TimeSpan.FromSeconds(30), stop.Token);
-                        var pending = serverActive.Keys.Cast<Task>().Concat(websiteActive.Keys).Append(wake);
-                        if (currentTask is not null) pending = pending.Append(currentTask);
+                        pending.AddRange(serverActive.Keys);
+                        pending.AddRange(websiteActive.Keys);
+                        pending.Add(wake);
+                        if (currentTask is not null) pending.Add(currentTask);
                         await Task.WhenAny(pending).ConfigureAwait(false);
+                        pending.Clear();
                         if (stop.IsCancellationRequested) return;
                         if (wake.IsCompleted)
                         {
                             await wake.ConfigureAwait(false);
                             wake = null;
                         }
-                        foreach (var (finished, job) in serverActive.Where(job => job.Key.IsCompleted).ToArray())
+                        // Dictionary.Remove preserves its enumerator on .NET 10.
+                        foreach (var (finished, job) in serverActive)
                         {
+                            if (!finished.IsCompleted) continue;
                             var result = await finished.ConfigureAwait(false);
                             serverActive.Remove(finished);
                             if (Array.BinarySearch(eligible, job.Name, StringComparer.Ordinal) < 0)
@@ -351,8 +350,9 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                                 if (job.Counted) batchDone++;
                             }
                         }
-                        foreach (var (finished, job) in websiteActive.Where(job => job.Key.IsCompleted).ToArray())
+                        foreach (var (finished, job) in websiteActive)
                         {
+                            if (!finished.IsCompleted) continue;
                             var result = await finished.ConfigureAwait(false);
                             websiteActive.Remove(finished);
                             if (!websiteEligible.Contains(job.Name))
@@ -369,15 +369,15 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                                 if (job.Counted) websiteDone++;
                             }
                         }
-                        bool currentFinished = currentTask?.IsCompleted == true;
+                        var finishedCurrent = currentTask is { IsCompleted: true } ? currentTask : null;
                         while (currentSamples.TryDequeue(out var sample))
                         {
                             samples.Add(sample);
                             if (testedGroups is not null) RecordSite(sample);
                         }
-                        if (currentFinished)
+                        if (finishedCurrent is not null)
                         {
-                            var verified = await currentTask!.ConfigureAwait(false);
+                            var verified = await finishedCurrent.ConfigureAwait(false);
                             current = testedGroups is null ? null : verified ?? current;
                             currentTask = null;
                             var names = facts.Nodes.Select(n => n.Name).ToHashSet(StringComparer.Ordinal);
@@ -419,15 +419,15 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
         IPAddress? corroboration, DateTimeOffset now)
     {
         string value = address.ToString();
-        bool agrees = address.Equals(corroboration);
-        bool changed = agrees && previous?.LastVerifiedAddress is { } last && last != value;
-        bool continues = agrees && !changed && previous is { ConfirmedSamples: > 0 } &&
-            now - previous.ObservedUtc <= TimeSpan.FromHours(1);
-        return new(value, now, (previous?.Changes ?? 0) + (changed ? 1 : 0),
-            corroboration is null ? 1 : 2, agrees ? null : corroboration?.ToString(),
-            agrees ? value : previous?.LastVerifiedAddress,
-            continues ? previous!.ConsistentSince : agrees ? now : null,
-            agrees ? (continues ? previous!.ConfirmedSamples + 1 : 1) : 0);
+        int changes = previous?.Changes ?? 0;
+        if (!address.Equals(corroboration))
+            return new(value, now, changes, corroboration is null ? 1 : 2, corroboration?.ToString(),
+                previous?.LastVerifiedAddress);
+        if (previous is { ConfirmedSamples: > 0 } confirmed && confirmed.Address == value &&
+            now - confirmed.ObservedUtc <= TimeSpan.FromHours(1))
+            return confirmed with { ObservedUtc = now, ConfirmedSamples = confirmed.ConfirmedSamples + 1 };
+        if (previous?.LastVerifiedAddress is { } last && last != value) changes++;
+        return new(value, now, changes, Observers: 2, LastVerifiedAddress: value, ConsistentSince: now, ConfirmedSamples: 1);
     }
 
     private void PublishFacts(HostFacts facts, List<WebsiteProbe> samples,
