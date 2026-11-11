@@ -14,8 +14,8 @@ internal sealed record ProbeProfile(IProxyClient Client, string Revision);
 internal static class IndependentNodeProbe
 {
     private const int MaxProfileBytes = 1024 * 1024;
-    internal static readonly Uri EchoUrl = new("https://checkip.amazonaws.com/");
-    internal static readonly Uri CorroboratingEchoUrl = new("https://icanhazip.com/");
+    internal static readonly Uri EchoUrl = new("https://ipv4.icanhazip.com/");
+    internal static readonly Uri CorroboratingEchoUrl = new("https://api.ipify.org/");
     private static readonly string[] ClashFields =
     [
         "name", "type", "server", "port", "uuid", "network", "tls", "servername", "client-fingerprint",
@@ -209,6 +209,8 @@ internal static class IndependentNodeProbe
 
         var pending = targets.Select(MeasureSite).ToList();
         var ip = MeasureExitAsync(client, echo, deadline.Token);
+        // Leave a connection slot free before starting the second observer.
+        await Task.WhenAny(pending.Cast<Task>().Append(ip)).ConfigureAwait(false);
         var secondIp = MeasureExitAsync(client, corroboration, deadline.Token);
         while (pending.Count != 0)
         {
