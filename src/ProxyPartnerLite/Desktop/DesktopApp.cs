@@ -628,8 +628,9 @@ public sealed unsafe partial class DesktopApp
             {
                 if (sweep.UnavailableNode is not null)
                     probe += L(" · 该节点暂无独立测速入口", " · This node has no independent probe route");
-                else if (sweep.Requested && sweep.WebsiteTotal == 0)
-                    probe += L(" · 其余节点缺少独立测速入口", " · Other nodes have no independent probe route");
+                if (sweep.ProbeEligible < sweep.NodeCount)
+                    probe += L($" · 可独立测速 {sweep.ProbeEligible}/{sweep.NodeCount}",
+                        $" · Independent probe coverage {sweep.ProbeEligible}/{sweep.NodeCount}");
                 if (sweep.BatchTotal > 0)
                     probe += L($" · 机房 {sweep.Completed}/{sweep.BatchTotal}", $" · Servers {sweep.Completed}/{sweep.BatchTotal}");
             }

@@ -59,11 +59,19 @@ public sealed unsafe partial class DesktopApp
                 row.OpenAi.State != ResultState.Missing || row.ChatGpt.State != ResultState.Missing ||
                     row.Google is not null || row.YouTube is not null || row.Anthropic is not null
                     ? L("本轮已测", "Round tested") :
-                latency.ElapsedMs.HasValue ? L("延迟已测", "Latency read") :
-                L("待测", "Untested"))
+                ProbeSupportText(row.IndependentProbe) ??
+                (latency.ElapsedMs.HasValue ? L("延迟已测", "Latency read") : L("待测", "Untested")))
         };
         return !light && !table ? tone with { Background = Color(0x303741), Text = Muted } : tone;
     }
+
+    private string? ProbeSupportText(IndependentProbeState state) => state switch
+    {
+        IndependentProbeState.UnsupportedProtocol => L("协议不支持", "Unsupported protocol"),
+        IndependentProbeState.UnsupportedOptions => L("配置组合不支持", "Unsupported options"),
+        IndependentProbeState.MissingConfiguration => L("缺少拨号配置", "Missing dial config"),
+        _ => null
+    };
 
     private static uint Color(uint rgb) => ((rgb & 0xff) << 16) | (rgb & 0xff00) | (rgb >> 16);
     private uint FailureInk => Color(preferences.Light ? 0x9F253Eu : 0xFFABA9u);
@@ -379,6 +387,8 @@ public sealed unsafe partial class DesktopApp
                     row.Native.IsProbeFailure ? FailureInk : Muted, smallFont);
             else if ((row.ExitV4 ?? row.ExitV6) is { } exit)
                 Label(dc, exit.Address, left, at(89), midpoint, Scale(17), Muted, smallFont);
+            else if (ProbeSupportText(row.IndependentProbe) is { } support)
+                Label(dc, support, left, at(89), midpoint, Scale(17), Muted, smallFont);
             Label(dc, Timestamp(row.LastObservedUtc), midpoint, at(89), right, Scale(17), Muted, smallFont, 2);
         }
     }
@@ -532,7 +542,8 @@ public sealed unsafe partial class DesktopApp
                 ? L("双击卡片切换节点", "Double-click a card to switch")
                 : L("悬停查看站点状态", "Hover to see target details");
         var row = rows[hoverIndex];
-        if (hoverSite == -2) return L("优先测速此节点", "Test this node first");
+        if (hoverSite == -2)
+            return ProbeSupportText(row.IndependentProbe) ?? L("优先测速此节点", "Test this node first");
         return hoverSite < 0 ? row.Name :
             $"{Sites[hoverSite].Name} · {FormatSiteLatency(SiteResult(row, hoverSite))}";
     }

@@ -3,6 +3,7 @@ namespace ProxyPartnerLite.Desktop;
 public enum NodeKind { Leaf, Group }
 public enum CollectionState { Synthetic, Disconnected, Observing, Idle, SleepGap, SourceStopped, Connecting }
 public enum ResultState { Missing, Measured, Stale, Incomparable, AuthenticationRequired, Restricted, Failed, HttpError, TimedOut }
+public enum IndependentProbeState { Unknown, Available, UnsupportedProtocol, UnsupportedOptions, MissingConfiguration }
 public enum QualityState { Insufficient, Good, Poor, Restricted }
 
 public sealed record DesktopQuality(int? Score, QualityState State, string Source,
@@ -47,13 +48,15 @@ public sealed record DesktopRow(
     DateTimeOffset? LastObservedUtc, DesktopQuality? Quality = null, string? SelectedMember = null,
     DesktopResult? Google = null, DesktopResult? YouTube = null, DesktopResult? Anthropic = null,
     string? CurrentTarget = null, DesktopResult? ServerPing = null, bool Testing = false,
-    DesktopExitIp? ExitV4 = null, DesktopExitIp? ExitV6 = null, bool SelectionOnly = false);
+    DesktopExitIp? ExitV4 = null, DesktopExitIp? ExitV6 = null, bool SelectionOnly = false,
+    IndependentProbeState IndependentProbe = IndependentProbeState.Unknown, string? Protocol = null);
 
 public sealed record DesktopCurrentTest(bool Running, int Completed, int Total, int Verified, int TimedOut,
     bool Attempted, string? CurrentTarget, bool Direct, bool PathChanged);
 
 public sealed record DesktopServerSweep(int Completed, int BatchTotal, bool Requested,
-    string? UnavailableNode = null, int WebsiteCompleted = 0, int WebsiteTotal = 0);
+    string? UnavailableNode = null, int WebsiteCompleted = 0, int WebsiteTotal = 0,
+    int ProbeEligible = 0, int NodeCount = 0);
 
 public sealed record DesktopSnapshot(
     string Host, CollectionState Collection, string? VerifiedCurrentPath,

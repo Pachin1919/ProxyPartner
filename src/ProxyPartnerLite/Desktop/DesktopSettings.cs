@@ -491,6 +491,8 @@ public sealed unsafe partial class DesktopApp
                 Line($"{name} · {result.Format(preferences.English)}");
         }
         Line(row.Name);
+        if (row.Protocol is { } protocol && ProbeSupportText(row.IndependentProbe) is { } support)
+            Line(L($"独立测速 · {protocol} · {support}", $"Independent probe · {protocol} · {support}"));
         if (row.SelectionOnly) Line(L("GLOBAL 已选 · 等待验证实际线路", "GLOBAL selected · awaiting route verification"));
         if (CurrentSiteLabel(row.CurrentTarget) is { } activeSite)
             Line($"{L("当前测试线路", "Current tested route")} · {activeSite}");

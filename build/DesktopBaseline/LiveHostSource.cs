@@ -83,7 +83,10 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
         string serverPath = Environment.GetEnvironmentVariable("PROXYPARTNER_SERVER_TARGETS") ??
             Path.Combine(AppContext.BaseDirectory, "ServerTargets.json");
         var serverMap = ServerTargets.Load(serverPath);
-        var profiles = new Dictionary<string, ProbeProfile>(StringComparer.Ordinal);
+        var catalog = IndependentNodeProbe.Load(null);
+        HashSet<(string Name, string Type)>? roster = null;
+        (string? Path, DateTime LastWrite, long Length) profileStamp = default;
+        bool autoSweepPending = false;
         var exitV4 = new Dictionary<string, DesktopExitIp>(StringComparer.Ordinal);
         var exitV6 = new Dictionary<string, DesktopExitIp>(StringComparer.Ordinal);
         var batch = new Queue<string>();
@@ -105,7 +108,10 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
         DesktopProxySelection? lastSelection = null;
         int? previousPid = null;
         Task<bool>? wake = null;
-        bool HasPendingRequest() => Volatile.Read(ref nodeRequested) is not null ||
+        bool SweepIdle() => batch.Count == 0 && websiteBatch.Count == 0 &&
+            serverActive.Count == 0 && websiteActive.Count == 0;
+        bool HasPendingRequest() => autoSweepPending && SweepIdle() ||
+            Volatile.Read(ref nodeRequested) is not null ||
             Volatile.Read(ref selectionRequested) is not null ||
             Volatile.Read(ref sweepRequested) != 0 || currentTask is null && Volatile.Read(ref queuedOrRunning) != 0;
         try
@@ -143,6 +149,8 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                         current = null;
                         testedGroups = null;
                         lastSelection = null;
+                        roster = null;
+                        profileStamp = default;
                         previousPid = corePid;
                     }
                     var command = Interlocked.Exchange(ref selectionRequested, null);
@@ -160,21 +168,38 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                             continue;
                         }
                     }
-                    bool startSweep = Interlocked.Exchange(ref sweepRequested, 0) == 1 &&
-                        batch.Count == 0 && websiteBatch.Count == 0 && serverActive.Count == 0 && websiteActive.Count == 0;
+                    var identity = facts.Nodes.Select(n => (n.Name, n.Type));
+                    bool rosterChanged = roster is null || !roster.SetEquals(identity);
+                    if (rosterChanged) roster = identity.ToHashSet();
+                    string? profilePath = IndependentNodeProbe.ConfiguredPath(
+                        read.Status == HostStatus.ConnectedPipe && read.VerifiedPeerProcessId == corePid);
+                    var profileFile = profilePath is null ? null : new FileInfo(profilePath);
+                    var stamp = profileFile is { Exists: true }
+                        ? (profilePath, profileFile.LastWriteTimeUtc, profileFile.Length) : default;
+                    bool configChanged = stamp != profileStamp;
+                    if (rosterChanged || configChanged)
+                    {
+                        profileStamp = stamp;
+                        batch.Clear();
+                        websiteBatch.Clear();
+                        autoSweepPending = true;
+                        testedGroups = null;
+                        current = null;
+                    }
+                    bool manualSweep = Interlocked.Exchange(ref sweepRequested, 0) == 1;
+                    bool startSweep = (manualSweep || autoSweepPending) && SweepIdle();
                     string? priority = Interlocked.Exchange(ref nodeRequested, null);
-                    if (startSweep || priority is not null)
+                    if (startSweep || priority is not null || rosterChanged || configChanged)
                     {
                         var updatedMap = ServerTargets.Load(serverPath);
                         foreach (string name in serverResults.Keys.ToArray())
                             if (!updatedMap.TryGetValue(name, out string? host) || host != serverMap[name])
                                 serverResults.Remove(name);
                         serverMap = updatedMap;
-                        var updatedProfiles = IndependentNodeProbe.LoadConfigured(
-                            read.Status == HostStatus.ConnectedPipe && read.VerifiedPeerProcessId == corePid);
-                        foreach (var (name, old) in profiles)
+                        var updated = IndependentNodeProbe.Load(profilePath);
+                        foreach (var (name, old) in catalog.Profiles)
                         {
-                            if (updatedProfiles.TryGetValue(name, out var replacement) && replacement.Revision == old.Revision)
+                            if (updated.Profiles.TryGetValue(name, out var replacement) && replacement.Revision == old.Revision)
                                 continue;
                             exitV4.Remove(name);
                             exitV6.Remove(name);
@@ -185,11 +210,13 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                                     history.Remove(key);
                             }
                         }
-                        profiles = updatedProfiles;
+                        catalog = updated;
                     }
+                    var profiles = catalog.Profiles;
                     var eligible = facts.Nodes.Select(n => n.Name).Where(serverMap.ContainsKey)
                         .Order(StringComparer.Ordinal).ToArray();
-                    var websiteEligible = facts.Nodes.Where(n => n.Type == "Vless" && profiles.ContainsKey(n.Name))
+                    var websiteEligible = facts.Nodes.Where(n =>
+                        profiles.TryGetValue(n.Name, out var profile) && profile.Type == n.Type)
                         .Select(n => n.Name).ToHashSet(StringComparer.Ordinal);
                     DesktopProxyControl? control = read.Status == HostStatus.ConnectedPipe &&
                         read.VerifiedHostStartedAtUtc is { } coreStarted
@@ -229,8 +256,8 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                         var testingNodes = serverActive.Values.Select(job => job.Name)
                             .Concat(websiteActive.Values.Select(job => job.Name)).ToArray();
                         var sweep = new DesktopServerSweep(batchDone, batchTotal, sweepStarted, unavailableNode,
-                            websiteDone, websiteTotal);
-                        PublishFacts(facts, samples, history, cachedRows, groupRows, serverResults, exitV4, exitV6, current,
+                            websiteDone, websiteTotal, websiteEligible.Count, facts.Nodes.Count);
+                        PublishFacts(facts, samples, history, cachedRows, groupRows, serverResults, exitV4, exitV6, catalog, current,
                             sweep, running: currentTask is not null,
                             pathChanged: samples.Count != 0 && testedGroups is null, testingNodes, globalSelection, control);
                     }
@@ -279,11 +306,13 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                     }
                     if (startSweep)
                     {
-                        batch = new Queue<string>(eligible.OrderBy(name => name != current?.Node));
+                        autoSweepPending = false;
+                        string? first = current?.Node ?? globalSelection;
+                        batch = new Queue<string>(eligible.OrderBy(name => name != first));
                         batchTotal = batch.Count;
                         batchDone = 0;
                         websiteBatch = new Queue<string>(websiteEligible.Order(StringComparer.Ordinal)
-                            .OrderBy(name => name != current?.Node));
+                            .OrderBy(name => name != first));
                         websiteTotal = websiteBatch.Count;
                         websiteDone = 0;
                         sweepStarted = true;
@@ -434,7 +463,7 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
         Dictionary<(string Node, string Target), WebsiteWindow> history,
         Dictionary<string, (DesktopRow Row, DateTimeOffset Expires)> cachedRows, DesktopRow[] groupRows,
         Dictionary<string, DesktopResult> serverResults, Dictionary<string, DesktopExitIp> exitV4,
-        Dictionary<string, DesktopExitIp> exitV6, WebsiteProbe? current, DesktopServerSweep sweep,
+        Dictionary<string, DesktopExitIp> exitV6, ProbeCatalog catalog, WebsiteProbe? current, DesktopServerSweep sweep,
         bool running, bool pathChanged, IReadOnlyCollection<string>? testingNodes, string? globalSelection,
         DesktopProxyControl? control)
     {
@@ -466,6 +495,7 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
             DateTimeOffset? lastObserved = native.ObservedUtc;
             if (server?.ObservedUtc is { } serverTime && (lastObserved is null || serverTime > lastObserved))
                 lastObserved = serverTime;
+            string independentMethod = node.Type == "Vless" ? "VLESS · HTTPS" : "Shadowsocks · HTTPS";
             DesktopResult openAi = Untested, chatGpt = Untested;
             DesktopResult? google = null, youtube = null, anthropic = null;
             DateTimeOffset expires = DateTimeOffset.MaxValue;
@@ -480,7 +510,7 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                 if (!history.TryGetValue((node.Name, site.Id), out var window)) continue;
                 var sample = window.Latest;
                 var result = new DesktopResult(sample.TargetId, sample.ElapsedMs, sample.HttpStatus, sample.ObservedUtc,
-                    sample.Independent ? "VLESS · HTTPS" : "HTTPS", sample.HttpStatus switch
+                    sample.Independent ? independentMethod : "HTTPS", sample.HttpStatus switch
                     {
                         401 => ResultState.AuthenticationRequired,
                         403 => ResultState.Restricted,
@@ -525,13 +555,19 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                     ? Math.Min((int)Math.Round(points / siteCount), cap ?? 100) : null;
                 QualityState state = score is >= 80 ? QualityState.Good : score is < 60 || cap.HasValue
                     ? QualityState.Poor : score.HasValue ? QualityState.Restricted : QualityState.Insufficient;
-                quality = new(score, state, independentSource == true ? "VLESS · HTTPS" : "HTTPS",
+                quality = new(score, state, independentSource == true ? independentMethod : "HTTPS",
                     cap, capTarget, siteCount, stableCount);
             }
+            var support = node.Type is not ("Vless" or "Shadowsocks") ? IndependentProbeState.UnsupportedProtocol
+                : catalog.Profiles.TryGetValue(node.Name, out var profile) && profile.Type == node.Type
+                    ? IndependentProbeState.Available
+                    : catalog.Configured.Contains(node.Name) ? IndependentProbeState.UnsupportedOptions
+                    : IndependentProbeState.MissingConfiguration;
             var row = new DesktopRow("node:" + node.Name, node.Name, NodeKind.Leaf, isCurrent,
                 native, openAi, chatGpt, Untested, lastObserved, Quality: quality,
                 Google: google, YouTube: youtube, Anthropic: anthropic, CurrentTarget: target,
-                ServerPing: server, Testing: testing, ExitV4: v4, ExitV6: v6, SelectionOnly: selectionOnly);
+                ServerPing: server, Testing: testing, ExitV4: v4, ExitV6: v6, SelectionOnly: selectionOnly,
+                IndependentProbe: support, Protocol: node.Type);
             cachedRows[node.Name] = (row, expires);
             rows[index++] = row;
         }

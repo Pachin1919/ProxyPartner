@@ -80,6 +80,7 @@ $exe = Join-Path $publish 'ProxyPartner.exe'
 if ($Variant -eq 'Win32') {
     Copy-Item -LiteralPath (Join-Path $repo 'build/DesktopBaseline/QuickProxyNet.LICENSE.txt') -Destination $publish
     Copy-Item -LiteralPath (Join-Path $repo 'build/DesktopBaseline/YamlDotNet.LICENSE.txt') -Destination $publish
+    Copy-Item -LiteralPath (Join-Path $repo 'build/DesktopBaseline/Gost.LICENSE.txt') -Destination $publish
 }
 $data = [IO.File]::ReadAllBytes($exe)
 $pe = [BitConverter]::ToInt32($data,0x3c)
