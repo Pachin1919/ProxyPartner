@@ -182,6 +182,7 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                         profileStamp = stamp;
                         batch.Clear();
                         websiteBatch.Clear();
+                        serverPriority = websitePriority = null;
                         autoSweepPending = true;
                         testedGroups = null;
                         current = null;
@@ -317,6 +318,7 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                         websiteDone = 0;
                         sweepStarted = true;
                     }
+                    bool refreshHost = false;
                     while (!stop.IsCancellationRequested && !HasPendingRequest())
                     {
                         while (serverActive.Count < ParallelServerLimit &&
@@ -356,8 +358,9 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                         if (stop.IsCancellationRequested) return;
                         if (wake.IsCompleted)
                         {
-                            await wake.ConfigureAwait(false);
+                            refreshHost = !await wake.ConfigureAwait(false);
                             wake = null;
+                            if (refreshHost) break;
                         }
                         // Dictionary.Remove preserves its enumerator on .NET 10.
                         foreach (var (finished, job) in serverActive)
@@ -365,6 +368,7 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                             if (!finished.IsCompleted) continue;
                             var result = await finished.ConfigureAwait(false);
                             serverActive.Remove(finished);
+                            if (autoSweepPending) continue;
                             if (Array.BinarySearch(eligible, job.Name, StringComparer.Ordinal) < 0)
                             {
                                 if (job.Counted) batchTotal--;
@@ -384,6 +388,7 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                             if (!finished.IsCompleted) continue;
                             var result = await finished.ConfigureAwait(false);
                             websiteActive.Remove(finished);
+                            if (autoSweepPending) continue;
                             if (!websiteEligible.Contains(job.Name))
                             {
                                 if (job.Counted) websiteTotal--;
@@ -415,7 +420,7 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                             Volatile.Write(ref queuedOrRunning, 0);
                         }
                     }
-                    if (HasPendingRequest()) continue;
+                    if (refreshHost || HasPendingRequest()) continue;
                 }
                 else
                 {
