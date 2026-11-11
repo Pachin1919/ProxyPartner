@@ -483,23 +483,12 @@ public sealed unsafe partial class DesktopApp
         }
         var row = rows[index];
         bool synthetic = source.GetSnapshot().Collection == CollectionState.Synthetic;
-        string SourceLabel(string value) => value switch
-        {
-            "合成" => L("合成", "Synthetic"),
-            "原生历史 · 合成" => L("原生历史 · 合成", "Native history · synthetic"),
-            "HTTPS · 合成" => L("HTTPS · 合成", "HTTPS · synthetic"),
-            _ => value
-        };
         var report = new StringBuilder();
         void Line(string value = "") => report.Append(value).Append("\r\n");
-        void Result(string name, DesktopResult result)
+        void Result(string name, DesktopResult? result)
         {
-            string value = result.Format(preferences.English);
-            if (result.HttpStatus is int http &&
-                result.State is not (ResultState.AuthenticationRequired or ResultState.Restricted or ResultState.HttpError))
-                value += $" · HTTP {http}";
-            string observed = result.ObservedUtc.HasValue ? Timestamp(result.ObservedUtc) + " UTC" : L("时间未知", "Time unknown");
-            Line($"{name} · {value} · {observed} · {SourceLabel(result.Source)}");
+            if (result is { State: not ResultState.Missing })
+                Line($"{name} · {result.Format(preferences.English)}");
         }
         Line(row.Name);
         if (row.SelectionOnly) Line(L("GLOBAL 已选 · 等待验证实际线路", "GLOBAL selected · awaiting route verification"));
@@ -507,30 +496,25 @@ public sealed unsafe partial class DesktopApp
             Line($"{L("当前测试线路", "Current tested route")} · {activeSite}");
         if (row.SelectedMember is { } member)
             Line($"{L("组内选中", "Selected group member")} · {member}");
-        string scoreLabel = row.Quality is { TargetCount: > 0 } ? L("即时评分", "Live score") : L("评分", "Score");
-        Line($"{scoreLabel} {ScoreText(row)}  |  {L("来源", "Source")}: {SourceLabel(row.Quality?.Source ?? "—")}");
-        if (row.Quality is { TargetCount: > 0 } quality)
-        {
-            Line(L($"评分覆盖 {quality.TargetCount}/5 站 · 已有波动样本 {quality.StableTargetCount}/5 站",
-                $"Score covers {quality.TargetCount}/5 sites · Variability measured for {quality.StableTargetCount}/5"));
-        }
+        if (row.Quality is { } quality)
+            Line($"{L("评分", "Score")} {ScoreText(row)} · {(synthetic ? L("合成", "Synthetic") : quality.Source)}");
         if (row.Quality is { Cap: int cap, CapTarget: { } capTarget })
         {
             string site = CurrentSiteLabel(capTarget) ?? capTarget;
             string reason = cap == 20 ? L("超时", "timed out") : L("响应超过 2500 ms", "response exceeded 2500 ms");
             Line(L($"评分上限 {cap} · {site} {reason}", $"Score cap {cap} · {site} {reason}"));
         }
-        if (synthetic) Line(L("以下为合成样例。编辑权重只更新设置内的算例。", "Synthetic sample. Changing weights updates the Settings example only."));
         Line();
         if (row.ServerPing is { } server) Result("VPS Ping", server);
-        else if (!synthetic && row.Kind == NodeKind.Leaf && row.Native.ElapsedMs is >= 0)
-            Line(L("卡片延迟来源 · Mihomo 内核 URLTest 参考值", "Card latency source · Mihomo URLTest reference"));
-        Result(L("内核延迟", "Core latency"), row.Native);
+        else Result(L("内核延迟", "Core latency"), row.Native);
         Result("OPENAI (OpenAI API)", row.OpenAi);
         Result("GPT (ChatGPT)", row.ChatGpt);
-        if (row.Google is { } google) Result("Google", google);
-        if (row.YouTube is { } youtube) Result("YouTube", youtube);
-        if (row.Anthropic is { } anthropic) Result("Anthropic", anthropic);
+        Result("Google", row.Google);
+        Result("YouTube", row.YouTube);
+        Result("Anthropic", row.Anthropic);
+        Result("GitHub", row.GitHub);
+        if (row.LastObservedUtc is { } observed)
+            Line($"{L("最近样本", "Last sample")} · {Timestamp(observed)} UTC");
         void ExitIp(string family, DesktopExitIp? sample)
         {
             if (sample is null) return;
@@ -539,28 +523,13 @@ public sealed unsafe partial class DesktopApp
                 : sample.Observers == 2 ? L("两处观测一致", "Two observers agree") : L("仅一处观测", "One observer");
             bool stable = sample.ConfirmedSamples >= 3 && sample.ObservedUtc - sample.ConsistentSince >= TimeSpan.FromSeconds(30);
             string stability = stable ? L("观测期间稳定", "Stable during observation") : L("稳定性样本不足", "Insufficient stability samples");
-            string changes = L($"已确认变化 {sample.Changes} 次", $"{sample.Changes} confirmed changes");
-            Line($"{label} {family} · {sample.Address} · {verification} · {stability} · {changes} · {Timestamp(sample.ObservedUtc)} UTC");
+            string changes = sample.Changes == 0 ? "" : L($" · 变化 {sample.Changes} 次", $" · {sample.Changes} changes");
+            Line($"{label} {family} · {sample.Address} · {verification} · {stability}{changes} · {Timestamp(sample.ObservedUtc)} UTC");
         }
         ExitIp("IPv4", row.ExitV4);
         ExitIp("IPv6", row.ExitV6);
         if (!synthetic && row.Kind == NodeKind.Leaf && row.ExitV4 is null && row.ExitV6 is null)
             Line(L("出口 IP · 暂无观测", "Exit IP · No observation"));
-        if (!synthetic && row.Kind == NodeKind.Leaf)
-            Line(L("稳定性需至少三次双源一致，且覆盖至少 30 秒。", "Stability requires three matching observations across at least 30 seconds."));
-        Result("GitHub", row.GitHub);
-        foreach (var target in preferences.CustomTargets) Line($"{target.Symbol} {target.ShortName} · {L("待测", "Untested")} · {target.Url}");
-        Line();
-        Line(L("401 表示服务已响应且需要认证。OpenAI API 和 Anthropic API 需要 API 密钥。403 表示服务拒绝访问或需要验证。",
-            "401 means the service responded and requires authentication. OpenAI and Anthropic APIs require API keys. 403 means access is denied or challenged."));
-        Line(L("高延迟：看可比成功样本的均值。间歇失败：看跨轮次失败率及异常次数。",
-            "High latency: compare mean successful latency. Intermittent failure: inspect failure rate and incident count across rounds."));
-        Line(L("无法连接：需要可比的连接失败证据。样本不足：覆盖期或有效尝试不足。",
-            "Unable to connect requires comparable connection-failure evidence. Low samples means insufficient coverage or eligible attempts."));
-        Line(L("有效尝试、成功均值、失败率、异常次数、覆盖期：无法判定。",
-            "Eligible attempts, mean success latency, failure rate, incidents and coverage: undetermined."));
-        Line(L("按节点、目标、方法与环境分组后才能判断。单条失败不会推断掉线频次。",
-            "Group by node, target, method and environment before drawing conclusions. A single failure does not establish disconnect frequency."));
         SetText(detailText, report.ToString());
     }
 }

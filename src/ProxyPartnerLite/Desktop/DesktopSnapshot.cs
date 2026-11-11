@@ -29,9 +29,7 @@ public sealed record DesktopResult(
         ResultState.Stale when ElapsedMs is int ms => $"{ms} ms",
         ResultState.Stale or ResultState.Failed => english ? "No response" : "未响应",
         ResultState.Incomparable => english ? "Not comparable" : "不可比较",
-        ResultState.AuthenticationRequired => (TargetId is "openai_api" or "anthropic_api"
-            ? english ? $"{HttpStatus} API key required" : $"{HttpStatus} 需 API 密钥"
-            : english ? $"{HttpStatus} Authentication required" : $"{HttpStatus} 需认证") + TimingSuffix,
+        ResultState.AuthenticationRequired => ElapsedMs is >= 0 and int delay ? $"{delay} ms" : "—",
         ResultState.Restricted => (english ? $"{HttpStatus} Restricted" : $"{HttpStatus} 受限") + TimingSuffix,
         ResultState.HttpError => $"HTTP {HttpStatus}",
         ResultState.TimedOut => english ? "Timed out" : "超时",

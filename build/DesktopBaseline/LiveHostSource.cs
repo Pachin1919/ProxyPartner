@@ -216,19 +216,25 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                         unavailableNode = canProbe || currentRequested ? null : priority;
                     }
                     if (startSweep) unavailableNode = null;
+                    var cachedRows = new Dictionary<string, (DesktopRow Row, DateTimeOffset Expires)>(
+                        facts.Nodes.Count, StringComparer.Ordinal);
+                    var groupRows = facts.Groups.Select(group => new DesktopRow("group:" + group.Name, group.Name,
+                        NodeKind.Group, false, Untested, Untested, Untested, Untested, null,
+                        SelectedMember: group.Selected)).ToArray();
                     void Emit()
                     {
                         var testingNodes = serverActive.Values.Select(job => job.Name)
                             .Concat(websiteActive.Values.Select(job => job.Name)).ToArray();
                         var sweep = new DesktopServerSweep(batchDone, batchTotal, sweepStarted, unavailableNode,
                             websiteDone, websiteTotal);
-                        PublishFacts(facts, samples, history.Values, serverResults, exitV4, exitV6, current,
+                        PublishFacts(facts, samples, history, cachedRows, groupRows, serverResults, exitV4, exitV6, current,
                             sweep, running: currentTask is not null,
                             pathChanged: samples.Count != 0 && testedGroups is null, testingNodes, globalSelection, control);
                     }
                     void RecordSite(WebsiteProbe sample)
                     {
                         if (sample.Node is not { } node) return;
+                        cachedRows.Remove(node);
                         var key = (node, sample.TargetId);
                         if (history.TryGetValue(key, out var window) && window.Latest.Independent == sample.Independent)
                             window.Add(sample);
@@ -424,43 +430,54 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
             agrees ? (continues ? previous!.ConfirmedSamples + 1 : 1) : 0);
     }
 
-    private void PublishFacts(HostFacts facts, List<WebsiteProbe> samples, IEnumerable<WebsiteWindow> history,
+    private void PublishFacts(HostFacts facts, List<WebsiteProbe> samples,
+        Dictionary<(string Node, string Target), WebsiteWindow> history,
+        Dictionary<string, (DesktopRow Row, DateTimeOffset Expires)> cachedRows, DesktopRow[] groupRows,
         Dictionary<string, DesktopResult> serverResults, Dictionary<string, DesktopExitIp> exitV4,
         Dictionary<string, DesktopExitIp> exitV6, WebsiteProbe? current, DesktopServerSweep sweep,
         bool running, bool pathChanged, IReadOnlyCollection<string>? testingNodes, string? globalSelection,
         DesktopProxyControl? control)
     {
-        var byNode = history.ToLookup(s => s.Latest.Node, StringComparer.Ordinal);
         DateTimeOffset now = DateTimeOffset.UtcNow;
-        var rows = new DesktopRow[facts.Nodes.Count + facts.Groups.Count];
+        var rows = new DesktopRow[facts.Nodes.Count + groupRows.Length];
         int index = 0;
         foreach (var node in facts.Nodes)
         {
             bool selectionOnly = current is null && globalSelection == node.Name;
             bool isCurrent = current?.Node == node.Name || selectionOnly;
+            string? target = isCurrent ? current?.TargetId : null;
+            bool testing = testingNodes?.Contains(node.Name) == true || isCurrent && running;
+            var server = serverResults.GetValueOrDefault(node.Name);
+            var v4 = exitV4.GetValueOrDefault(node.Name);
+            var v6 = exitV6.GetValueOrDefault(node.Name);
+            if (cachedRows.TryGetValue(node.Name, out var cached) && now <= cached.Expires &&
+                cached.Row.IsCurrent == isCurrent && cached.Row.SelectionOnly == selectionOnly &&
+                cached.Row.Testing == testing && cached.Row.CurrentTarget == target &&
+                cached.Row.ServerPing == server && cached.Row.ExitV4 == v4 && cached.Row.ExitV6 == v6)
+            {
+                rows[index++] = cached.Row;
+                continue;
+            }
             DesktopResult native = node.Native is { } last
                 ? new("native_unknown", last.ElapsedMs, null, last.ObservedUtc, "Mihomo",
                     facts.ObservedAtUtc - last.ObservedUtc > NativeFreshness ? ResultState.Stale :
                     last.ElapsedMs.HasValue ? ResultState.Measured : ResultState.Failed)
                 : Untested;
-            var server = serverResults.GetValueOrDefault(node.Name);
             DateTimeOffset? lastObserved = native.ObservedUtc;
             if (server?.ObservedUtc is { } serverTime && (lastObserved is null || serverTime > lastObserved))
                 lastObserved = serverTime;
-            var row = new DesktopRow("node:" + node.Name, node.Name, NodeKind.Leaf,
-                isCurrent, native, Untested, Untested, Untested, lastObserved,
-                CurrentTarget: isCurrent ? current?.TargetId : null, ServerPing: server,
-                Testing: testingNodes?.Contains(node.Name) == true || isCurrent && running,
-                ExitV4: exitV4.GetValueOrDefault(node.Name), ExitV6: exitV6.GetValueOrDefault(node.Name),
-                SelectionOnly: selectionOnly);
+            DesktopResult openAi = Untested, chatGpt = Untested;
+            DesktopResult? google = null, youtube = null, anthropic = null;
+            DateTimeOffset expires = DateTimeOffset.MaxValue;
             int? cap = null;
             string? capTarget = null;
             double points = 0;
             int siteCount = 0, stableCount = 0;
             bool? independentSource = null;
             bool mixedSources = false;
-            foreach (var window in byNode[node.Name])
+            foreach (var site in ReadOnlyHostClient.WebsiteTargets)
             {
+                if (!history.TryGetValue((node.Name, site.Id), out var window)) continue;
                 var sample = window.Latest;
                 var result = new DesktopResult(sample.TargetId, sample.ElapsedMs, sample.HttpStatus, sample.ObservedUtc,
                     sample.Independent ? "VLESS · HTTPS" : "HTTPS", sample.HttpStatus switch
@@ -471,19 +488,19 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                         null => sample.TimedOut ? ResultState.TimedOut : ResultState.Failed,
                         _ => ResultState.HttpError
                     });
-                row = sample.TargetId switch
+                switch (sample.TargetId)
                 {
-                    "chatgpt_web" => row with { ChatGpt = result },
-                    "openai_api" => row with { OpenAi = result },
-                    "google" => row with { Google = result },
-                    "youtube" => row with { YouTube = result },
-                    "anthropic_api" => row with { Anthropic = result },
-                    _ => row
-                };
-                if (row.LastObservedUtc is null || sample.ObservedUtc > row.LastObservedUtc)
-                    row = row with { LastObservedUtc = sample.ObservedUtc };
-                if (window.Score(now) is { } score)
+                    case "chatgpt_web": chatGpt = result; break;
+                    case "openai_api": openAi = result; break;
+                    case "google": google = result; break;
+                    case "youtube": youtube = result; break;
+                    case "anthropic_api": anthropic = result; break;
+                }
+                if (lastObserved is null || sample.ObservedUtc > lastObserved)
+                    lastObserved = sample.ObservedUtc;
+                if (window.Score(now, out var siteExpiry) is { } score)
                 {
+                    if (siteExpiry < expires) expires = siteExpiry;
                     independentSource ??= sample.Independent;
                     mixedSources |= independentSource != sample.Independent;
                     points += score.Score;
@@ -501,20 +518,24 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                     }
                 }
             }
+            DesktopQuality? quality = null;
             if (siteCount != 0)
             {
                 int? score = siteCount == ReadOnlyHostClient.CurrentProbeTargetCount && !mixedSources
                     ? Math.Min((int)Math.Round(points / siteCount), cap ?? 100) : null;
                 QualityState state = score is >= 80 ? QualityState.Good : score is < 60 || cap.HasValue
                     ? QualityState.Poor : score.HasValue ? QualityState.Restricted : QualityState.Insufficient;
-                row = row with { Quality = new(score, state, independentSource == true ? "VLESS · HTTPS" : "HTTPS",
-                    cap, capTarget, siteCount, stableCount) };
+                quality = new(score, state, independentSource == true ? "VLESS · HTTPS" : "HTTPS",
+                    cap, capTarget, siteCount, stableCount);
             }
+            var row = new DesktopRow("node:" + node.Name, node.Name, NodeKind.Leaf, isCurrent,
+                native, openAi, chatGpt, Untested, lastObserved, Quality: quality,
+                Google: google, YouTube: youtube, Anthropic: anthropic, CurrentTarget: target,
+                ServerPing: server, Testing: testing, ExitV4: v4, ExitV6: v6, SelectionOnly: selectionOnly);
+            cachedRows[node.Name] = (row, expires);
             rows[index++] = row;
         }
-        foreach (var group in facts.Groups)
-            rows[index++] = new("group:" + group.Name, group.Name, NodeKind.Group, false,
-                Untested, Untested, Untested, Untested, null, SelectedMember: group.Selected);
+        groupRows.CopyTo(rows, index);
 
         var test = running || samples.Count != 0
             ? new DesktopCurrentTest(running, samples.Count, ReadOnlyHostClient.CurrentProbeTargetCount,
