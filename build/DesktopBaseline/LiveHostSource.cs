@@ -197,6 +197,9 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                             if (!updatedMap.TryGetValue(name, out string? host) || host != serverMap[name])
                                 serverResults.Remove(name);
                         serverMap = updatedMap;
+                    }
+                    if (rosterChanged || configChanged || (manualSweep && startSweep))
+                    {
                         var updated = IndependentNodeProbe.Load(profilePath);
                         foreach (var (name, old) in catalog.Profiles)
                         {
@@ -500,7 +503,7 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
             DateTimeOffset? lastObserved = native.ObservedUtc;
             if (server?.ObservedUtc is { } serverTime && (lastObserved is null || serverTime > lastObserved))
                 lastObserved = serverTime;
-            string independentMethod = node.Type == "Vless" ? "VLESS · HTTPS" : "Shadowsocks · HTTPS";
+            string? independentMethod = IndependentNodeProbe.MethodLabel(node.Type);
             DesktopResult openAi = Untested, chatGpt = Untested;
             DesktopResult? google = null, youtube = null, anthropic = null;
             DateTimeOffset expires = DateTimeOffset.MaxValue;
@@ -515,7 +518,7 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                 if (!history.TryGetValue((node.Name, site.Id), out var window)) continue;
                 var sample = window.Latest;
                 var result = new DesktopResult(sample.TargetId, sample.ElapsedMs, sample.HttpStatus, sample.ObservedUtc,
-                    sample.Independent ? independentMethod : "HTTPS", sample.HttpStatus switch
+                    sample.Independent ? independentMethod ?? "HTTPS" : "HTTPS", sample.HttpStatus switch
                     {
                         401 => ResultState.AuthenticationRequired,
                         403 => ResultState.Restricted,
@@ -560,10 +563,10 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                     ? Math.Min((int)Math.Round(points / siteCount), cap ?? 100) : null;
                 QualityState state = score is >= 80 ? QualityState.Good : score is < 60 || cap.HasValue
                     ? QualityState.Poor : score.HasValue ? QualityState.Restricted : QualityState.Insufficient;
-                quality = new(score, state, independentSource == true ? independentMethod : "HTTPS",
+                quality = new(score, state, independentSource == true ? independentMethod ?? "HTTPS" : "HTTPS",
                     cap, capTarget, siteCount, stableCount);
             }
-            var support = node.Type is not ("Vless" or "Shadowsocks") ? IndependentProbeState.UnsupportedProtocol
+            var support = independentMethod is null ? IndependentProbeState.UnsupportedProtocol
                 : catalog.Profiles.TryGetValue(node.Name, out var profile) && profile.Type == node.Type
                     ? IndependentProbeState.Available
                     : catalog.Configured.Contains(node.Name) ? IndependentProbeState.UnsupportedOptions

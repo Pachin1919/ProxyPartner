@@ -26,8 +26,28 @@ internal static class IndependentNodeProbe
         "dialer-proxy", "interface-name", "ip-version", "routing-mark", "skip-cert-verify", "tfo", "mptcp",
         "alterId", "cipher"
     ];
+    private static readonly string[] TrojanFields =
+    [
+        "name", "type", "server", "port", "password", "tls", "sni", "network", "ws-opts", "alpn",
+        "skip-cert-verify", "udp"
+    ];
+    private static readonly string[] VmessFields =
+    [
+        "name", "type", "server", "port", "uuid", "alterId", "cipher", "tls", "servername", "network",
+        "ws-opts", "alpn", "skip-cert-verify", "udp", "xudp", "packet-addr", "packet-encoding",
+        "global-padding", "authenticated-length"
+    ];
     private static readonly string[] WsFields = ["path", "headers", "max-early-data", "v2ray-http-upgrade", "v2ray-http-upgrade-fast-open"];
     private static readonly string[] RealityFields = ["public-key", "short-id"];
+
+    internal static string? MethodLabel(string type) => type switch
+    {
+        "Vless" => "VLESS · HTTPS",
+        "Shadowsocks" => "Shadowsocks · HTTPS",
+        "Trojan" => "Trojan · HTTPS",
+        "Vmess" => "VMess · HTTPS",
+        _ => null
+    };
 
     internal static string? ConfiguredPath(bool verifiedPipe)
     {
@@ -84,20 +104,26 @@ internal static class IndependentNodeProbe
 
     private static ProbeProfile? FromLink(string link)
     {
-        if (link.Length > 4096 ||
-            !(link.StartsWith("vless://", StringComparison.OrdinalIgnoreCase) ||
-              link.StartsWith("ss://", StringComparison.OrdinalIgnoreCase)) ||
-            !Proxy.TryCreate(link, out var client, out _))
+        if (link.Length > 4096 || !Proxy.TryCreate(link, out var client, out _))
             return null;
         return client switch
         {
-            VlessClient vless when vless.Options.Security is VlessSecurity.Tls or VlessSecurity.Reality ||
-                IPAddress.TryParse(vless.Options.Host, out var local) && IPAddress.IsLoopback(local)
+            VlessClient vless when SupportedTransport(vless.Options.Transport) &&
+                (vless.Options.Security is VlessSecurity.Tls or VlessSecurity.Reality ||
+                 IPAddress.TryParse(vless.Options.Host, out var local) && IPAddress.IsLoopback(local))
                 => new("Vless", Revision(link), vless.ConnectAsync),
             ShadowsocksClient ss => new("Shadowsocks", Revision(link), ss.ConnectAsync),
+            TrojanClient trojan when !trojan.Options.AllowInsecure && SupportedTransport(trojan.Options.Transport)
+                => new("Trojan", Revision(link), trojan.ConnectAsync),
+            VmessClient vmess when !vmess.Options.AllowInsecure && SupportedTransport(vmess.Options.Transport) &&
+                (vmess.Options.Security != VmessSecurityKind.ChaCha20Poly1305 || ChaCha20Poly1305.IsSupported)
+                => new("Vmess", Revision(link), vmess.ConnectAsync),
             _ => null
         };
     }
+
+    private static bool SupportedTransport(string? transport) => transport is
+        null or "" or "tcp" or "raw" or "ws" or "websocket" or "httpupgrade";
 
     private static string Revision(string value) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value)));
@@ -162,11 +188,100 @@ internal static class IndependentNodeProbe
                 {
                     "vless" => ReadVless(entry, server, port),
                     "ss" => ReadShadowsocks(entry, server, port),
+                    "trojan" or "vmess" => ReadTrojanOrVmess(entry, server, port),
                     _ => null
                 };
             }
             yield return (name, profile);
         }
+    }
+
+    private static ProbeProfile? ReadTrojanOrVmess(YamlMappingNode entry, string server, int port)
+    {
+        bool trojan = Text(entry, "type") == "trojan";
+        if (!HasOnly(entry, trojan ? TrojanFields : VmessFields) ||
+            Text(entry, "network") is not (null or "tcp" or "ws") ||
+            Text(entry, "skip-cert-verify")?.ToLowerInvariant() is not (null or "" or "false") ||
+            !TryReadWebTransport(entry, out string network, out string? path, out string? host))
+            return null;
+
+        string? tls = Text(entry, "tls")?.ToLowerInvariant();
+        if (tls is not (null or "" or "true" or "false")) return null;
+
+        string? sni = Text(entry, trojan ? "sni" : "servername");
+        if (sni is { Length: > 0 } && Uri.CheckHostName(sni) == UriHostNameType.Unknown) return null;
+
+        IReadOnlyList<string>? alpn = null;
+        if (Field(entry, "alpn") is { } field)
+        {
+            if (field is not YamlSequenceNode sequence ||
+                sequence.Children.Any(value => value is not YamlScalarNode { Value: { Length: > 0 and <= 255 } protocol }
+                    || protocol.Any(c => c is < '!' or > '~')))
+                return null;
+            alpn = sequence.Children.Cast<YamlScalarNode>().Select(value => value.Value!).ToArray();
+        }
+        string transportRevision = $"{server}\n{port}\n{network}\n{sni}\n{path}\n{host}\n{string.Join('\n', alpn ?? [])}";
+        if (trojan)
+        {
+            if (tls == "false" || Text(entry, "password") is not { Length: > 0 and <= 4096 } password)
+                return null;
+            var client = new TrojanClient(new()
+            {
+                Host = server, Port = port, Password = password, Transport = network,
+                Path = path, HostHeader = host, Sni = string.IsNullOrEmpty(sni) ? server : sni,
+                Alpn = alpn ?? (network == "tcp" ? ["h2", "http/1.1"] : ["http/1.1"])
+            });
+            return new("Trojan", Revision($"{transportRevision}\n{password}"), client.ConnectAsync);
+        }
+
+        if (!Guid.TryParse(Text(entry, "uuid"), out var id) ||
+            Text(entry, "alterId") is not (null or "0") ||
+            Text(entry, "global-padding")?.ToLowerInvariant() is not (null or "" or "false") ||
+            Text(entry, "authenticated-length")?.ToLowerInvariant() is not (null or "" or "false"))
+            return null;
+
+        VmessSecurityKind? cipher = Text(entry, "cipher") switch
+        {
+            null or "" or "auto" => ChaCha20Poly1305.IsSupported ? VmessSecurityKind.Auto : VmessSecurityKind.Aes128Gcm,
+            "aes-128-gcm" => VmessSecurityKind.Aes128Gcm,
+            "chacha20-poly1305" when ChaCha20Poly1305.IsSupported => VmessSecurityKind.ChaCha20Poly1305,
+            _ => null
+        };
+        if (cipher is not { } security) return null;
+        var vmess = new VmessClient(new()
+        {
+            Host = server, Port = port, Id = id.ToString(), Security = security, UseTls = tls == "true",
+            Transport = network, Path = path, HostHeader = host, Sni = sni,
+            Alpn = network == "tcp" ? alpn : ["http/1.1"]
+        });
+        return new("Vmess", Revision($"{transportRevision}\n{security}\n{tls}\n{id}"), vmess.ConnectAsync);
+    }
+
+    private static bool TryReadWebTransport(YamlMappingNode entry, out string network,
+        out string? path, out string? host)
+    {
+        network = Text(entry, "network") ?? "tcp";
+        path = host = null;
+        if (network is not ("tcp" or "ws" or "httpupgrade")) return false;
+        if (Field(entry, "ws-opts") is not { } field) return true;
+        if (field is not YamlMappingNode ws || !HasOnly(ws, WsFields)) return false;
+
+        path = Text(ws, "path");
+        if (Field(ws, "headers") is { } value)
+        {
+            if (value is not YamlMappingNode headers) return false;
+            host = Text(headers, "Host") ?? Text(headers, "host");
+            if (headers.Children.Count > (host is null ? 0 : 1)) return false;
+        }
+        if (path is { Length: > 0 } && (path[0] != '/' || path.Any(c => c == ' ' || char.IsControl(c))) ||
+            host?.Any(c => c == ' ' || char.IsControl(c)) == true ||
+            Text(ws, "max-early-data") is not (null or "" or "0") ||
+            Text(ws, "v2ray-http-upgrade-fast-open")?.ToLowerInvariant() is not (null or "" or "false"))
+            return false;
+
+        if (network == "ws" && Text(ws, "v2ray-http-upgrade")?.ToLowerInvariant() == "true")
+            network = "httpupgrade";
+        return true;
     }
 
     private static ProbeProfile? ReadVless(YamlMappingNode entry, string server, int port)
@@ -183,17 +298,8 @@ internal static class IndependentNodeProbe
             Text(entry, "tfo")?.ToLowerInvariant() is not (null or "" or "false") ||
             Text(entry, "mptcp")?.ToLowerInvariant() is not (null or "" or "false"))
             return null;
-        string network = Text(entry, "network") ?? "tcp";
-        if (network is not ("tcp" or "ws" or "httpupgrade")) return null;
-        var ws = Field(entry, "ws-opts") as YamlMappingNode;
-        if (!HasOnly(ws, WsFields)) return null;
-        var headers = Field(ws, "headers") as YamlMappingNode;
-        string? host = Text(headers, "Host") ?? Text(headers, "host");
-        if ((headers?.Children.Count ?? 0) > (host is null ? 0 : 1) ||
-            Text(ws, "max-early-data") is not (null or "" or "0") ||
-            Text(ws, "v2ray-http-upgrade-fast-open") == "true")
+        if (!TryReadWebTransport(entry, out string network, out string? path, out string? host))
             return null;
-        if (network == "ws" && Text(ws, "v2ray-http-upgrade") == "true") network = "httpupgrade";
         var reality = Field(entry, "reality-opts") as YamlMappingNode;
         if (!HasOnly(reality, RealityFields)) return null;
         string security = reality is not null ? "reality" :
@@ -208,7 +314,7 @@ internal static class IndependentNodeProbe
         Option("flow", Text(entry, "flow"));
         Option("pbk", Text(reality, "public-key"));
         Option("sid", Text(reality, "short-id"));
-        Option("path", Text(ws, "path"));
+        Option("path", path);
         Option("host", host);
         if (Field(entry, "alpn") is YamlSequenceNode alpn)
             Option("alpn", string.Join(',', alpn.Children.OfType<YamlScalarNode>().Select(n => n.Value)));
