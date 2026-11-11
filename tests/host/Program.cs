@@ -240,7 +240,7 @@ static async Task SelectorCommandAsync()
             string body = "", code = "200 OK";
             if (request == "GET /version HTTP/1.1") body = """{"version":"v1.19.21"}""";
             else if (request == "GET /proxies HTTP/1.1")
-                body = $$"""{"proxies":{"{{group}}":{"type":"Selector","now":"{{selected}}","all":["{{initial}}","{{target}}"]},"automatic":{"type":"URLTest","now":"{{initial}}","all":["{{initial}}","{{target}}"]}}}""";
+                body = $$$$"""{"proxies":{"{{{{group}}}}":{"type":"Selector","now":"{{{{selected}}}}","all":["{{{{initial}}}}","{{{{target}}}}"]},"automatic":{"type":"URLTest","now":"{{{{initial}}}}","all":["{{{{initial}}}}","{{{{target}}}}"]}}}""";
             else
             {
                 Require(request == $"PUT /proxies/{Uri.EscapeDataString(group)} HTTP/1.1", "exact selector request");

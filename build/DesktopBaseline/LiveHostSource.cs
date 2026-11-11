@@ -256,18 +256,8 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                     void RecordExit(string name, IPAddress address, IPAddress? corroboration)
                     {
                         var family = address.AddressFamily == AddressFamily.InterNetwork ? exitV4 : exitV6;
-                        var previous = family.GetValueOrDefault(name);
-                        var now = DateTimeOffset.UtcNow;
-                        string value = address.ToString();
-                        bool agrees = address.Equals(corroboration);
-                        bool changed = agrees && previous?.LastVerifiedAddress is { } last && last != value;
-                        bool continues = agrees && !changed && previous is { Observers: 2, OtherAddress: null } &&
-                            now - previous.ObservedUtc <= TimeSpan.FromHours(1);
-                        family[name] = new(value, now, (previous?.Changes ?? 0) + (changed ? 1 : 0),
-                            corroboration is null ? 1 : 2, agrees ? null : corroboration?.ToString(),
-                            agrees ? value : previous?.LastVerifiedAddress,
-                            continues ? previous!.ConsistentSince : agrees ? now : null,
-                            agrees ? (continues ? previous!.ConfirmedSamples + 1 : 1) : 0);
+                        family[name] = UpdateExitObservation(family.GetValueOrDefault(name), address,
+                            corroboration, DateTimeOffset.UtcNow);
                     }
                     if (testedGroups is not null && (testedMode != facts.Mode ||
                         !testedGroups.Select(g => (g.Name, g.Selected))
@@ -417,6 +407,21 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
             await Task.WhenAll(serverActive.Keys.Cast<Task>().Concat(websiteActive.Keys)).ConfigureAwait(false);
             if (currentTask is not null) await currentTask.ConfigureAwait(false);
         }
+    }
+
+    internal static DesktopExitIp UpdateExitObservation(DesktopExitIp? previous, IPAddress address,
+        IPAddress? corroboration, DateTimeOffset now)
+    {
+        string value = address.ToString();
+        bool agrees = address.Equals(corroboration);
+        bool changed = agrees && previous?.LastVerifiedAddress is { } last && last != value;
+        bool continues = agrees && !changed && previous is { ConfirmedSamples: > 0 } &&
+            now - previous.ObservedUtc <= TimeSpan.FromHours(1);
+        return new(value, now, (previous?.Changes ?? 0) + (changed ? 1 : 0),
+            corroboration is null ? 1 : 2, agrees ? null : corroboration?.ToString(),
+            agrees ? value : previous?.LastVerifiedAddress,
+            continues ? previous!.ConsistentSince : agrees ? now : null,
+            agrees ? (continues ? previous!.ConfirmedSamples + 1 : 1) : 0);
     }
 
     private void PublishFacts(HostFacts facts, List<WebsiteProbe> samples, IEnumerable<WebsiteWindow> history,

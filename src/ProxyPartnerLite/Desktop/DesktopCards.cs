@@ -558,7 +558,7 @@ public sealed unsafe partial class DesktopApp
         {
             var bounds = item->Bounds;
             Fill(item->Dc, bounds, Tools);
-            Label(item->Dc, sweepText, bounds.Left, bounds.Top, bounds.Right, bounds.Bottom - bounds.Top, Muted, font, 2);
+            Label(item->Dc, sweepText, bounds.Left, bounds.Top, bounds.Right, bounds.Bottom - bounds.Top, Muted, font);
             return;
         }
         if (item->Id is not (Toggle or SortMenu or Groups or OpenSettings or OpenDetails or TestServers or OpenProxyControl)) return;
