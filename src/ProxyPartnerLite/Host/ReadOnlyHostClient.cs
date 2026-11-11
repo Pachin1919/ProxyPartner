@@ -76,7 +76,7 @@ public sealed partial class ReadOnlyHostClient
         try
         {
             var core = WindowsPeer.Discover();
-            if (core.Pid != expectedPid || core.StartedAtUtc != expectedStart) return false;
+            if (core.Pid != expectedPid || (core.StartedAtUtc ?? core.Service?.Ui.StartedAtUtc) != expectedStart) return false;
             return await SelectMemberForCoreAsync(core, "verge-mihomo", group, member, token).ConfigureAwait(false);
         }
         catch (Exception error) when (IsBoundaryError(error)) { return false; }
@@ -160,7 +160,8 @@ public sealed partial class ReadOnlyHostClient
         internal List<HostRequestFact> Requests { get; } = new(4);
 
         internal HostReadResult Result(HostStatus status, HostFacts? facts = null) =>
-            new(status, facts, core.Pid, core.StartedAtUtc, verifiedPeer, Requests.ToArray());
+            new(status, facts, core.Pid, core.StartedAtUtc, verifiedPeer, Requests.ToArray(),
+                core.StartedAtUtc ?? core.Service?.Ui.StartedAtUtc);
 
         internal async Task<HostFacts> ReadAsync(LoopbackSettings? fallback, CancellationToken token)
         {

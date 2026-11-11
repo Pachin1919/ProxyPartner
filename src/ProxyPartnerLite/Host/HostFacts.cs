@@ -25,7 +25,7 @@ public sealed record HostFacts(
 public sealed record HostRequestFact(string Path, int HttpStatus);
 public sealed record HostReadResult(
     HostStatus Status, HostFacts? Facts, int? CoreProcessId, DateTimeOffset? CoreStartedAtUtc,
-    int? VerifiedPeerProcessId, IReadOnlyList<HostRequestFact> Requests);
+    int? VerifiedPeerProcessId, IReadOnlyList<HostRequestFact> Requests, DateTimeOffset? VerifiedHostStartedAtUtc = null);
 
 internal sealed class HostFailure(HostStatus status) : Exception
 {

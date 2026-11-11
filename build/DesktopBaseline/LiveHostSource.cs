@@ -189,7 +189,7 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                     var websiteEligible = facts.Nodes.Where(n => n.Type == "Vless" && profiles.ContainsKey(n.Name))
                         .Select(n => n.Name).ToHashSet(StringComparer.Ordinal);
                     DesktopProxyControl? control = read.Status == HostStatus.ConnectedPipe &&
-                        read.CoreStartedAtUtc is { } coreStarted
+                        read.VerifiedHostStartedAtUtc is { } coreStarted
                         ? new(corePid, coreStarted, facts.Groups.Where(group => group.Type == "Selector")
                             .Select(group => new DesktopProxyGroup(group.Name, group.Selected, group.Members)).ToArray(),
                             lastSelection) : null;

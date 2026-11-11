@@ -14,7 +14,7 @@ internal sealed record ProbeProfile(IProxyClient Client, string Revision);
 internal static class IndependentNodeProbe
 {
     private const int MaxProfileBytes = 1024 * 1024;
-    internal static readonly Uri EchoUrl = new("https://api64.ipify.org/");
+    internal static readonly Uri EchoUrl = new("https://checkip.amazonaws.com/");
     internal static readonly Uri CorroboratingEchoUrl = new("https://icanhazip.com/");
     private static readonly string[] ClashFields =
     [
