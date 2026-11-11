@@ -30,6 +30,7 @@ public sealed unsafe partial class DesktopApp
     private nint[]? siteIcons;
     private bool tableMode;
     private string? selectedId;
+    private string? cardBodyPress;
     private string filterText = "";
     private bool showGroups;
     private readonly HashSet<string> tested = new(StringComparer.Ordinal);
@@ -133,20 +134,32 @@ public sealed unsafe partial class DesktopApp
                 }
                 return 0;
             case 0x201: // WM_LBUTTONDOWN
+            case 0x203: // WM_LBUTTONDBLCLK
+                bool doubleClick = msg == 0x203;
+                string? firstCard = cardBodyPress;
+                cardBodyPress = null;
                 SetFocus(cards);
                 int x = (short)(lParam & 0xffff), y = (short)(lParam >> 16) + scrollY;
                 int col = x / (cardWidth + cardGap);
                 int index = y / (cardHeight + cardGap) * columns + col;
-                if (x >= 0 && col < columns && x % (cardWidth + cardGap) < cardWidth &&
+                if (x >= 0 && y >= 0 && col < columns && x % (cardWidth + cardGap) < cardWidth &&
                     y % (cardHeight + cardGap) < cardHeight && (uint)index < rows.Length)
                 {
-                    SelectCard(index);
                     int localX = x - col * (cardWidth + cardGap);
                     int localY = y % (cardHeight + cardGap);
                     var check = CardCheckBounds(0, 0);
-                    if (localX >= check.Left && localX < check.Right &&
-                        localY >= check.Top && localY < check.Bottom)
-                        ActivateCardAction(index);
+                    bool testButton = localX >= check.Left && localX < check.Right &&
+                        localY >= check.Top && localY < check.Bottom;
+                    if (doubleClick)
+                    {
+                        if (!testButton && firstCard == rows[index].Id) SwitchToNode(index);
+                    }
+                    else
+                    {
+                        SelectCard(index);
+                        if (testButton) ActivateCardAction(index);
+                        else cardBodyPress = rows[index].Id;
+                    }
                 }
                 return 0;
             case WmKeyDown:
@@ -527,7 +540,10 @@ public sealed unsafe partial class DesktopApp
 
     private string HoverText()
     {
-        if ((uint)hoverIndex >= rows.Length) return L("悬停查看站点状态", "Hover to see target details");
+        if ((uint)hoverIndex >= rows.Length)
+            return source is IDesktopProxyControlSource
+                ? L("双击卡片切换节点", "Double-click a card to switch")
+                : L("悬停查看站点状态", "Hover to see target details");
         var row = rows[hoverIndex];
         if (hoverSite == -2) return L("优先测速此节点", "Test this node first");
         return hoverSite < 0 ? row.Name :

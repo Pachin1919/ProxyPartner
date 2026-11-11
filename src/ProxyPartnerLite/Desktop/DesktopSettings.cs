@@ -241,7 +241,6 @@ public sealed unsafe partial class DesktopApp
                 {
                     proxyWindow = proxyGroup = proxyMember = proxyApply = proxyStatus = 0;
                     proxyOptions = null;
-                    proxyPending = false;
                     if (proxyFont != 0) DeleteObject(proxyFont);
                     proxyFont = 0;
                 }
@@ -302,7 +301,7 @@ public sealed unsafe partial class DesktopApp
                 else if (lParam != 0 && notification is 4 or 6 or 0x100) RevealSettingsControl(lParam);
                 return 0;
             case WmCommand when window == proxyWindow:
-                if (((int)wParam & 0xffff) == ProxyGroupId && ((int)wParam >> 16) == 1 && !proxyPending)
+                if (((int)wParam & 0xffff) == ProxyGroupId && ((int)wParam >> 16) == 1 && pendingProxyControl is null)
                     LoadProxyMembers();
                 if ((int)wParam == ApplyProxySelection) ApplyProxyMember();
                 return 0;

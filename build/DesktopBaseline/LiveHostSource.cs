@@ -192,7 +192,7 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                         read.VerifiedHostStartedAtUtc is { } coreStarted
                         ? new(corePid, coreStarted, facts.Groups.Where(group => group.Type == "Selector")
                             .Select(group => new DesktopProxyGroup(group.Name, group.Selected, group.Members)).ToArray(),
-                            lastSelection) : null;
+                            lastSelection, facts.Mode) : null;
                     string? globalSelection = null;
                     if (string.Equals(facts.Mode, "global", StringComparison.OrdinalIgnoreCase))
                     {

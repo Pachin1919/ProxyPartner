@@ -47,7 +47,9 @@ public sealed unsafe partial class DesktopApp
     private string L(string zh, string en) => preferences.English ? en : zh;
     private string PanelTitle => L("ProxyPartner · 节点质量面板", "ProxyPartner · Node quality");
     private string ViewLabel => tableMode ? L("切换卡片", "Cards") : L("切换表格", "Table");
-    private string TableHint => L("表格 · 可按列排序", "Table · sort by column");
+    private string TableHint => source is IDesktopProxyControlSource
+        ? L("选中节点后按 Enter 切换", "Select a node, then press Enter")
+        : L("表格 · 可按列排序", "Table · sort by column");
 
     // Run on the caller's Windows UI thread. The caller owns the source lifecycle.
     public static int Run(IDesktopSnapshotSource source, bool startInTray = false, string? settingsPath = null)
@@ -99,6 +101,12 @@ public sealed unsafe partial class DesktopApp
         int result;
         while ((result = GetMessage(&msg, 0, 0, 0)) > 0)
         {
+            if (tableMode && msg.Window == list && msg.Id == WmKeyDown && msg.WParam == 0x0d &&
+                source is IDesktopProxyControlSource)
+            {
+                if ((msg.LParam & (1 << 30)) == 0) SwitchToNode(TableSelection());
+                continue;
+            }
             if (panel != 0 && msg.Id == WmKeyDown && msg.WParam == 0x74 && source is IDesktopCurrentTestSource test)
             {
                 test.RequestCurrentTest();
@@ -125,7 +133,8 @@ public sealed unsafe partial class DesktopApp
         {
             var cls = new WindowClass
             {
-                Size = (uint)sizeof(WindowClass), Proc = &WindowProc, Instance = module,
+                Size = (uint)sizeof(WindowClass), Style = name == CardsClass ? 8u : 0u, // CS_DBLCLKS
+                Proc = &WindowProc, Instance = module,
                 Icon = icon, SmallIcon = smallIcon, Cursor = LoadCursor(0, 32512), Background = 16, Name = className
             };
             return RegisterClass(&cls) != 0;
@@ -205,6 +214,7 @@ public sealed unsafe partial class DesktopApp
                     lastStatusText = null;
                     sweepStatus = proxyButton = 0;
                     sweepText = "";
+                    cardBodyPress = null;
                     FreeFonts();
                     if (editBrush != 0) DeleteObject(editBrush);
                     if (toolsBrush != 0) DeleteObject(toolsBrush);
@@ -623,7 +633,10 @@ public sealed unsafe partial class DesktopApp
                 if (sweep.BatchTotal > 0)
                     probe += L($" · 机房 {sweep.Completed}/{sweep.BatchTotal}", $" · Servers {sweep.Completed}/{sweep.BatchTotal}");
             }
-            SetStatusText($"{snapshot.Host} · {connection}{count}{probe}");
+            string feedback = proxyFeedback is not null &&
+                (pendingProxyControl is not null || Environment.TickCount64 < proxyFeedbackUntil)
+                ? $" · {proxyFeedback}" : "";
+            SetStatusText($"{snapshot.Host} · {connection}{feedback}{count}{probe}");
             return;
         }
         string collection = snapshot.Collection switch

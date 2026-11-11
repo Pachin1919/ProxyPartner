@@ -13,7 +13,7 @@ public sealed record DesktopExitIp(string Address, DateTimeOffset ObservedUtc, i
 public sealed record DesktopProxyGroup(string Name, string? Selected, IReadOnlyList<string> Members);
 public sealed record DesktopProxySelection(string Group, string Member, bool Confirmed);
 public sealed record DesktopProxyControl(int CorePid, DateTimeOffset CoreStarted,
-    IReadOnlyList<DesktopProxyGroup> Groups, DesktopProxySelection? LastSelection);
+    IReadOnlyList<DesktopProxyGroup> Groups, DesktopProxySelection? LastSelection, string? Mode = null);
 
 public sealed record DesktopResult(
     string? TargetId, int? ElapsedMs, int? HttpStatus, DateTimeOffset? ObservedUtc,

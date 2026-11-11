@@ -7,7 +7,82 @@ public sealed unsafe partial class DesktopApp
     private const int ProxyGroupId = 251, ProxyMemberId = 252, ApplyProxySelection = 253, TestExitIp = 254;
     private nint proxyWindow, proxyGroup, proxyMember, proxyApply, proxyStatus, proxyFont, exitButton;
     private DesktopProxyControl? proxyOptions;
-    private bool proxyPending;
+    private DesktopProxyControl? pendingProxyControl;
+    private string? proxyFeedback;
+    private long proxyFeedbackUntil;
+
+    private void SwitchToNode(int index)
+    {
+        if ((uint)index >= rows.Length || rows[index].Kind != NodeKind.Leaf ||
+            source is not IDesktopProxyControlSource || pendingProxyControl is not null) return;
+        if (source.GetSnapshot().ProxyControl is not { } options)
+        {
+            ShowProxyFeedback(L("未连接 Clash", "Clash is unavailable"));
+            return;
+        }
+        string member = rows[index].Name;
+        if (string.Equals(options.Mode, "direct", StringComparison.OrdinalIgnoreCase))
+        {
+            ShowProxyFeedback(L("Clash 当前为直连模式", "Clash is in Direct mode"));
+            return;
+        }
+        if (string.Equals(options.Mode, "global", StringComparison.OrdinalIgnoreCase))
+        {
+            string? groupName = "GLOBAL";
+            for (int depth = 0; depth < options.Groups.Count && groupName is not null; depth++)
+            {
+                var group = options.Groups.FirstOrDefault(item => item.Name == groupName);
+                if (group is null) break;
+                if (group.Members.Contains(member, StringComparer.Ordinal))
+                {
+                    StartProxySelection(options, group, member);
+                    return;
+                }
+                groupName = group.Selected == groupName ? null : group.Selected;
+            }
+            ShowProxyFeedback(L("全局策略组中没有此节点", "Node is outside the Global selector"));
+            return;
+        }
+
+        var groups = options.Groups.Where(group => group.Name != "GLOBAL" &&
+            group.Members.Contains(member, StringComparer.Ordinal)).ToArray();
+        if (groups.Length == 0)
+        {
+            ShowProxyFeedback(L("此节点不在可切换的策略组里", "No manual selector contains this node"));
+            return;
+        }
+        if (groups.Length == 1)
+        {
+            StartProxySelection(options, groups[0], member);
+            return;
+        }
+        nint menu = CreatePopupMenu();
+        if (menu == 0) return;
+        for (int i = 0; i < groups.Length; i++)
+            AppendMenu(menu, groups[i].Selected == member ? 8u : 0u, (nuint)(i + 1), groups[i].Name.Replace("&", "&&"));
+        Rect anchor;
+        GetWindowRect(proxyButton, &anchor);
+        uint command = TrackPopupMenu(menu, 0x102, anchor.Left, anchor.Bottom, 0, panel, 0);
+        DestroyMenu(menu);
+        if (command > 0 && command <= groups.Length)
+            StartProxySelection(options, groups[command - 1], member);
+    }
+
+    private void ShowProxyFeedback(string message)
+    {
+        proxyFeedback = message;
+        proxyFeedbackUntil = Environment.TickCount64 + 5000;
+        UpdateStatus();
+        if (proxyStatus != 0) SetText(proxyStatus, message);
+    }
+
+    private void StartProxySelection(DesktopProxyControl options, DesktopProxyGroup group, string member)
+    {
+        if (pendingProxyControl is not null || source is not IDesktopProxyControlSource control) return;
+        pendingProxyControl = options;
+        ShowProxyFeedback(L($"正在切换 · {member}", $"Switching · {member}"));
+        control.RequestProxySelection(options, group.Name, member);
+    }
 
     private void ShowProxyControl()
     {
@@ -69,30 +144,30 @@ public sealed unsafe partial class DesktopApp
 
     private void ApplyProxyMember()
     {
-        if (proxyPending || proxyOptions is not { } options || source is not IDesktopProxyControlSource control) return;
+        if (proxyOptions is not { } options) return;
         int groupIndex = (int)Send(proxyGroup, 0x147, 0, 0);
         int memberIndex = (int)Send(proxyMember, 0x147, 0, 0);
         if ((uint)groupIndex >= options.Groups.Count) return;
         var group = options.Groups[groupIndex];
         if ((uint)memberIndex >= group.Members.Count) return;
-        proxyPending = true;
-        SetText(proxyStatus, L("正在应用", "Applying selection"));
-        control.RequestProxySelection(options, group.Name, group.Members[memberIndex]);
+        StartProxySelection(options, group, group.Members[memberIndex]);
     }
 
     private void UpdateProxyControl(DesktopProxyControl? control)
     {
-        if (proxyWindow == 0) return;
-        if (proxyPending && (control is null || control.LastSelection is { } result &&
-            !ReferenceEquals(result, proxyOptions?.LastSelection)))
+        if (pendingProxyControl is { } pending && (control is null || control.CorePid != pending.CorePid ||
+            control.CoreStarted != pending.CoreStarted || control.LastSelection is { } result &&
+            !ReferenceEquals(result, pending.LastSelection)))
         {
-            proxyPending = false;
-            LoadProxyOptions(control, control?.LastSelection?.Group);
-            SetText(proxyStatus, control?.LastSelection is { Confirmed: true } applied
+            pendingProxyControl = null;
+            bool sameHost = control?.CorePid == pending.CorePid && control.CoreStarted == pending.CoreStarted;
+            if (proxyWindow != 0) LoadProxyOptions(control, sameHost ? control?.LastSelection?.Group : null);
+            ShowProxyFeedback(sameHost && control?.LastSelection is { Confirmed: true } applied
                 ? L($"Clash 已选 · {applied.Member}", $"Clash selected · {applied.Member}")
                 : L("未能确认切换，请核对 Clash 当前选点", "Switch not confirmed. Check the current selection in Clash."));
         }
-        else if (!proxyPending && (control?.CorePid != proxyOptions?.CorePid || control?.CoreStarted != proxyOptions?.CoreStarted))
+        else if (proxyWindow != 0 && pendingProxyControl is null &&
+            (control?.CorePid != proxyOptions?.CorePid || control?.CoreStarted != proxyOptions?.CoreStarted))
             LoadProxyOptions(control);
     }
 }
