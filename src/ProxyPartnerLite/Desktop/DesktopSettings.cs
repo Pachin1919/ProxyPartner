@@ -94,6 +94,8 @@ public sealed unsafe partial class DesktopApp
             detailWindow = CreateAux(L("ProxyPartner · 节点详情", "ProxyPartner · Node details"), 745, 620);
             if (detailWindow == 0) return;
             detailText = AuxChild(detailWindow, "EDIT", "", WsTabStop | 0x800000 | 0x200000 | 4 | 0x40 | 0x800, 240);
+            if (source is IDesktopCurrentTestSource)
+                exitButton = AuxChild(detailWindow, "BUTTON", L("复测出口 IP", "Retest exit IP"), WsTabStop, TestExitIp);
             SizeAux(detailWindow, null);
         }
         RefreshDetails();
@@ -151,12 +153,32 @@ public sealed unsafe partial class DesktopApp
             settingsFont = face;
             ScrollSettings(settingsScroll);
         }
+        else if (window == proxyWindow)
+        {
+            Rect rect;
+            GetClientRect(window, &rect);
+            foreach (nint control in new[] { proxyGroup, proxyMember, proxyApply, proxyStatus })
+                Send(control, WmSetFont, (nuint)face, 1);
+            int width = Math.Max(0, rect.Right - Px(32));
+            MoveWindow(proxyGroup, Px(16), Px(16), width, Px(260), 1);
+            MoveWindow(proxyMember, Px(16), Px(54), width, Px(260), 1);
+            MoveWindow(proxyApply, Px(16), Px(94), Px(144), Px(29), 1);
+            MoveWindow(proxyStatus, Px(16), Px(133), width, Px(42), 1);
+            if (proxyFont != 0) DeleteObject(proxyFont);
+            proxyFont = face;
+        }
         else
         {
             Rect rect;
             GetClientRect(window, &rect);
             Send(detailText, WmSetFont, (nuint)face, 1);
-            MoveWindow(detailText, Px(14), Px(14), Math.Max(0, rect.Right - Px(28)), Math.Max(0, rect.Bottom - Px(28)), 1);
+            int top = exitButton == 0 ? 14 : 50;
+            if (exitButton != 0)
+            {
+                Send(exitButton, WmSetFont, (nuint)face, 1);
+                MoveWindow(exitButton, Px(14), Px(12), Px(140), Px(28), 1);
+            }
+            MoveWindow(detailText, Px(14), Px(top), Math.Max(0, rect.Right - Px(28)), Math.Max(0, rect.Bottom - Px(top + 14)), 1);
             if (detailFont != 0) DeleteObject(detailFont);
             detailFont = face;
         }
@@ -215,9 +237,17 @@ public sealed unsafe partial class DesktopApp
                     settingsControls.Clear();
                     draftTargets.Clear();
                 }
+                else if (window == proxyWindow)
+                {
+                    proxyWindow = proxyGroup = proxyMember = proxyApply = proxyStatus = 0;
+                    proxyOptions = null;
+                    proxyPending = false;
+                    if (proxyFont != 0) DeleteObject(proxyFont);
+                    proxyFont = 0;
+                }
                 else
                 {
-                    detailWindow = detailText = 0;
+                    detailWindow = detailText = exitButton = 0;
                     if (detailFont != 0) DeleteObject(detailFont);
                     detailFont = 0;
                 }
@@ -270,6 +300,16 @@ public sealed unsafe partial class DesktopApp
                     if (id == CancelSettings || id == 2) DestroyWindow(window);
                 }
                 else if (lParam != 0 && notification is 4 or 6 or 0x100) RevealSettingsControl(lParam);
+                return 0;
+            case WmCommand when window == proxyWindow:
+                if (((int)wParam & 0xffff) == ProxyGroupId && ((int)wParam >> 16) == 1 && !proxyPending)
+                    LoadProxyMembers();
+                if ((int)wParam == ApplyProxySelection) ApplyProxyMember();
+                return 0;
+            case WmCommand when window == detailWindow && (int)wParam == TestExitIp:
+                int row = IndexOfSelection();
+                if (row >= 0 && rows[row].Kind == NodeKind.Leaf && source is IDesktopCurrentTestSource test)
+                    test.RequestNodeTest(rows[row].Name);
                 return 0;
             case WmCommand when (int)wParam == 2:
                 DestroyWindow(window);
@@ -463,6 +503,7 @@ public sealed unsafe partial class DesktopApp
             Line($"{name} · {value} · {observed} · {SourceLabel(result.Source)}");
         }
         Line(row.Name);
+        if (row.SelectionOnly) Line(L("GLOBAL 已选 · 等待验证实际线路", "GLOBAL selected · awaiting route verification"));
         if (CurrentSiteLabel(row.CurrentTarget) is { } activeSite)
             Line($"{L("当前测试线路", "Current tested route")} · {activeSite}");
         if (row.SelectedMember is { } member)
@@ -495,8 +536,12 @@ public sealed unsafe partial class DesktopApp
         {
             if (sample is null) return;
             string label = L("出口", "Exit");
-            string changes = L($"本次运行观测到 {sample.Changes} 次不同", $"{sample.Changes} observed changes this session");
-            Line($"{label} {family} · {sample.Address} · {changes} · {Timestamp(sample.ObservedUtc)} UTC · ipify");
+            string verification = sample.OtherAddress is { } other ? L($"两处观测不同 · {other}", $"Observers disagree · {other}")
+                : sample.Observers == 2 ? L("两处观测一致", "Two observers agree") : L("仅一处观测", "One observer");
+            bool stable = sample.ConfirmedSamples >= 3 && sample.ObservedUtc - sample.ConsistentSince >= TimeSpan.FromSeconds(30);
+            string stability = stable ? L("观测期间稳定", "Stable during observation") : L("稳定性样本不足", "Insufficient stability samples");
+            string changes = L($"已确认变化 {sample.Changes} 次", $"{sample.Changes} confirmed changes");
+            Line($"{label} {family} · {sample.Address} · {verification} · {stability} · {changes} · {Timestamp(sample.ObservedUtc)} UTC");
         }
         ExitIp("IPv4", row.ExitV4);
         ExitIp("IPv6", row.ExitV6);

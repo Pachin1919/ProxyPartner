@@ -15,6 +15,7 @@ internal static class IndependentNodeProbe
 {
     private const int MaxProfileBytes = 1024 * 1024;
     internal static readonly Uri EchoUrl = new("https://api64.ipify.org/");
+    internal static readonly Uri CorroboratingEchoUrl = new("https://icanhazip.com/");
     private static readonly string[] ClashFields =
     [
         "name", "type", "server", "port", "uuid", "network", "tls", "servername", "client-fingerprint",
@@ -162,8 +163,9 @@ internal static class IndependentNodeProbe
         map is null || map.Children.Keys.All(key =>
             key is YamlScalarNode { Value: { } name } && fields.Contains(name, StringComparer.Ordinal));
 
-    internal static async Task<IPAddress?> MeasureAsync(string node, ProbeProfile profile,
-        IReadOnlyList<(string Id, Uri Url)> targets, Uri echo, Action<WebsiteProbe> publish, CancellationToken stop)
+    internal static async Task<(IPAddress? First, IPAddress? Second)> MeasureAsync(string node, ProbeProfile profile,
+        IReadOnlyList<(string Id, Uri Url)> targets, Uri echo, Uri corroboration,
+        Action<WebsiteProbe> publish, CancellationToken stop)
     {
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(stop);
         deadline.CancelAfter(TimeSpan.FromSeconds(7));
@@ -207,6 +209,7 @@ internal static class IndependentNodeProbe
 
         var pending = targets.Select(MeasureSite).ToList();
         var ip = MeasureExitAsync(client, echo, deadline.Token);
+        var secondIp = MeasureExitAsync(client, corroboration, deadline.Token);
         while (pending.Count != 0)
         {
             var finished = await Task.WhenAny(pending).ConfigureAwait(false);
@@ -214,7 +217,7 @@ internal static class IndependentNodeProbe
             var sample = await finished.ConfigureAwait(false);
             if (!stop.IsCancellationRequested) publish(sample);
         }
-        return await ip.ConfigureAwait(false);
+        return (await ip.ConfigureAwait(false), await secondIp.ConfigureAwait(false));
     }
 
     private static async Task<IPAddress?> MeasureExitAsync(HttpClient client, Uri echo, CancellationToken token)
@@ -230,8 +233,13 @@ internal static class IndependentNodeProbe
                 !IPAddress.TryParse(Encoding.ASCII.GetString(buffer, 0, count).Trim(), out var address))
                 return null;
             if (address.IsIPv4MappedToIPv6) address = address.MapToIPv4();
-            return IPAddress.IsLoopback(address) || address.Equals(IPAddress.Any) || address.Equals(IPAddress.IPv6Any)
-                ? null : address;
+            byte[] octets = address.GetAddressBytes();
+            bool publicAddress = octets.Length == 4
+                ? octets[0] is > 0 and < 224 and not (10 or 127) &&
+                    !(octets[0] == 169 && octets[1] == 254 || octets[0] == 172 && octets[1] is >= 16 and <= 31 ||
+                      octets[0] == 192 && octets[1] == 168 || octets[0] == 100 && octets[1] is >= 64 and <= 127)
+                : (octets[0] & 0xe0) == 0x20;
+            return publicAddress ? address : null;
         }
         catch (Exception error) when (error is OperationCanceledException or HttpRequestException or IOException)
         {

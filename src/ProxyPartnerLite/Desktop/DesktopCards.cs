@@ -354,6 +354,9 @@ public sealed unsafe partial class DesktopApp
                         ? L($"{site} 当前", $"{site} current")
                         : row.IsCurrent ? L("宿主当前", "Host current") : L("策略组", "Policy group"),
                     midpoint, at(38), right, Scale(16), row.CurrentTarget is not null ? CurrentInk : Muted, smallFont, 2);
+            if (liveLatency && row.IsCurrent)
+                Label(dc, row.SelectionOnly ? L("GLOBAL 已选", "GLOBAL selected") : L("当前线路", "Current route"),
+                    left, at(38), right, Scale(17), CurrentInk, smallFont, 2);
             Fill(dc, Box(left, at(48), Math.Max(0, right - left), 1), Border);
             DrawSites(dc, row, left, right, at(52), at(63), at(73));
             Fill(dc, Box(left, at(86), Math.Max(0, right - left), 1), Border);
@@ -551,7 +554,14 @@ public sealed unsafe partial class DesktopApp
 
     private void DrawToolbarButton(DrawItem* item)
     {
-        if (item->Id is not (Toggle or SortMenu or Groups or OpenSettings or OpenDetails or TestServers)) return;
+        if (item->Id == SweepStatusId)
+        {
+            var bounds = item->Bounds;
+            Fill(item->Dc, bounds, Tools);
+            Label(item->Dc, sweepText, bounds.Left, bounds.Top, bounds.Right, bounds.Bottom - bounds.Top, Muted, font, 2);
+            return;
+        }
+        if (item->Id is not (Toggle or SortMenu or Groups or OpenSettings or OpenDetails or TestServers or OpenProxyControl)) return;
         bool activeButton = item->Id == Toggle || item->Id == Groups && showGroups;
         string label = item->Id switch
         {
@@ -559,6 +569,7 @@ public sealed unsafe partial class DesktopApp
             Groups => showGroups ? L("✓ 策略组", "✓ Groups") : L("策略组", "Groups"),
             OpenSettings => L("设置", "Settings"),
             OpenDetails => L("详情", "Details"),
+            OpenProxyControl => L("切换节点", "Switch"),
             TestServers => "",
             _ => descending ? L("排序 ↓", "Sort ↓") : L("排序 ↑", "Sort ↑")
         };

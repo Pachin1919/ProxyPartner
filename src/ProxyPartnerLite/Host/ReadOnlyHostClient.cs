@@ -4,6 +4,7 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Sockets;
 using System.Security.Principal;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization.Metadata;
 using ProxyPartnerLite.Discovery;
@@ -69,6 +70,53 @@ public sealed partial class ReadOnlyHostClient
         throw new HostFailure(HostStatus.IdentityRejected);
     }
 
+    public async Task<bool> SelectMemberAsync(int expectedPid, DateTimeOffset expectedStart,
+        string group, string member, CancellationToken token)
+    {
+        try
+        {
+            if (group is "." or ".." || token.IsCancellationRequested) return false;
+            var core = WindowsPeer.Discover();
+            if (core.Pid != expectedPid || core.StartedAtUtc != expectedStart) return false;
+            var session = new Session(core, "verge-mihomo", new());
+            var facts = await session.ReadAsync(null, token).ConfigureAwait(false);
+            var selector = facts.Groups.FirstOrDefault(item => item.Name == group && item.Type == "Selector");
+            if (selector is null || !selector.Members.Contains(member, StringComparer.Ordinal)) return false;
+            if (selector.Selected == member) return true;
+            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
+            deadline.CancelAfter(TimeSpan.FromSeconds(5));
+            await using var stream = await OpenVerifiedPipeAsync(core, "verge-mihomo", deadline.Token).ConfigureAwait(false);
+            using var client = new HttpClient(UseVerifiedStream(stream));
+            using var request = new HttpRequestMessage(HttpMethod.Put,
+                "http://127.0.0.1/proxies/" + Uri.EscapeDataString(group))
+            {
+                Content = new StringContent("{\"name\":\"" + JsonEncodedText.Encode(member) + "\"}", Encoding.UTF8, "application/json")
+            };
+            using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, deadline.Token)
+                .ConfigureAwait(false);
+            if (response.StatusCode != HttpStatusCode.NoContent) return false;
+            var updated = await session.ReadAsync(null, deadline.Token).ConfigureAwait(false);
+            return updated.Groups.Any(item => item.Name == group && item.Selected == member);
+        }
+        catch (Exception error) when (IsBoundaryError(error)) { return false; }
+    }
+
+    private static SocketsHttpHandler UseVerifiedStream(Stream stream)
+    {
+        bool streamTaken = false;
+        return new()
+        {
+            UseProxy = false, UseCookies = false, AllowAutoRedirect = false,
+            ActivityHeadersPropagator = null, MaxResponseHeadersLength = 16,
+            ConnectCallback = (_, _) =>
+            {
+                if (streamTaken) throw new IOException("The verified connection was already used.");
+                streamTaken = true;
+                return ValueTask.FromResult(stream);
+            }
+        };
+    }
+
     private static bool IsBoundaryError(Exception error) => error is HostFailure or UnauthorizedAccessException
         or OperationCanceledException or Win32Exception or IOException or HttpRequestException or SocketException
         or InvalidOperationException or JsonException or ArgumentException;
@@ -114,12 +162,22 @@ public sealed partial class ReadOnlyHostClient
                 ? HostProjection.Providers(await GetAsync("/providers/proxies", HostJson.Default.ProvidersWire, fallback, token)
                     .ConfigureAwait(false))
                 : null;
-            return new HostFacts(DateTimeOffset.UtcNow, version, nodes, groups, providers);
+            string? mode = null;
+            if (options.IncludeMode && fallback is null)
+            {
+                try
+                {
+                    mode = (await GetAsync("/configs", HostJson.Default.ModeWire, null, token)
+                        .ConfigureAwait(false)).Mode;
+                }
+                catch (Exception error) when (IsBoundaryError(error) && !token.IsCancellationRequested) { }
+            }
+            return new HostFacts(DateTimeOffset.UtcNow, version, nodes, groups, providers, mode);
         }
 
         private async Task<T> GetAsync<T>(string path, JsonTypeInfo<T> type, LoopbackSettings? fallback, CancellationToken token)
         {
-            string allowedPath = CheckRoute("GET", path);
+            string allowedPath = path == "/configs" && options.IncludeMode && fallback is null ? path : CheckRoute("GET", path);
             using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
             deadline.CancelAfter(TimeSpan.FromSeconds(5));
             var cancellation = deadline.Token;
@@ -128,20 +186,7 @@ public sealed partial class ReadOnlyHostClient
                 : await OpenLoopbackAsync(fallback.Endpoint, cancellation).ConfigureAwait(false);
             verifiedPeer = core.Pid;
 
-            bool streamTaken = false;
-            using var handler = new SocketsHttpHandler
-            {
-                UseProxy = false, UseCookies = false, AllowAutoRedirect = false,
-                ActivityHeadersPropagator = null, MaxResponseHeadersLength = 16,
-                ConnectCallback = (_, _) =>
-                {
-                    if (streamTaken)
-                        throw new IOException("The verified connection was already used.");
-                    streamTaken = true;
-                    return ValueTask.FromResult(stream);
-                }
-            };
-            using var client = new HttpClient(handler);
+            using var client = new HttpClient(UseVerifiedStream(stream));
             var address = new UriBuilder("http", "127.0.0.1", fallback?.Endpoint.Port ?? 80, allowedPath).Uri;
             using var request = new HttpRequestMessage(HttpMethod.Get, address)
             {

@@ -7,7 +7,13 @@ public enum QualityState { Insufficient, Good, Poor, Restricted }
 
 public sealed record DesktopQuality(int? Score, QualityState State, string Source,
     int? Cap = null, string? CapTarget = null, int TargetCount = 0, int StableTargetCount = 0);
-public sealed record DesktopExitIp(string Address, DateTimeOffset ObservedUtc, int Changes);
+public sealed record DesktopExitIp(string Address, DateTimeOffset ObservedUtc, int Changes,
+    int Observers = 1, string? OtherAddress = null, string? LastVerifiedAddress = null,
+    DateTimeOffset? ConsistentSince = null, int ConfirmedSamples = 0);
+public sealed record DesktopProxyGroup(string Name, string? Selected, IReadOnlyList<string> Members);
+public sealed record DesktopProxySelection(string Group, string Member, bool Confirmed);
+public sealed record DesktopProxyControl(int CorePid, DateTimeOffset CoreStarted,
+    IReadOnlyList<DesktopProxyGroup> Groups, DesktopProxySelection? LastSelection);
 
 public sealed record DesktopResult(
     string? TargetId, int? ElapsedMs, int? HttpStatus, DateTimeOffset? ObservedUtc,
@@ -41,7 +47,7 @@ public sealed record DesktopRow(
     DateTimeOffset? LastObservedUtc, DesktopQuality? Quality = null, string? SelectedMember = null,
     DesktopResult? Google = null, DesktopResult? YouTube = null, DesktopResult? Anthropic = null,
     string? CurrentTarget = null, DesktopResult? ServerPing = null, bool Testing = false,
-    DesktopExitIp? ExitV4 = null, DesktopExitIp? ExitV6 = null);
+    DesktopExitIp? ExitV4 = null, DesktopExitIp? ExitV6 = null, bool SelectionOnly = false);
 
 public sealed record DesktopCurrentTest(bool Running, int Completed, int Total, int Verified, int TimedOut,
     bool Attempted, string? CurrentTarget, bool Direct, bool PathChanged);
@@ -52,7 +58,12 @@ public sealed record DesktopServerSweep(int Completed, int BatchTotal, bool Requ
 public sealed record DesktopSnapshot(
     string Host, CollectionState Collection, string? VerifiedCurrentPath,
     DateTimeOffset? UpdatedUtc, IReadOnlyList<DesktopRow> Rows, DesktopCurrentTest? CurrentTest = null,
-    DesktopServerSweep? ServerSweep = null);
+    DesktopServerSweep? ServerSweep = null, DesktopProxyControl? ProxyControl = null);
+
+public interface IDesktopProxyControlSource
+{
+    void RequestProxySelection(DesktopProxyControl control, string group, string member);
+}
 
 public interface IDesktopCurrentTestSource
 {
