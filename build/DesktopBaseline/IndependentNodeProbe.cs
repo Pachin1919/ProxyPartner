@@ -237,8 +237,12 @@ internal static class IndependentNodeProbe
             bool publicAddress = octets.Length == 4
                 ? octets[0] is > 0 and < 224 and not (10 or 127) &&
                     !(octets[0] == 169 && octets[1] == 254 || octets[0] == 172 && octets[1] is >= 16 and <= 31 ||
-                      octets[0] == 192 && octets[1] == 168 || octets[0] == 100 && octets[1] is >= 64 and <= 127)
-                : (octets[0] & 0xe0) == 0x20;
+                      octets[0] == 192 && (octets[1] == 168 || octets[1] == 0 && octets[2] is 0 or 2) ||
+                      octets[0] == 100 && octets[1] is >= 64 and <= 127 ||
+                      octets[0] == 198 && (octets[1] is 18 or 19 || octets[1] == 51 && octets[2] == 100) ||
+                      octets[0] == 203 && octets[1] == 0 && octets[2] == 113)
+                : (octets[0] & 0xe0) == 0x20 &&
+                    !(octets[0] == 0x20 && octets[1] == 1 && octets[2] == 0x0d && octets[3] == 0xb8);
             return publicAddress ? address : null;
         }
         catch (Exception error) when (error is OperationCanceledException or HttpRequestException or IOException)

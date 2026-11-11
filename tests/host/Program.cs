@@ -44,6 +44,9 @@ try
         case "readonly-routes":
             await ReadOnlyRoutesAsync();
             break;
+        case "selector-command":
+            await SelectorCommandAsync();
+            break;
         case "no-secrets":
             await NoSecretsAsync();
             break;
@@ -191,6 +194,68 @@ static void MustReject(string method, string path)
 {
     try { ReadOnlyHostClient.CheckRoute(method, path); throw new CheckFailed("forbidden request reached allowlist"); }
     catch (HostFailure) { }
+}
+
+static async Task SelectorCommandAsync()
+{
+    const string group = "线路 组", initial = "alpha", target = "beta 节点";
+    string pipe = "ProxyPartner-selector-" + Guid.NewGuid().ToString("N");
+    string selected = initial;
+    int writes = 0;
+    using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+    var core = WindowsPeer.Inspect(Environment.ProcessId);
+    var server = ServeAsync();
+    try
+    {
+        Require(!await ReadOnlyHostClient.SelectMemberForCoreAsync(core, pipe, group, "outside", stop.Token),
+            "reject member outside selector");
+        Require(!await ReadOnlyHostClient.SelectMemberForCoreAsync(core, pipe, "automatic", target, stop.Token),
+            "reject automatic group");
+        Require(await ReadOnlyHostClient.SelectMemberForCoreAsync(core, pipe, group, initial, stop.Token),
+            "same member is already selected");
+        Require(writes == 0, "no write for rejected or already selected member");
+        Require(await ReadOnlyHostClient.SelectMemberForCoreAsync(core, pipe, group, target, stop.Token) &&
+            selected == target && writes == 1, "single encoded PUT and confirmed read-back");
+    }
+    finally
+    {
+        stop.Cancel();
+        try { await server; }
+        catch (OperationCanceledException) when (stop.IsCancellationRequested) { }
+    }
+
+    async Task ServeAsync()
+    {
+        while (true)
+        {
+            using var connection = new NamedPipeServerStream(pipe, PipeDirection.InOut, 2,
+                PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
+            await connection.WaitForConnectionAsync(stop.Token);
+            using var reader = new StreamReader(connection, Encoding.ASCII, leaveOpen: true);
+            string? request = await reader.ReadLineAsync(stop.Token);
+            int length = 0;
+            while (await reader.ReadLineAsync(stop.Token) is { Length: > 0 } header)
+                if (header.StartsWith("Content-Length:", StringComparison.OrdinalIgnoreCase))
+                    length = int.Parse(header.AsSpan("Content-Length:".Length));
+            string body = "", code = "200 OK";
+            if (request == "GET /version HTTP/1.1") body = """{"version":"v1.19.21"}""";
+            else if (request == "GET /proxies HTTP/1.1")
+                body = $$"""{"proxies":{"{{group}}":{"type":"Selector","now":"{{selected}}","all":["{{initial}}","{{target}}"]},"automatic":{"type":"URLTest","now":"{{initial}}","all":["{{initial}}","{{target}}"]}}}""";
+            else
+            {
+                Require(request == $"PUT /proxies/{Uri.EscapeDataString(group)} HTTP/1.1", "exact selector request");
+                var payload = new char[length];
+                await reader.ReadBlockAsync(payload, stop.Token);
+                using var json = JsonDocument.Parse(new string(payload));
+                Require(json.RootElement.GetProperty("name").GetString() == target, "explicit target in request");
+                selected = target;
+                writes++;
+                code = "204 No Content";
+            }
+            var response = Encoding.UTF8.GetBytes($"HTTP/1.1 {code}\r\nConnection: close\r\nContent-Length: {Encoding.UTF8.GetByteCount(body)}\r\n\r\n{body}");
+            await connection.WriteAsync(response, stop.Token);
+        }
+    }
 }
 
 static async Task NoSecretsAsync()

@@ -545,6 +545,10 @@ public sealed unsafe partial class DesktopApp
         }
         ExitIp("IPv4", row.ExitV4);
         ExitIp("IPv6", row.ExitV6);
+        if (!synthetic && row.Kind == NodeKind.Leaf && row.ExitV4 is null && row.ExitV6 is null)
+            Line(L("出口 IP · 暂无观测", "Exit IP · No observation"));
+        if (!synthetic && row.Kind == NodeKind.Leaf)
+            Line(L("稳定性需至少三次双源一致，且覆盖至少 30 秒。", "Stability requires three matching observations across at least 30 seconds."));
         Result("GitHub", row.GitHub);
         foreach (var target in preferences.CustomTargets) Line($"{target.Symbol} {target.ShortName} · {L("待测", "Untested")} · {target.Url}");
         Line();

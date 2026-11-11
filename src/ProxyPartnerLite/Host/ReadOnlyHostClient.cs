@@ -75,17 +75,27 @@ public sealed partial class ReadOnlyHostClient
     {
         try
         {
-            if (group is "." or ".." || token.IsCancellationRequested) return false;
             var core = WindowsPeer.Discover();
             if (core.Pid != expectedPid || core.StartedAtUtc != expectedStart) return false;
-            var session = new Session(core, "verge-mihomo", new());
+            return await SelectMemberForCoreAsync(core, "verge-mihomo", group, member, token).ConfigureAwait(false);
+        }
+        catch (Exception error) when (IsBoundaryError(error)) { return false; }
+    }
+
+    internal static async Task<bool> SelectMemberForCoreAsync(CoreIdentity core, string pipe, string group, string member,
+        CancellationToken token)
+    {
+        if (group is "." or ".." || token.IsCancellationRequested) return false;
+        try
+        {
+            var session = new Session(core, pipe, new());
             var facts = await session.ReadAsync(null, token).ConfigureAwait(false);
             var selector = facts.Groups.FirstOrDefault(item => item.Name == group && item.Type == "Selector");
             if (selector is null || !selector.Members.Contains(member, StringComparer.Ordinal)) return false;
             if (selector.Selected == member) return true;
             using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
             deadline.CancelAfter(TimeSpan.FromSeconds(5));
-            await using var stream = await OpenVerifiedPipeAsync(core, "verge-mihomo", deadline.Token).ConfigureAwait(false);
+            await using var stream = await OpenVerifiedPipeAsync(core, pipe, deadline.Token).ConfigureAwait(false);
             using var client = new HttpClient(UseVerifiedStream(stream));
             using var request = new HttpRequestMessage(HttpMethod.Put,
                 "http://127.0.0.1/proxies/" + Uri.EscapeDataString(group))
