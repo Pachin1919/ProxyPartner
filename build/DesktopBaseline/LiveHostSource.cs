@@ -321,7 +321,7 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                     bool refreshHost = false;
                     while (!stop.IsCancellationRequested && !HasPendingRequest())
                     {
-                        while (serverActive.Count < ParallelServerLimit &&
+                        while (!autoSweepPending && serverActive.Count < ParallelServerLimit &&
                             TryTakeNode(ref serverPriority, ref batch, out string? name, out bool counted))
                         {
                             if (Array.BinarySearch(eligible, name, StringComparer.Ordinal) < 0)
@@ -332,7 +332,7 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                             string host = serverMap[name];
                             serverActive.Add(ServerTargets.MeasureAsync(host, stop.Token), (name, host, counted));
                         }
-                        while (websiteActive.Count < ParallelWebsiteNodeLimit &&
+                        while (!autoSweepPending && websiteActive.Count < ParallelWebsiteNodeLimit &&
                             TryTakeNode(ref websitePriority, ref websiteBatch, out string? name, out bool counted))
                         {
                             if (!websiteEligible.Contains(name))
