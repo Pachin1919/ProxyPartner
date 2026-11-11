@@ -41,9 +41,10 @@ public sealed unsafe partial class DesktopApp
     private Tone GetTone(DesktopRow row, bool table = false)
     {
         bool light = preferences.Light;
-        if (NodeLatency(row).NoResponse)
+        var latency = NodeLatency(row);
+        if (latency.IsProbeFailure)
             return new Tone(Color(table ? (light ? 0xF2DDE5u : 0x45272Cu) : (light ? 0xF1F4F8u : 0x303741u)),
-                TimeoutInk, TimeoutInk, L("未响应", "No response"));
+                FailureInk, FailureInk, latency.Format(preferences.English));
         var tone = row.Quality?.State switch
         {
             QualityState.Good => new Tone(Color(light ? 0xD7EDE1u : 0x17382Eu), Color(light ? 0x257C60u : 0x78B89Du),
@@ -58,14 +59,14 @@ public sealed unsafe partial class DesktopApp
                 row.OpenAi.State != ResultState.Missing || row.ChatGpt.State != ResultState.Missing ||
                     row.Google is not null || row.YouTube is not null || row.Anthropic is not null
                     ? L("本轮已测", "Round tested") :
-                NodeLatency(row).ElapsedMs.HasValue ? L("延迟已测", "Latency read") :
+                latency.ElapsedMs.HasValue ? L("延迟已测", "Latency read") :
                 L("待测", "Untested"))
         };
         return !light && !table ? tone with { Background = Color(0x303741), Text = Muted } : tone;
     }
 
     private static uint Color(uint rgb) => ((rgb & 0xff) << 16) | (rgb & 0xff00) | (rgb >> 16);
-    private uint TimeoutInk => Color(preferences.Light ? 0x9F253Eu : 0xFFABA9u);
+    private uint FailureInk => Color(preferences.Light ? 0x9F253Eu : 0xFFABA9u);
     private static DesktopResult NodeLatency(DesktopRow row) => row.ServerPing ?? row.Native;
 
     private nint HandleCards(uint msg, nuint wParam, nint lParam)
@@ -336,12 +337,12 @@ public sealed unsafe partial class DesktopApp
                 var latency = NodeLatency(row);
                 int? rtt = latency.ElapsedMs;
                 string? delay = rtt is >= 0 ? $"{(row.ServerPing is null ? "≈" : "")}{rtt}ms" :
-                    latency.NoResponse ? ShortResult(latency) : null;
+                    latency.IsProbeFailure ? latency.Format(preferences.English) : null;
                 string? grade = row.Quality?.Score is int score ? $"S={score}" :
                     row.Quality?.Cap is int cap ? $"S≤{cap}" : null;
                 string headline = delay is not null && grade is not null ? $"{delay} ({grade})" :
                     delay ?? grade ?? (row.Testing ? L("测速中", "Testing") : L("待测速", "Untested"));
-                uint ink = latency.NoResponse ? TimeoutInk : ScoreInk(row.Quality?.Score ?? row.Quality?.Cap) ??
+                uint ink = latency.IsProbeFailure ? FailureInk : ScoreInk(row.Quality?.Score ?? row.Quality?.Cap) ??
                     (delay is not null ? Text : Muted);
                 Label(dc, headline, left, at(25), right, Scale(35), ink, combinedFont);
             }
@@ -374,8 +375,8 @@ public sealed unsafe partial class DesktopApp
             DrawSites(dc, row, left, right, at(52), at(63), at(73));
             Fill(dc, Box(left, at(86), Math.Max(0, right - left), 1), Border);
             if (!liveLatency)
-                Label(dc, $"{L("内核", "Core")} {ShortResult(row.Native)}", left, at(89), midpoint, Scale(17),
-                    row.Native.NoResponse ? TimeoutInk : Muted, smallFont);
+                Label(dc, $"{L("内核", "Core")} {row.Native.Format(preferences.English, compact: true)}", left, at(89), midpoint, Scale(17),
+                    row.Native.IsProbeFailure ? FailureInk : Muted, smallFont);
             else if ((row.ExitV4 ?? row.ExitV6) is { } exit)
                 Label(dc, exit.Address, left, at(89), midpoint, Scale(17), Muted, smallFont);
             Label(dc, Timestamp(row.LastObservedUtc), midpoint, at(89), right, Scale(17), Muted, smallFont, 2);
@@ -439,24 +440,11 @@ public sealed unsafe partial class DesktopApp
         0 => row.Google, 1 => row.YouTube, 2 => row.OpenAi, 3 => row.ChatGpt, 4 => row.Anthropic, _ => null
     };
 
-    private string ShortResult(DesktopResult? result) => result?.State switch
-    {
-        ResultState.AuthenticationRequired => "—",
-        ResultState.Restricted => L("受限", "Blocked"),
-        ResultState.Stale or ResultState.Measured when result.ElapsedMs is int ms => $"{ms} ms",
-        ResultState.Stale or ResultState.Failed => L("未响应", "No reply"),
-        ResultState.TimedOut => L("超时", "Timeout"),
-        ResultState.HttpError => result?.HttpStatus?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "—",
-        ResultState.Incomparable => L("不可比", "N/A"),
-        _ => L("待测", "N/T")
-    };
-
-    private string FormatSiteLatency(DesktopResult? result) => result switch
+    private string FormatSiteLatency(DesktopResult? result, bool compact = false) => result switch
     {
         { ElapsedMs: >= 0 and int ms, State: ResultState.Measured or ResultState.AuthenticationRequired
-            or ResultState.Restricted or ResultState.HttpError } => $"{ms} ms",
-        { State: ResultState.AuthenticationRequired } => "—",
-        _ => result?.Format(preferences.English) ?? L("待测", "Untested")
+            or ResultState.Restricted or ResultState.HttpError or ResultState.Stale } => compact ? $"{ms}ms" : $"{ms} ms",
+        _ => result?.Format(preferences.English, compact) ?? L("待测", compact ? "N/T" : "Untested")
     };
 
     private void DrawSites(nint dc, DesktopRow row, int left, int right, int iconY, int labelY, int statusY)
@@ -481,9 +469,8 @@ public sealed unsafe partial class DesktopApp
                 Label(dc, Sites[index].Short, start, iconY, end, Scale(23), Text, siteStatusFont, 1);
             }
             var result = SiteResult(row, index);
-            string state = result?.ElapsedMs is >= 0 and int ms && result.State != ResultState.TimedOut
-                ? $"{ms}ms" : ShortResult(result);
-            uint ink = result?.NoResponse == true ? TimeoutInk : result is null ? Muted : Text;
+            string state = FormatSiteLatency(result, compact: true);
+            uint ink = result?.IsProbeFailure == true ? FailureInk : result is null ? Muted : Text;
             Label(dc, state, start, statusY, end, Scale(16), ink, siteStatusFont, 1);
         }
     }
@@ -645,18 +632,18 @@ public sealed unsafe partial class DesktopApp
         if (item->Stage != 0x30001 || item->Item >= (nuint)rows.Length) return 0;
         var row = rows[(int)item->Item];
         var tone = GetTone(row, table: true);
-        bool nodeFailed = NodeLatency(row).NoResponse;
+        bool nodeFailed = NodeLatency(row).IsProbeFailure;
         bool failed = item->SubItem switch
         {
             0 or 9 => nodeFailed,
-            2 => row.Native.NoResponse,
-            3 => row.OpenAi.NoResponse,
-            4 => row.ChatGpt.NoResponse,
-            5 => row.GitHub.NoResponse,
+            2 => row.Native.IsProbeFailure,
+            3 => row.OpenAi.IsProbeFailure,
+            4 => row.ChatGpt.IsProbeFailure,
+            5 => row.GitHub.IsProbeFailure,
             _ => false
         };
         item->BackgroundColor = tone.Background;
-        item->TextColor = failed ? TimeoutInk : nodeFailed ? Muted : tone.Text;
+        item->TextColor = failed ? FailureInk : nodeFailed ? Muted : tone.Text;
         return 0;
     }
 

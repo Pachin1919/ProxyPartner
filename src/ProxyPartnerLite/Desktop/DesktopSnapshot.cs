@@ -20,19 +20,21 @@ public sealed record DesktopResult(
     string Source, ResultState State)
 {
     public string DisplayText => Format(false);
-    internal bool NoResponse => State is ResultState.Failed or ResultState.TimedOut ||
+    internal bool IsProbeFailure => State is ResultState.Failed or ResultState.TimedOut ||
         State == ResultState.Stale && ElapsedMs is null;
 
-    internal string Format(bool english) => State switch
+    internal string Format(bool english, bool compact = false) => State switch
     {
-        ResultState.Missing => english ? "Untested" : "未测",
+        ResultState.Missing => compact ? (english ? "N/T" : "待测") : english ? "Untested" : "未测",
         ResultState.Stale when ElapsedMs is int ms => $"{ms} ms",
-        ResultState.Stale or ResultState.Failed => english ? "No response" : "未响应",
-        ResultState.Incomparable => english ? "Not comparable" : "不可比较",
+        ResultState.Stale or ResultState.Failed => compact ? (english ? "Failed" : "失败") : english ? "Probe failed" : "探测失败",
+        ResultState.Incomparable => compact ? (english ? "N/A" : "不可比") : english ? "Not comparable" : "不可比较",
         ResultState.AuthenticationRequired => ElapsedMs is >= 0 and int delay ? $"{delay} ms" : "—",
+        ResultState.Restricted when compact => english ? "Blocked" : "受限",
         ResultState.Restricted => (english ? $"{HttpStatus} Restricted" : $"{HttpStatus} 受限") + TimingSuffix,
+        ResultState.HttpError when compact => HttpStatus?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "—",
         ResultState.HttpError => $"HTTP {HttpStatus}",
-        ResultState.TimedOut => english ? "Timed out" : "超时",
+        ResultState.TimedOut => english ? "Timeout" : "超时",
         _ => ElapsedMs is int ms ? $"{ms} ms" : english ? "No timing" : "无耗时"
     };
 
