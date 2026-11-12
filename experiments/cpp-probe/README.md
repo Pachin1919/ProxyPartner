@@ -19,4 +19,6 @@ The experiment uses the active local route and Windows TLS. The product sweep ex
 
 Each process runs three rounds with eight concurrent nodes, five sequential HTTPS destinations per node, a shared seven-second node deadline, and 30 seconds idle after each round. The test covers website probes over Shadowsocks ChaCha20-Poly1305 with TLS obfuscation. Both versions verify the HTTPS destination certificate. The C++ client uses the supplied OpenSSL CA bundle and the C# client uses Windows trust.
 
+For C++ concurrency experiments, omit `-CSharpExecutable` and pass `-CppWorkers 8,16,24,24,16,8 -CppRounds 1 -CppIdleSeconds 5`. The runner creates a fresh process and records the requested worker count for each trial. The C++ dialer uses `TCP_NODELAY`.
+
 The TLS obfuscation framing follows the repository's `ShadowsocksTlsObfs.cs` port of [gost v2.11.5 obfs.go](https://github.com/ginuerzh/gost/blob/v2.11.5/obfs.go), with its notice in `build/DesktopBaseline/Gost.LICENSE.txt`. The paired test omits the desktop UI, ICMP and exit-IP requests.

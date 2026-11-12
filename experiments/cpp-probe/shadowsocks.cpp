@@ -11,6 +11,8 @@ namespace {
 constexpr int wouldBlock = 10035;
 constexpr int socketLevel = 0xffff;
 constexpr int socketError = 0x1007;
+constexpr int tcpLevel = 6;
+constexpr int tcpNoDelay = 1;
 constexpr int chachaGetTag = 0x10;
 constexpr int chachaSetTag = 0x11;
 constexpr long nonblocking = static_cast<long>(0x8004667e);
@@ -32,8 +34,10 @@ Socket dial(const Profile& profile, Tick deadline) {
     for (auto* address = addresses; address && GetTickCount64() < deadline; address = address->next) {
         Socket candidate = socket(address->family, address->kind, address->protocol);
         if (candidate == invalidSocket) continue;
+        const int enabled = 1;
         Dword mode = 1;
-        if (ioctlsocket(candidate, nonblocking, &mode) == 0) {
+        if (setsockopt(candidate, tcpLevel, tcpNoDelay, reinterpret_cast<const char*>(&enabled), sizeof(enabled)) == 0 &&
+            ioctlsocket(candidate, nonblocking, &mode) == 0) {
             int error = 0, size = sizeof(error);
             if (connect(candidate, address->address, static_cast<int>(address->length)) == 0 ||
                 (WSAGetLastError() == wouldBlock && ready(candidate, true, deadline) &&
@@ -280,6 +284,7 @@ BioMethod* createTransportMethod() {
 
 Result measureSite(const Profile& profile, const Site& site, Tick deadline, SslContext* context, const BioMethod* method) {
     const Tick start = GetTickCount64();
+    if (start >= deadline) return {0, 0, true};
     Channel channel{dial(profile, deadline), profile, deadline};
     int status = 0;
     if (channel.socket != invalidSocket && channel.crypto && channel.start(site.host)) {

@@ -1,14 +1,14 @@
 #include "shadowsocks.hpp"
 
 extern "C" long _InterlockedIncrement(volatile long*);
+extern "C" unsigned long wcstoul(const wchar_t*, wchar_t**, int);
 #pragma intrinsic(_InterlockedIncrement)
 extern "C" __declspec(dllimport) int __stdcall WideCharToMultiByte(Dword, Dword,
     const wchar_t*, int, char*, int, const char*, Bool*);
 
 namespace {
 constexpr int maxNodes = 128;
-constexpr int concurrency = 8;
-constexpr Dword idleMs = 30000;
+constexpr int maxWorkers = 32;
 constexpr int siteCount = 5;
 constexpr Site sites[siteCount] = {
     {"GPT", "chatgpt.com", "/", ""},
@@ -88,12 +88,13 @@ Dword __stdcall worker(void*) {
     return 0;
 }
 
-bool runRound(Dword round) {
+bool runRound(Dword round, int concurrency, Dword idleMs) {
     nextNode = 0;
     report("sweep", &round, 1);
-    Handle workers[concurrency]{};
+    Handle workers[maxWorkers]{};
     bool started = true;
-    for (auto& thread : workers) {
+    for (int index = 0; index < concurrency; ++index) {
+        auto& thread = workers[index];
         thread = CreateThread(nullptr, 0, worker, nullptr, 0, nullptr);
         if (!thread) started = false;
     }
@@ -115,10 +116,21 @@ bool runRound(Dword round) {
     Sleep(idleMs);
     return true;
 }
+
+Dword positiveArgument(const wchar_t* argument, Dword maximum) {
+    if (*argument < L'0' || *argument > L'9') return 0;
+    wchar_t* end;
+    const auto value = wcstoul(argument, &end, 10);
+    return *end == 0 && value <= maximum ? value : 0;
+}
 }
 
 int wmain(int argc, wchar_t** argv) {
-    if (argc != 4) return 2;
+    if (argc != 4 && argc != 7) return 2;
+    const auto concurrency = argc == 7 ? positiveArgument(argv[4], maxWorkers) : 8;
+    const auto rounds = argc == 7 ? positiveArgument(argv[5], 9) : 3;
+    const auto idleSeconds = argc == 7 ? positiveArgument(argv[6], 60) : 30;
+    if (!concurrency || !rounds || !idleSeconds) return 2;
     output = CreateFileW(argv[2], 0x40000000, 1, nullptr, 1, 0x80, nullptr);
     if (output == reinterpret_cast<Handle>(-1)) return 2;
     char certificateFile[512];
@@ -130,7 +142,8 @@ int wmain(int argc, wchar_t** argv) {
     if (ok && WSAStartup(0x0202, winsock) == 0) {
         SSL_CTX_set_verify(context, 1, nullptr);
         ok = readProfiles(argv[1]);
-        for (Dword round = 1; ok && round <= 3; ++round) ok = runRound(round);
+        for (Dword round = 1; ok && round <= rounds; ++round)
+            ok = runRound(round, static_cast<int>(concurrency), idleSeconds * 1000);
         WSACleanup();
     } else ok = false;
     OPENSSL_cleanse(profiles, sizeof(profiles));

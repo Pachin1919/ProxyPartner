@@ -41,6 +41,7 @@ __declspec(dllimport) int __stdcall select(int, SocketSet*, SocketSet*, SocketSe
 __declspec(dllimport) int __stdcall send(Socket, const char*, int, int);
 __declspec(dllimport) int __stdcall recv(Socket, char*, int, int);
 __declspec(dllimport) int __stdcall getsockopt(Socket, int, int, char*, int*);
+__declspec(dllimport) int __stdcall setsockopt(Socket, int, int, const char*, int);
 __declspec(dllimport) int __stdcall WSAGetLastError();
 __declspec(dllimport) Bool __stdcall ReadFile(Handle, void*, Dword, Dword*, void*);
 __declspec(dllimport) long __stdcall InterlockedIncrement(volatile long*);

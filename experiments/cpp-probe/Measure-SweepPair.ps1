@@ -3,7 +3,10 @@ param(
     [Parameter(Mandatory)][string]$ProfilePointer,
     [Parameter(Mandatory)][string]$HostAssemblyDirectory,
     [Parameter(Mandatory)][string]$CppExecutable,
-    [Parameter(Mandatory)][string]$CSharpExecutable,
+    [string]$CSharpExecutable,
+    [ValidateRange(1,32)][int[]]$CppWorkers = @(8),
+    [ValidateRange(1,9)][int]$CppRounds = 3,
+    [ValidateRange(1,60)][int]$CppIdleSeconds = 30,
     [Parameter(Mandatory)][string]$CaBundle,
     [Parameter(Mandatory)][string]$EvidenceDirectory
 )
@@ -50,15 +53,29 @@ $null = $payload.Clear()
 $directory = (New-Item -ItemType Directory -Path $EvidenceDirectory).FullName
 
 try {
-    foreach ($exe in (Resolve-Path -LiteralPath $CppExecutable).Path,(Resolve-Path -LiteralPath $CSharpExecutable).Path) {
-        $name = [IO.Path]::GetFileNameWithoutExtension($exe)
+    $cpp = (Resolve-Path -LiteralPath $CppExecutable).Path
+    $cases = for ($index = 0; $index -lt $CppWorkers.Count; $index++) {
+        $workers = $CppWorkers[$index]
+        $name = if ($CppWorkers.Count -eq 1) { [IO.Path]::GetFileNameWithoutExtension($cpp) }
+            else { 'CppSweep-{0:D2}-w{1}' -f ($index + 1),$workers }
+        @{exe=$cpp;name=$name;workers=$workers;rounds=$CppRounds;idle=$CppIdleSeconds;
+            extra=@("$workers","$CppRounds","$CppIdleSeconds")}
+    }
+    if ($CSharpExecutable) {
+        $cs = (Resolve-Path -LiteralPath $CSharpExecutable).Path
+        $cases = @($cases) + @{exe=$cs;name=[IO.Path]::GetFileNameWithoutExtension($cs);workers=8;rounds=3;idle=30;extra=@()}
+    }
+    foreach ($case in $cases) {
+        $exe = $case.exe
+        $name = $case.name
+        $roundNumbers = 1..$case.rounds
         $output = (New-Item -ItemType Directory -Path (Join-Path $directory $name)).FullName
         $resultFile = Join-Path $output 'sites.tsv'
         $pidFile = Join-Path $output 'root.pid'
         $pipeName = 'proxypartner-ab-' + [Guid]::NewGuid().ToString('N')
         $pipe = [IO.Pipes.NamedPipeServerStream]::new($pipeName,[IO.Pipes.PipeDirection]::Out,1,
             [IO.Pipes.PipeTransmissionMode]::Byte,[IO.Pipes.PipeOptions]::Asynchronous -bor [IO.Pipes.PipeOptions]::CurrentUserOnly)
-        $argsJson = ConvertTo-Json -Compress -InputObject @("\\.\pipe\$pipeName",$resultFile,$CaBundle)
+        $argsJson = ConvertTo-Json -Compress -InputObject (@("\\.\pipe\$pipeName",$resultFile,$CaBundle) + $case.extra)
         $info = [Diagnostics.ProcessStartInfo]::new((Get-Process -Id $PID).Path)
         $info.UseShellExecute = $false
         $info.CreateNoWindow = $true
@@ -66,9 +83,11 @@ try {
         $info.RedirectStandardOutput = $true
         $info.RedirectStandardError = $true
         $script = Join-Path $repo 'scripts/Measure-JobPeak.ps1'
-        $args = '-NoProfile','-NonInteractive','-File',$script,'-Executable',$exe,'-ArgumentsJson',$argsJson,
-            '-Workload',"$name 3 x $($roster.Count) nodes x 5 HTTPS, 8 concurrent nodes",'-TimeoutSeconds','330','-StartedFile',$pidFile
-        foreach ($arg in $args) { $info.ArgumentList.Add($arg) }
+        $timeout = ([Math]::Ceiling($roster.Count / $case.workers) * 7 + $case.idle) * $case.rounds + 45
+        $jobArguments = '-NoProfile','-NonInteractive','-File',$script,'-Executable',$exe,'-ArgumentsJson',$argsJson,
+            '-Workload',"$name $($case.rounds) x $($roster.Count) nodes x 5 HTTPS, $($case.workers) concurrent nodes",
+            '-TimeoutSeconds',"$timeout",'-StartedFile',$pidFile
+        foreach ($arg in $jobArguments) { $info.ArgumentList.Add($arg) }
         $job = [Diagnostics.Process]::Start($info)
         $stdout = $job.StandardOutput.ReadToEndAsync()
         $stderr = $job.StandardError.ReadToEndAsync()
@@ -108,15 +127,17 @@ try {
         $unique = [Collections.Generic.HashSet[string]]::new()
         $rows = foreach ($line in $lines) {
             $f = $line -split '\t'
-            if ($f.Count -ne 6 -or $f[0] -cnotin 'GO','YT','GPT','OPENAI','ANT' -or [int]$f[1] -notin 1,2,3 -or
+            if ($f.Count -ne 6 -or $f[0] -cnotin 'GO','YT','GPT','OPENAI','ANT' -or [int]$f[1] -notin $roundNumbers -or
                 [int]$f[2] -lt 0 -or [int]$f[2] -ge $roster.Count -or !$unique.Add(($f[0..2] -join '/'))) {
                 throw "$name emitted an invalid or duplicate node result."
             }
             [pscustomobject]@{round=[int]$f[1];status=[int]$f[3];timeout=[int]$f[5]}
         }
-        if ($rows.Count -ne 15 * $roster.Count -or $markers.Count -ne 6) { throw "$name did not cover the whole workload." }
+        if ($rows.Count -ne 5 * $roster.Count * $case.rounds -or $markers.Count -ne 2 * $case.rounds) {
+            throw "$name did not cover the whole workload."
+        }
         $stats = Get-Content -LiteralPath (Join-Path $output 'job.json') -Raw | ConvertFrom-Json
-        $rounds = foreach ($round in 1..3) {
+        $rounds = foreach ($round in $roundNumbers) {
             $selected = @($rows | Where-Object round -eq $round)
             $window = @($markers | Where-Object round -eq $round)
             $memory = @($samples | Where-Object round -eq $round)
@@ -126,7 +147,7 @@ try {
                 sweep_mib=[Math]::Round((($memory | Where-Object stage -eq sweep).bytes | Measure-Object -Average).Average/1MB,2);
                 idle_mib=[Math]::Round((($memory | Where-Object stage -eq idle).bytes | Measure-Object -Average).Average/1MB,2)}
         }
-        [ordered]@{exe=$name;sha256=(Get-FileHash -LiteralPath $exe).Hash;nodes=$roster.Count;peak_mib=$stats.peak_job_commit_mib;
+        [ordered]@{exe=$name;workers=$case.workers;sha256=(Get-FileHash -LiteralPath $exe).Hash;nodes=$roster.Count;peak_mib=$stats.peak_job_commit_mib;
             job_members=$stats.total_processes;rounds=@($rounds)} |
             ConvertTo-Json -Depth 6 | Tee-Object -FilePath (Join-Path $output 'summary.json')
     }
