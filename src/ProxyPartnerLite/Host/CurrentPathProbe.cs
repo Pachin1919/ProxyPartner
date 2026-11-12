@@ -7,7 +7,7 @@ namespace ProxyPartnerLite.Host;
 
 public sealed record WebsiteProbe(
     string TargetId, string? Node, bool Direct, bool Attempted, int? HttpStatus, int? ElapsedMs, DateTimeOffset ObservedUtc,
-    bool TimedOut = false, bool Independent = false);
+    bool TimedOut = false, bool Independent = false, bool NativeTransport = false);
 
 public sealed partial class ReadOnlyHostClient
 {

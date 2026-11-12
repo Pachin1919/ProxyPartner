@@ -45,8 +45,8 @@ $summary.dark_zh = Save-Window $ui.id $ui.panel $ui.exe 'dark-zh'
 Select-SampleNode '节点 004'
 $details = Open-Auxiliary 125
 $detailZh = Read-Control $details 240
-Assert ($detailZh -like '*节点 004*OPENAI*401 需 API 密钥*GPT*403 受限*无法判定*' -and
-    $detailZh -like '*合成*') "Missing evidence in Chinese node details: $detailZh"
+Assert ($detailZh -like '*节点 004*OPENAI*189 ms*GPT*403 受限*' -and
+    $detailZh -like '*合成*' -and $detailZh -notmatch '401|密钥|无法判定') "Incorrect Chinese node details: $detailZh"
 $summary.details_zh = Save-Window $ui.id $details $ui.exe 'details-zh'
 Close-Panel $details
 Select-SampleNode '节点 005'
@@ -134,7 +134,8 @@ Select-SampleNode '节点 005'
 $details = Open-Auxiliary 125
 $detailEn = Read-Control $details 240
 Assert ($detailEn -match 'Score\s+87\b' -and
-    $detailEn -like '*EX2*Untested*https://example.invalid/updated*undetermined*') "Saved target, provenance or fixed score is absent: $detailEn"
+    $detailEn -like '*Synthetic*OPENAI*226 ms*' -and
+    $detailEn -notmatch 'api key|example\.invalid|undetermined') "Incorrect English node details: $detailEn"
 $summary.details_en = Save-Window $ui.id $details $ui.exe 'details-en'
 Close-Panel $details
 Write-Control $ui.panel 103 '节点 004'

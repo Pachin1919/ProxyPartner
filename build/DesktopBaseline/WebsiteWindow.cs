@@ -21,13 +21,16 @@ internal sealed class WebsiteWindow
         Latest = sample;
     }
 
-    internal (double Score, bool HasStability)? Score(DateTimeOffset now)
+    internal (double Score, bool HasStability)? Score(DateTimeOffset now, out DateTimeOffset nextExpiry)
     {
+        nextExpiry = DateTimeOffset.MaxValue;
         int attempts = 0, replies = 0;
         double mean = 0, squaredDeviation = 0;
         foreach (var sample in samples)
         {
-            if (now - sample.ObservedUtc > Freshness) continue;
+            var expiry = sample.ObservedUtc + Freshness;
+            if (now > expiry) continue;
+            if (expiry < nextExpiry) nextExpiry = expiry;
             attempts++;
             if (sample.HttpStatus is null || sample.ElapsedMs is not (>= 0 and int ms)) continue;
             replies++;

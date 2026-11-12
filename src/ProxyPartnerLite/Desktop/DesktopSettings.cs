@@ -6,6 +6,8 @@ namespace ProxyPartnerLite.Desktop;
 
 public sealed unsafe partial class DesktopApp
 {
+    private const int TestExitIp = 254;
+    private nint exitButton;
     private const string AuxClass = "ProxyPartner.Auxiliary";
     private const int SettingsContentHeight = 596;
     private const int OpenSettings = 124, OpenDetails = 125, EnglishId = 201, LightId = 202,
@@ -94,6 +96,8 @@ public sealed unsafe partial class DesktopApp
             detailWindow = CreateAux(L("ProxyPartner · 节点详情", "ProxyPartner · Node details"), 745, 620);
             if (detailWindow == 0) return;
             detailText = AuxChild(detailWindow, "EDIT", "", WsTabStop | 0x800000 | 0x200000 | 4 | 0x40 | 0x800, 240);
+            if (source is IDesktopCurrentTestSource)
+                exitButton = AuxChild(detailWindow, "BUTTON", L("复测出口 IP", "Retest exit IP"), WsTabStop, TestExitIp);
             SizeAux(detailWindow, null);
         }
         RefreshDetails();
@@ -156,7 +160,13 @@ public sealed unsafe partial class DesktopApp
             Rect rect;
             GetClientRect(window, &rect);
             Send(detailText, WmSetFont, (nuint)face, 1);
-            MoveWindow(detailText, Px(14), Px(14), Math.Max(0, rect.Right - Px(28)), Math.Max(0, rect.Bottom - Px(28)), 1);
+            int top = exitButton == 0 ? 14 : 50;
+            if (exitButton != 0)
+            {
+                Send(exitButton, WmSetFont, (nuint)face, 1);
+                MoveWindow(exitButton, Px(14), Px(12), Px(140), Px(28), 1);
+            }
+            MoveWindow(detailText, Px(14), Px(top), Math.Max(0, rect.Right - Px(28)), Math.Max(0, rect.Bottom - Px(top + 14)), 1);
             if (detailFont != 0) DeleteObject(detailFont);
             detailFont = face;
         }
@@ -217,7 +227,7 @@ public sealed unsafe partial class DesktopApp
                 }
                 else
                 {
-                    detailWindow = detailText = 0;
+                    detailWindow = detailText = exitButton = 0;
                     if (detailFont != 0) DeleteObject(detailFont);
                     detailFont = 0;
                 }
@@ -270,6 +280,11 @@ public sealed unsafe partial class DesktopApp
                     if (id == CancelSettings || id == 2) DestroyWindow(window);
                 }
                 else if (lParam != 0 && notification is 4 or 6 or 0x100) RevealSettingsControl(lParam);
+                return 0;
+            case WmCommand when window == detailWindow && (int)wParam == TestExitIp:
+                int row = IndexOfSelection();
+                if (row >= 0 && rows[row].Kind == NodeKind.Leaf && source is IDesktopCurrentTestSource test)
+                    test.RequestNodeTest(rows[row].Name);
                 return 0;
             case WmCommand when (int)wParam == 2:
                 DestroyWindow(window);
@@ -444,75 +459,54 @@ public sealed unsafe partial class DesktopApp
         }
         var row = rows[index];
         bool synthetic = source.GetSnapshot().Collection == CollectionState.Synthetic;
-        string SourceLabel(string value) => value switch
-        {
-            "合成" => L("合成", "Synthetic"),
-            "原生历史 · 合成" => L("原生历史 · 合成", "Native history · synthetic"),
-            "HTTPS · 合成" => L("HTTPS · 合成", "HTTPS · synthetic"),
-            _ => value
-        };
         var report = new StringBuilder();
         void Line(string value = "") => report.Append(value).Append("\r\n");
-        void Result(string name, DesktopResult result)
+        void Result(string name, DesktopResult? result)
         {
-            string value = result.Format(preferences.English);
-            if (result.HttpStatus is int http &&
-                result.State is not (ResultState.AuthenticationRequired or ResultState.Restricted or ResultState.HttpError))
-                value += $" · HTTP {http}";
-            string observed = result.ObservedUtc.HasValue ? Timestamp(result.ObservedUtc) + " UTC" : L("时间未知", "Time unknown");
-            Line($"{name} · {value} · {observed} · {SourceLabel(result.Source)}");
+            if (result is { State: not ResultState.Missing })
+                Line($"{name} · {result.Format(preferences.English)}");
         }
         Line(row.Name);
+        if (row.Protocol is { } protocol && ProbeSupportText(row.IndependentProbe) is { } support)
+            Line(L($"独立测速 · {protocol} · {support}", $"Independent probe · {protocol} · {support}"));
         if (CurrentSiteLabel(row.CurrentTarget) is { } activeSite)
             Line($"{L("当前测试线路", "Current tested route")} · {activeSite}");
         if (row.SelectedMember is { } member)
             Line($"{L("组内选中", "Selected group member")} · {member}");
-        string scoreLabel = row.Quality is { TargetCount: > 0 } ? L("即时评分", "Live score") : L("评分", "Score");
-        Line($"{scoreLabel} {ScoreText(row)}  |  {L("来源", "Source")}: {SourceLabel(row.Quality?.Source ?? "—")}");
-        if (row.Quality is { TargetCount: > 0 } quality)
-        {
-            Line(L($"评分覆盖 {quality.TargetCount}/5 站 · 已有波动样本 {quality.StableTargetCount}/5 站",
-                $"Score covers {quality.TargetCount}/5 sites · Variability measured for {quality.StableTargetCount}/5"));
-        }
+        if (row.Quality is { } quality)
+            Line($"{L("评分", "Score")} {ScoreText(row)} · {(synthetic ? L("合成", "Synthetic") : quality.Source)}");
         if (row.Quality is { Cap: int cap, CapTarget: { } capTarget })
         {
             string site = CurrentSiteLabel(capTarget) ?? capTarget;
             string reason = cap == 20 ? L("超时", "timed out") : L("响应超过 2500 ms", "response exceeded 2500 ms");
             Line(L($"评分上限 {cap} · {site} {reason}", $"Score cap {cap} · {site} {reason}"));
         }
-        if (synthetic) Line(L("以下为合成样例。编辑权重只更新设置内的算例。", "Synthetic sample. Changing weights updates the Settings example only."));
         Line();
         if (row.ServerPing is { } server) Result("VPS Ping", server);
-        else if (!synthetic && row.Kind == NodeKind.Leaf && row.Native.ElapsedMs is >= 0)
-            Line(L("卡片延迟来源 · Mihomo 内核 URLTest 参考值", "Card latency source · Mihomo URLTest reference"));
-        Result(L("内核延迟", "Core latency"), row.Native);
+        else Result(L("内核延迟", "Core latency"), row.Native);
         Result("OPENAI (OpenAI API)", row.OpenAi);
         Result("GPT (ChatGPT)", row.ChatGpt);
-        if (row.Google is { } google) Result("Google", google);
-        if (row.YouTube is { } youtube) Result("YouTube", youtube);
-        if (row.Anthropic is { } anthropic) Result("Anthropic", anthropic);
+        Result("Google", row.Google);
+        Result("YouTube", row.YouTube);
+        Result("Anthropic", row.Anthropic);
+        Result("GitHub", row.GitHub);
+        if (row.LastObservedUtc is { } observed)
+            Line($"{L("最近样本", "Last sample")} · {Timestamp(observed)} UTC");
         void ExitIp(string family, DesktopExitIp? sample)
         {
             if (sample is null) return;
             string label = L("出口", "Exit");
-            string changes = L($"本次运行观测到 {sample.Changes} 次不同", $"{sample.Changes} observed changes this session");
-            Line($"{label} {family} · {sample.Address} · {changes} · {Timestamp(sample.ObservedUtc)} UTC · ipify");
+            string verification = sample.OtherAddress is { } other ? L($"两处观测不同 · {other}", $"Observers disagree · {other}")
+                : sample.Observers == 2 ? L("两处观测一致", "Two observers agree") : L("仅一处观测", "One observer");
+            bool stable = sample.ConfirmedSamples >= 3 && sample.ObservedUtc - sample.ConsistentSince >= TimeSpan.FromSeconds(30);
+            string stability = stable ? L("观测期间稳定", "Stable during observation") : L("稳定性样本不足", "Insufficient stability samples");
+            string changes = sample.Changes == 0 ? "" : L($" · 变化 {sample.Changes} 次", $" · {sample.Changes} changes");
+            Line($"{label} {family} · {sample.Address} · {verification} · {stability}{changes} · {Timestamp(sample.ObservedUtc)} UTC");
         }
         ExitIp("IPv4", row.ExitV4);
         ExitIp("IPv6", row.ExitV6);
-        Result("GitHub", row.GitHub);
-        foreach (var target in preferences.CustomTargets) Line($"{target.Symbol} {target.ShortName} · {L("待测", "Untested")} · {target.Url}");
-        Line();
-        Line(L("401 表示服务已响应且需要认证。OpenAI API 和 Anthropic API 需要 API 密钥。403 表示服务拒绝访问或需要验证。",
-            "401 means the service responded and requires authentication. OpenAI and Anthropic APIs require API keys. 403 means access is denied or challenged."));
-        Line(L("高延迟：看可比成功样本的均值。间歇失败：看跨轮次失败率及异常次数。",
-            "High latency: compare mean successful latency. Intermittent failure: inspect failure rate and incident count across rounds."));
-        Line(L("无法连接：需要可比的连接失败证据。样本不足：覆盖期或有效尝试不足。",
-            "Unable to connect requires comparable connection-failure evidence. Low samples means insufficient coverage or eligible attempts."));
-        Line(L("有效尝试、成功均值、失败率、异常次数、覆盖期：无法判定。",
-            "Eligible attempts, mean success latency, failure rate, incidents and coverage: undetermined."));
-        Line(L("按节点、目标、方法与环境分组后才能判断。单条失败不会推断掉线频次。",
-            "Group by node, target, method and environment before drawing conclusions. A single failure does not establish disconnect frequency."));
+        if (!synthetic && row.Kind == NodeKind.Leaf && row.ExitV4 is null && row.ExitV6 is null)
+            Line(L("出口 IP · 暂无观测", "Exit IP · No observation"));
         SetText(detailText, report.ToString());
     }
 }

@@ -3,32 +3,35 @@ namespace ProxyPartnerLite.Desktop;
 public enum NodeKind { Leaf, Group }
 public enum CollectionState { Synthetic, Disconnected, Observing, Idle, SleepGap, SourceStopped, Connecting }
 public enum ResultState { Missing, Measured, Stale, Incomparable, AuthenticationRequired, Restricted, Failed, HttpError, TimedOut }
+public enum IndependentProbeState { Unknown, Available, UnsupportedProtocol, UnsupportedOptions, MissingConfiguration }
 public enum QualityState { Insufficient, Good, Poor, Restricted }
 
 public sealed record DesktopQuality(int? Score, QualityState State, string Source,
     int? Cap = null, string? CapTarget = null, int TargetCount = 0, int StableTargetCount = 0);
-public sealed record DesktopExitIp(string Address, DateTimeOffset ObservedUtc, int Changes);
+public sealed record DesktopExitIp(string Address, DateTimeOffset ObservedUtc, int Changes,
+    int Observers = 1, string? OtherAddress = null, string? LastVerifiedAddress = null,
+    DateTimeOffset? ConsistentSince = null, int ConfirmedSamples = 0);
 
 public sealed record DesktopResult(
     string? TargetId, int? ElapsedMs, int? HttpStatus, DateTimeOffset? ObservedUtc,
     string Source, ResultState State)
 {
     public string DisplayText => Format(false);
-    internal bool NoResponse => State is ResultState.Failed or ResultState.TimedOut ||
+    internal bool IsProbeFailure => State is ResultState.Failed or ResultState.TimedOut ||
         State == ResultState.Stale && ElapsedMs is null;
 
-    internal string Format(bool english) => State switch
+    internal string Format(bool english, bool compact = false) => State switch
     {
-        ResultState.Missing => english ? "Untested" : "未测",
+        ResultState.Missing => compact ? (english ? "N/T" : "待测") : english ? "Untested" : "未测",
         ResultState.Stale when ElapsedMs is int ms => $"{ms} ms",
-        ResultState.Stale or ResultState.Failed => english ? "No response" : "未响应",
-        ResultState.Incomparable => english ? "Not comparable" : "不可比较",
-        ResultState.AuthenticationRequired => (TargetId is "openai_api" or "anthropic_api"
-            ? english ? $"{HttpStatus} API key required" : $"{HttpStatus} 需 API 密钥"
-            : english ? $"{HttpStatus} Authentication required" : $"{HttpStatus} 需认证") + TimingSuffix,
+        ResultState.Stale or ResultState.Failed => compact ? (english ? "Failed" : "失败") : english ? "Probe failed" : "探测失败",
+        ResultState.Incomparable => compact ? (english ? "N/A" : "不可比") : english ? "Not comparable" : "不可比较",
+        ResultState.AuthenticationRequired => ElapsedMs is >= 0 and int delay ? $"{delay} ms" : "—",
+        ResultState.Restricted when compact => english ? "Blocked" : "受限",
         ResultState.Restricted => (english ? $"{HttpStatus} Restricted" : $"{HttpStatus} 受限") + TimingSuffix,
+        ResultState.HttpError when compact => HttpStatus?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "—",
         ResultState.HttpError => $"HTTP {HttpStatus}",
-        ResultState.TimedOut => english ? "Timed out" : "超时",
+        ResultState.TimedOut => english ? "Timeout" : "超时",
         _ => ElapsedMs is int ms ? $"{ms} ms" : english ? "No timing" : "无耗时"
     };
 
@@ -41,13 +44,15 @@ public sealed record DesktopRow(
     DateTimeOffset? LastObservedUtc, DesktopQuality? Quality = null, string? SelectedMember = null,
     DesktopResult? Google = null, DesktopResult? YouTube = null, DesktopResult? Anthropic = null,
     string? CurrentTarget = null, DesktopResult? ServerPing = null, bool Testing = false,
-    DesktopExitIp? ExitV4 = null, DesktopExitIp? ExitV6 = null);
+    DesktopExitIp? ExitV4 = null, DesktopExitIp? ExitV6 = null,
+    IndependentProbeState IndependentProbe = IndependentProbeState.Unknown, string? Protocol = null);
 
 public sealed record DesktopCurrentTest(bool Running, int Completed, int Total, int Verified, int TimedOut,
     bool Attempted, string? CurrentTarget, bool Direct, bool PathChanged);
 
 public sealed record DesktopServerSweep(int Completed, int BatchTotal, bool Requested,
-    string? UnavailableNode = null, int WebsiteCompleted = 0, int WebsiteTotal = 0);
+    string? UnavailableNode = null, int WebsiteCompleted = 0, int WebsiteTotal = 0,
+    int ProbeEligible = 0, int NodeCount = 0);
 
 public sealed record DesktopSnapshot(
     string Host, CollectionState Collection, string? VerifiedCurrentPath,

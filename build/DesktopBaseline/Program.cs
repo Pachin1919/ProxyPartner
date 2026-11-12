@@ -6,5 +6,9 @@ if (args.Contains("--demo") || args.Contains("--stress-1000"))
     return DesktopApp.Run(args.Contains("--stress-1000") ? new BaselineSource(1000) : new BaselineSource(),
         startInTray, settingsPath);
 
-using var source = new LiveHostSource();
-return DesktopApp.Run(source, startInTray, settingsPath);
+try
+{
+    using var source = new LiveHostSource();
+    return DesktopApp.Run(source, startInTray, settingsPath);
+}
+finally { NativeWebsiteProbe.Stop(); }

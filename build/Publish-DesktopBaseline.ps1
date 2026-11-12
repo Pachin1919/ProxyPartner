@@ -4,11 +4,20 @@ param(
     [Parameter(Mandatory)][string]$ToolchainRoot,
     [Parameter(Mandatory)][string]$EvidenceDirectory,
     [ValidateSet('Win32','Avalonia')][string]$Variant = 'Win32',
-    [string]$TargetIcons
+    [string]$TargetIcons,
+    [string]$OpenSslBin,
+    [string]$ProbeCaBundle
 )
 $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $false
 $repo = Split-Path -Parent $PSScriptRoot
+if ([bool]$OpenSslBin -ne [bool]$ProbeCaBundle -or ($OpenSslBin -and $Variant -ne 'Win32')) {
+    throw 'Native probes require both OpenSslBin and ProbeCaBundle with the Win32 build.'
+}
+if ($OpenSslBin) {
+    $OpenSslBin = (Resolve-Path -LiteralPath $OpenSslBin).Path
+    $ProbeCaBundle = (Resolve-Path -LiteralPath $ProbeCaBundle).Path
+}
 $lock = Get-Content -Raw -LiteralPath (Join-Path $repo 'contracts/windows-toolchain.json') | ConvertFrom-Json
 $sdk = Join-Path $ToolchainRoot "dotnet-$($lock.dotnet.sdk)-$($lock.rid)"
 $dotnet = Join-Path $sdk 'dotnet.exe'
@@ -80,6 +89,19 @@ $exe = Join-Path $publish 'ProxyPartner.exe'
 if ($Variant -eq 'Win32') {
     Copy-Item -LiteralPath (Join-Path $repo 'build/DesktopBaseline/QuickProxyNet.LICENSE.txt') -Destination $publish
     Copy-Item -LiteralPath (Join-Path $repo 'build/DesktopBaseline/YamlDotNet.LICENSE.txt') -Destination $publish
+    Copy-Item -LiteralPath (Join-Path $repo 'build/DesktopBaseline/Gost.LICENSE.txt') -Destination $publish
+}
+if ($OpenSslBin) {
+    $nativeOutput = Join-Path $out 'native-probe'
+    pwsh -NoProfile -NonInteractive -File (Join-Path $repo 'experiments/cpp-probe/Build-Sweep.ps1') -Desktop `
+        -ToolchainRoot $ToolchainRoot -OpenSslBin $OpenSslBin -OutputDirectory $nativeOutput
+    if ($LASTEXITCODE -ne 0) { throw 'C++ probe build failed.' }
+    foreach ($name in 'ProxyPartner.NativeProbe.dll','libcrypto-3-x64.dll','libssl-3-x64.dll') {
+        Copy-Item -LiteralPath (Join-Path $nativeOutput $name) -Destination $publish
+    }
+    Copy-Item -LiteralPath $ProbeCaBundle -Destination (Join-Path $publish 'probe-ca-bundle.crt')
+    Copy-Item -LiteralPath (Join-Path $repo 'build/DesktopBaseline/NativeProbe.NOTICE.txt') -Destination $publish
+    Copy-Item -LiteralPath (Join-Path $repo 'build/DesktopBaseline/OpenSSL.LICENSE.txt') -Destination $publish
 }
 $data = [IO.File]::ReadAllBytes($exe)
 $pe = [BitConverter]::ToInt32($data,0x3c)

@@ -23,6 +23,10 @@ public sealed unsafe partial class DesktopApp
     private DesktopPreferences preferences;
     private readonly nint module = GetModuleHandle(0);
     private nint tray, panel, status, search, groups, list, font, icon, smallIcon;
+    private const int SweepStatusId = 132;
+    private nint sweepStatus;
+    private string sweepText = "";
+    private int snapshotPosted;
     private nint serverTestButton, combinedFont;
     private bool ownsIcons;
     private bool bufferedPaint;
@@ -121,7 +125,8 @@ public sealed unsafe partial class DesktopApp
         {
             var cls = new WindowClass
             {
-                Size = (uint)sizeof(WindowClass), Proc = &WindowProc, Instance = module,
+                Size = (uint)sizeof(WindowClass),
+                Proc = &WindowProc, Instance = module,
                 Icon = icon, SmallIcon = smallIcon, Cursor = LoadCursor(0, 32512), Background = 16, Name = className
             };
             return RegisterClass(&cls) != 0;
@@ -159,6 +164,7 @@ public sealed unsafe partial class DesktopApp
             }
             if (msg == SnapshotMessage)
             {
+                Volatile.Write(ref snapshotPosted, 0);
                 if (panel != 0) Refresh(preserveScroll: true);
                 return 0;
             }
@@ -197,6 +203,8 @@ public sealed unsafe partial class DesktopApp
                     FreeCardArtwork();
                     panel = status = search = groups = list = cards = toggle = title = searchLabel = sortButton = hint = settingsButton = detailButton = serverTestButton = 0;
                     lastStatusText = null;
+                    sweepStatus = 0;
+                    sweepText = "";
                     FreeFonts();
                     if (editBrush != 0) DeleteObject(editBrush);
                     if (toolsBrush != 0) DeleteObject(toolsBrush);
@@ -310,6 +318,7 @@ public sealed unsafe partial class DesktopApp
         toolsBrush = CreateSolidBrush(Tools);
         title = Child("STATIC", L("ProxyPartner  /  节点质量", "ProxyPartner  /  Node quality"), 0, 109);
         status = Child("STATIC", "", 0, 0);
+        sweepStatus = Child("STATIC", "", 0xd, SweepStatusId);
         searchLabel = Child("STATIC", L("搜索", "Search"), 0x200, 120);
         hint = Child("STATIC", tableMode ? TableHint : HoverText(), 0x200, 121);
         search = Child("EDIT", filterText, WsTabStop | 0x800000 | 0x80, Search);
@@ -437,12 +446,14 @@ public sealed unsafe partial class DesktopApp
         GetClientRect(panel, &size);
         int pad = Scale(14), width = Math.Max(0, size.Right - pad * 2), top = ToolbarHeight(size.Right);
         bool compact = size.Right < Scale(690);
-        int buttonCount = serverTestButton == 0 ? 5 : 6;
-        int searchWidth = compact ? width : Math.Min(Scale(288), width - Scale(buttonCount == 6 ? 470 : 426));
+        int buttonCount = 5 + (serverTestButton == 0 ? 0 : 1);
+        int searchWidth = compact ? width : Math.Min(Scale(288), width - Scale(buttonCount == 7 ? 536 : buttonCount == 6 ? 470 : 426));
         int controlX = compact ? pad : pad + searchWidth + Scale(10), controlY = Scale(compact ? 103 : 68);
         int labelWidth = Scale(preferences.English ? 50 : 42);
         MoveWindow(title, pad, Scale(11), width, Scale(24), 0);
-        MoveWindow(status, pad, Scale(40), width, Scale(20), 0);
+        int progressWidth = Math.Min(Scale(200), width / 3);
+        MoveWindow(status, pad, Scale(40), Math.Max(0, width - progressWidth), Scale(20), 0);
+        MoveWindow(sweepStatus, pad + width - progressWidth, Scale(40), progressWidth, Scale(20), 0);
         MoveWindow(searchLabel, pad, Scale(68), labelWidth, Scale(28), 0);
         MoveWindow(search, pad + labelWidth, Scale(68), Math.Max(0, searchWidth - labelWidth), Scale(28), 0);
         int slot = Math.Min(Scale(80), Math.Max(1, (size.Right - pad - controlX - Scale(7 * (buttonCount - 1))) / buttonCount));
@@ -468,7 +479,8 @@ public sealed unsafe partial class DesktopApp
     private void OnSnapshotChanged()
     {
         nint target = tray;
-        if (target != 0) Post(target, SnapshotMessage, 0, 0);
+        if (target != 0 && Interlocked.Exchange(ref snapshotPosted, 1) == 0 &&
+            Post(target, SnapshotMessage, 0, 0) == 0) Volatile.Write(ref snapshotPosted, 0);
     }
 
     private void Sort(int column)
@@ -493,7 +505,7 @@ public sealed unsafe partial class DesktopApp
             if ((showGroups || row.Kind == NodeKind.Leaf) &&
                 row.Name.AsSpan().Contains(filter, StringComparison.OrdinalIgnoreCase))
             {
-                if (row.IsCurrent && snapshot.CurrentTest is not null) pinned = row;
+                if (row.IsCurrent && source is IDesktopCurrentTestSource) pinned = row;
                 else filtered.Add(row);
             }
         }
@@ -565,6 +577,16 @@ public sealed unsafe partial class DesktopApp
     private void UpdateStatus(DesktopSnapshot? snapshot = null)
     {
         snapshot ??= source.GetSnapshot();
+        string progress = snapshot.Collection == CollectionState.Observing &&
+            snapshot.ServerSweep is { WebsiteTotal: > 0 } website
+            ? L($"独立五站 {website.WebsiteCompleted}/{website.WebsiteTotal}",
+                $"Independent {website.WebsiteCompleted}/{website.WebsiteTotal}") : "";
+        if (progress != sweepText)
+        {
+            sweepText = progress;
+            SetText(sweepStatus, progress);
+            InvalidateRect(sweepStatus, 0, 0);
+        }
         if (snapshot.Collection is CollectionState.Connecting or CollectionState.Disconnected or CollectionState.Observing)
         {
             string connection = snapshot.Collection switch
@@ -591,11 +613,9 @@ public sealed unsafe partial class DesktopApp
             {
                 if (sweep.UnavailableNode is not null)
                     probe += L(" · 该节点暂无独立测速入口", " · This node has no independent probe route");
-                else if (sweep.Requested && sweep.WebsiteTotal == 0)
-                    probe += L(" · 其余节点缺少独立测速入口", " · Other nodes have no independent probe route");
-                if (sweep.WebsiteTotal > 0)
-                    probe += L($" · 独立五站 {sweep.WebsiteCompleted}/{sweep.WebsiteTotal}",
-                        $" · Independent {sweep.WebsiteCompleted}/{sweep.WebsiteTotal}");
+                if (sweep.ProbeEligible < sweep.NodeCount)
+                    probe += L($" · 可独立测速 {sweep.ProbeEligible}/{sweep.NodeCount}",
+                        $" · Independent probe coverage {sweep.ProbeEligible}/{sweep.NodeCount}");
                 if (sweep.BatchTotal > 0)
                     probe += L($" · 机房 {sweep.Completed}/{sweep.BatchTotal}", $" · Servers {sweep.Completed}/{sweep.BatchTotal}");
             }
