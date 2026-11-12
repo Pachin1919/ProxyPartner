@@ -1,0 +1,54 @@
+[
+  {
+    "id": "google",
+    "name": "Google",
+    "file": "google.ico",
+    "source": "https://www.google.com/favicon.ico",
+    "provenance": "site favicon; one 32×32 PNG frame in ICO",
+    "source_sha256": "6da5620880159634213e197fafca1dde0272153be3e4590818533fab8d040770",
+    "sha256": "8035634f6a72e16213e0dd3d35ee14280a277a8a298a9d3ad9d8635fb2f8716b",
+    "bytes": 1196
+  },
+  {
+    "id": "youtube",
+    "name": "YouTube",
+    "file": "youtube.ico",
+    "source": "https://www.google.com/s2/favicons?domain=youtube.com&sz=64",
+    "provenance": "Google favicon cache; one 32×32 PNG frame in ICO",
+    "source_sha256": "f4727a0fe90f724e5a7ba8d2facab29f516f81922beefb7d12ddc75e22cefb55",
+    "sha256": "094d8e6285b87d825c4819bf52fccb18d9bb7f2fe4afe6fa0ea102d84ebe383a",
+    "bytes": 833
+  },
+  {
+    "id": "openai_api",
+    "name": "OpenAI API",
+    "file": "openai_api.ico",
+    "source": "https://www.google.com/s2/favicons?domain=openai.com&sz=64",
+    "provenance": "Google favicon cache; one 32×32 PNG frame in ICO",
+    "source_sha256": "2ff9b8cfca7058061442eb0fbf62141a1c15ebc64f4d4fc17137cbfdd4f753a5",
+    "sha256": "838b92fb61a3d745f8435ba87a7ec0df99ea2d81e519cefdcafa2e35e9f886c7",
+    "bytes": 1232
+  },
+  {
+    "id": "chatgpt_web",
+    "name": "ChatGPT",
+    "file": "chatgpt_web.ico",
+    "source": "https://thumb.wikimedia.org/wikipedia/commons/thumb/0/04/ChatGPT_logo.svg/250px-ChatGPT_logo.svg.png",
+    "reference": "https://commons.wikimedia.org/wiki/File:ChatGPT_logo.svg",
+    "provenance": "Classic green ChatGPT tile; archived vector revision 2023-09-03; original OpenAI, vector credit Zhing Za; one 32×32 PNG frame in ICO",
+    "source_sha256": "22d06d20fb6c488f28062b0777a79c26e8f480de94bb2e6e6b719dbef56d9da6",
+    "archived_vector_sha256": "5a8dad2864cc1c8109ebae74bea447df2f30b978bdad56749247c406e1cb2227",
+    "sha256": "1053203c8ee6d4b3db5e20b61409a9e0e2ed25c6f7b15abff562acd64e18978e",
+    "bytes": 1731
+  },
+  {
+    "id": "anthropic_api",
+    "name": "Anthropic API",
+    "file": "anthropic_api.ico",
+    "source": "https://www.google.com/s2/favicons?domain=anthropic.com&sz=64",
+    "provenance": "Google favicon cache; one 32×32 PNG frame in ICO",
+    "source_sha256": "22339486df29e1b7f1348062df8259ee6bcfbf93b3459436a6e4f2e3afb90ce2",
+    "sha256": "77c121099e95c37d01d14970f1c37de5d6f88d21627bfc9895db2e88a5437bb0",
+    "bytes": 1140
+  }
+]

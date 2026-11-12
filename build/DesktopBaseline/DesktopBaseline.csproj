@@ -14,6 +14,7 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
   <ItemGroup>
+    <None Update="TargetIcons\*" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <RuntimeHostConfigurationOption Include="System.GC.ConserveMemory" Value="7" />
     <RuntimeHostConfigurationOption Include="System.GC.RegionSize" Value="1048576" />
     <PackageReference Include="QuickProxyNet" Version="[5.0.0]" />
