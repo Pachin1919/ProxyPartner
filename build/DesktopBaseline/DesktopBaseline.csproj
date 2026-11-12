@@ -14,6 +14,8 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
   <ItemGroup>
+    <RuntimeHostConfigurationOption Include="System.GC.ConserveMemory" Value="7" />
+    <RuntimeHostConfigurationOption Include="System.GC.RegionSize" Value="1048576" />
     <PackageReference Include="QuickProxyNet" Version="[5.0.0]" />
     <PackageReference Include="YamlDotNet" Version="[16.3.0]" />
     <ProjectReference Include="../../src/ProxyPartnerLite/Desktop/ProxyPartnerLite.Desktop.csproj" />
