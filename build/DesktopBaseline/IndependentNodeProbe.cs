@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Net;
+using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -9,7 +10,7 @@ using YamlDotNet.Core;
 using YamlDotNet.RepresentationModel;
 
 internal sealed record ProbeProfile(string Type, string Revision,
-    Func<EndPoint, CancellationToken, ValueTask<Stream>> Connect);
+    Func<EndPoint, CancellationToken, ValueTask<Stream>> Connect, NativeShadowsocksProfile? NativeProfile = null);
 internal sealed record ProbeCatalog(Dictionary<string, ProbeProfile> Profiles, HashSet<string> Configured);
 internal readonly record struct IndependentResult(WebsiteProbe? Site = null, IPAddress? Exit = null);
 
@@ -155,7 +156,9 @@ internal static class IndependentNodeProbe
         string revision = Revision($"{server}\n{port}\n{cipher}\n{obfsHost}\n{password}");
         return new("Shadowsocks", revision, obfsHost is { } host
             ? (destination, token) => ShadowsocksTlsObfs.ConnectAsync(client, host, destination, token)
-            : client.ConnectAsync);
+            : client.ConnectAsync,
+            obfsHost is not null && cipher == "chacha20-ietf-poly1305" && !password.Contains('\0')
+                ? new(server, port, password, obfsHost) : null);
     }
 
     private static IEnumerable<(string Name, ProbeProfile? Profile)> ReadLinks(byte[] bytes)
@@ -335,14 +338,19 @@ internal static class IndependentNodeProbe
     {
         private static readonly HttpRequestOptionsKey<DialAttempt> AttemptKey = new("ProbeDialAttempt");
         private sealed class DialAttempt { internal int Count; }
-        private readonly HttpClient client;
+        private readonly Lazy<HttpClient> client;
         private readonly CancellationTokenSource deadline;
         private readonly CancellationToken stop;
+        private readonly NativeShadowsocksProfile? nativeProfile;
+        private readonly NativeWebsiteProbe? native;
+        private readonly long deadlineTick;
 
         internal Session(ProbeProfile profile, CancellationToken stop)
         {
             this.stop = stop;
-            client = new HttpClient(new SocketsHttpHandler
+            nativeProfile = profile.NativeProfile;
+            native = nativeProfile is null ? null : NativeWebsiteProbe.Get();
+            client = new(() => new HttpClient(new SocketsHttpHandler
             {
                 UseProxy = false, UseCookies = false, AllowAutoRedirect = false,
                 ActivityHeadersPropagator = null, MaxResponseDrainSize = 0, MaxResponseHeadersLength = 32,
@@ -353,9 +361,10 @@ internal static class IndependentNodeProbe
                         throw new HttpRequestException("Independent probe already dialed.");
                     return profile.Connect(context.DnsEndPoint, token);
                 }
-            });
+            }));
             deadline = CancellationTokenSource.CreateLinkedTokenSource(stop);
             deadline.CancelAfter(TimeSpan.FromSeconds(7));
+            deadlineTick = Environment.TickCount64 + 7000;
         }
 
         internal async Task<IndependentResult> MeasureAsync(string node, int index)
@@ -364,16 +373,29 @@ internal static class IndependentNodeProbe
             var (id, uri) = index < targets.Count
                 ? targets[index] : (null, index == targets.Count ? EchoUrl : CorroboratingEchoUrl);
             bool attempted = false, timedOut = false;
+            bool useNative = id is not null && native is not null;
             try
             {
                 deadline.Token.ThrowIfCancellationRequested();
+                long start = Stopwatch.GetTimestamp();
+                if (useNative)
+                {
+                    attempted = true;
+                    int status = await native!.MeasureAsync(nativeProfile!, uri,
+                        id == "anthropic_api" ? "anthropic-version: 2026-10-21\r\n" : "",
+                        deadlineTick, deadline.Token).ConfigureAwait(false);
+                    if (status == 0) deadline.Token.ThrowIfCancellationRequested();
+                    return new(new(id!, node, false, true, status == 0 ? null : status,
+                        status == 0 ? null : (int)Stopwatch.GetElapsedTime(start).TotalMilliseconds,
+                        DateTimeOffset.UtcNow, TimedOut: status == 0 && Environment.TickCount64 >= deadlineTick,
+                        Independent: true, NativeTransport: true));
+                }
                 using var request = new HttpRequestMessage(HttpMethod.Get, uri);
                 request.Options.Set(AttemptKey, new DialAttempt());
                 if (id == "anthropic_api")
                     request.Headers.TryAddWithoutValidation("anthropic-version", "2026-10-21");
-                long start = Stopwatch.GetTimestamp();
                 attempted = true;
-                using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead,
+                using var response = await client.Value.SendAsync(request, HttpCompletionOption.ResponseHeadersRead,
                     deadline.Token).ConfigureAwait(false);
                 if (id is null)
                     return new(Exit: await ReadExitAsync(response, deadline.Token).ConfigureAwait(false));
@@ -384,15 +406,15 @@ internal static class IndependentNodeProbe
             {
                 timedOut = !stop.IsCancellationRequested;
             }
-            catch (Exception error) when (error is HttpRequestException or IOException) { }
+            catch (Exception error) when (error is HttpRequestException or IOException or SocketException) { }
             return id is null ? default : new(new(id, node, false, attempted, null, null,
-                DateTimeOffset.UtcNow, TimedOut: timedOut, Independent: true));
+                DateTimeOffset.UtcNow, TimedOut: timedOut, Independent: true, NativeTransport: useNative));
         }
 
         public void Dispose()
         {
             deadline.Dispose();
-            client.Dispose();
+            if (client.IsValueCreated) client.Value.Dispose();
         }
     }
 

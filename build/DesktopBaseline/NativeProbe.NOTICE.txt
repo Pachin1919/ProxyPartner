@@ -1,0 +1,9 @@
+The C++ website probe links against OpenSSL 3 (Apache License 2.0).
+OpenSSL copyright and license: https://www.openssl.org/source/license.html
+
+The accompanying CA bundle is supplied at build time. If sourced from curl's
+Mozilla CA extract, its license is Mozilla Public License 2.0.
+Source and license: https://curl.se/docs/caextract.html
+
+The client TLS obfuscation format is adapted from gost v2.11.5 (MIT).
+See Gost.LICENSE.txt for its copyright notice.

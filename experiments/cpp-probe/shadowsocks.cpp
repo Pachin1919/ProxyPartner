@@ -17,21 +17,31 @@ constexpr int chachaGetTag = 0x10;
 constexpr int chachaSetTag = 0x11;
 constexpr long nonblocking = static_cast<long>(0x8004667e);
 
-bool ready(Socket connection, bool writing, Tick deadline) {
-    const Tick now = GetTickCount64();
-    if (now >= deadline) return false;
-    const Tick remaining = deadline - now;
-    TimeValue time{static_cast<long>(remaining / 1000), static_cast<long>(remaining % 1000 * 1000)};
-    SocketSet sockets{1, {connection}};
-    return select(0, writing ? nullptr : &sockets, writing ? &sockets : nullptr, nullptr, &time) == 1;
+bool cancelled(Handle stop) {
+    return stop && WaitForSingleObject(stop, 0) == 0;
 }
 
-Socket dial(const Profile& profile, Tick deadline) {
-    AddressInfo hints{0, 0, 1, 6, 0, nullptr, nullptr, nullptr};
+bool ready(Socket connection, bool writing, Tick deadline, Handle stop) {
+    for (Tick now = GetTickCount64(); now < deadline && !cancelled(stop); now = GetTickCount64()) {
+        Tick remaining = deadline - now;
+        if (stop && remaining > 100) remaining = 100;
+        TimeValue time{static_cast<long>(remaining / 1000), static_cast<long>(remaining % 1000 * 1000)};
+        SocketSet sockets{1, {connection}};
+        SocketSet failed{1, {connection}};
+        const int selected = select(0, writing ? nullptr : &sockets, writing ? &sockets : nullptr,
+            writing ? &failed : nullptr, &time);
+        if (selected != 0) return selected > 0;
+    }
+    return false;
+}
+
+Socket dial(const Profile& profile, Tick deadline, Handle stop) {
+    constexpr int numericHost = 4;
+    AddressInfo hints{profile.numericAddress ? numericHost : 0, 0, 1, 6, 0, nullptr, nullptr, nullptr};
     AddressInfo* addresses = nullptr;
     if (getaddrinfo(profile.server, profile.port, &hints, &addresses)) return invalidSocket;
     Socket connected = invalidSocket;
-    for (auto* address = addresses; address && GetTickCount64() < deadline; address = address->next) {
+    for (auto* address = addresses; address && GetTickCount64() < deadline && !cancelled(stop); address = address->next) {
         Socket candidate = socket(address->family, address->kind, address->protocol);
         if (candidate == invalidSocket) continue;
         const int enabled = 1;
@@ -40,7 +50,7 @@ Socket dial(const Profile& profile, Tick deadline) {
             ioctlsocket(candidate, nonblocking, &mode) == 0) {
             int error = 0, size = sizeof(error);
             if (connect(candidate, address->address, static_cast<int>(address->length)) == 0 ||
-                (WSAGetLastError() == wouldBlock && ready(candidate, true, deadline) &&
+                (WSAGetLastError() == wouldBlock && ready(candidate, true, deadline, stop) &&
                  getsockopt(candidate, socketLevel, socketError, reinterpret_cast<char*>(&error), &size) == 0 && !error)) {
                 connected = candidate;
                 break;
@@ -93,6 +103,7 @@ struct Channel {
     Socket socket;
     const Profile& profile;
     const Tick deadline;
+    Handle stop;
     CryptoContext* crypto = EVP_CIPHER_CTX_new();
     Byte encryptKey[keySize]{}, decryptKey[keySize]{};
     Byte encryptNonce[12]{}, decryptNonce[12]{};
@@ -108,14 +119,14 @@ struct Channel {
     }
 
     bool transfer(Byte* data, int length, bool writing) const {
-        while (length > 0 && GetTickCount64() < deadline) {
+        while (length > 0 && GetTickCount64() < deadline && !cancelled(stop)) {
             const int n = writing
                 ? send(socket, reinterpret_cast<const char*>(data), length, 0)
                 : recv(socket, reinterpret_cast<char*>(data), length, 0);
             if (n > 0) {
                 data += n;
                 length -= n;
-            } else if (n == 0 || WSAGetLastError() != wouldBlock || !ready(socket, writing, deadline)) {
+            } else if (n == 0 || WSAGetLastError() != wouldBlock || !ready(socket, writing, deadline, stop)) {
                 return false;
             }
         }
@@ -282,10 +293,11 @@ BioMethod* createTransportMethod() {
     return nullptr;
 }
 
-Result measureSite(const Profile& profile, const Site& site, Tick deadline, SslContext* context, const BioMethod* method) {
+Result measureSite(const Profile& profile, const Site& site, Tick deadline, SslContext* context, const BioMethod* method,
+    Handle stop) {
     const Tick start = GetTickCount64();
     if (start >= deadline) return {0, 0, true};
-    Channel channel{dial(profile, deadline), profile, deadline};
+    Channel channel{dial(profile, deadline, stop), profile, deadline, stop};
     int status = 0;
     if (channel.socket != invalidSocket && channel.crypto && channel.start(site.host)) {
         if (auto* ssl = SSL_new(context)) {
@@ -300,5 +312,5 @@ Result measureSite(const Profile& profile, const Site& site, Tick deadline, SslC
         }
     }
     const Tick end = GetTickCount64();
-    return {status, static_cast<Dword>(end - start), !status && end >= deadline};
+    return {status, static_cast<Dword>(end - start), !status && end >= deadline, channel.socket != invalidSocket};
 }

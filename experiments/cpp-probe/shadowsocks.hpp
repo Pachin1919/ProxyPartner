@@ -12,12 +12,13 @@ struct Profile {
     const char* port;
     const char* obfsHost;
     Byte key[keySize];
+    bool numericAddress = false;
 };
 
 struct Site { const char* name; const char* host; const char* path; const char* headers; };
-struct Result { int status = 0; Dword elapsed = 0; bool timeout = false; };
+struct Result { int status = 0; Dword elapsed = 0; bool timeout = false; bool connected = false; };
 
 void put16(Byte* target, int value);
 BioMethod* createTransportMethod();
 Result measureSite(const Profile& profile, const Site& site, Tick deadline,
-    SslContext* sslContext, const BioMethod* method);
+    SslContext* sslContext, const BioMethod* method, Handle stop = nullptr);

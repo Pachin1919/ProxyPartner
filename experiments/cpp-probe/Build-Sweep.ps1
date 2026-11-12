@@ -2,7 +2,8 @@
 param(
     [Parameter(Mandatory)][string]$ToolchainRoot,
     [Parameter(Mandatory)][string]$OpenSslBin,
-    [Parameter(Mandatory)][string]$OutputDirectory
+    [Parameter(Mandatory)][string]$OutputDirectory,
+    [switch]$Desktop
 )
 $ErrorActionPreference = 'Stop'
 $native = Join-Path (Resolve-Path -LiteralPath $ToolchainRoot) 'native'
@@ -27,8 +28,10 @@ foreach($library in $imports.Keys){
 }
 Push-Location -LiteralPath $out
 try {
-    $sources = @('sweep.cpp','shadowsocks.cpp' | ForEach-Object { Join-Path $PSScriptRoot $_ })
-    & (Join-Path $native 'bin/cl.exe') /nologo /std:c++17 /W4 /WX /O2 /MT /utf-8 /GS /Fe:CppSweep.exe @sources /link /INCREMENTAL:NO /SUBSYSTEM:CONSOLE ws2_32.lib libcrypto-3-x64.lib libssl-3-x64.lib
+    $entry = if ($Desktop) { 'desktop.cpp' } else { 'sweep.cpp' }
+    $sources = @($entry,'shadowsocks.cpp' | ForEach-Object { Join-Path $PSScriptRoot $_ })
+    $flags = if ($Desktop) { @('/LD','/Fe:ProxyPartner.NativeProbe.dll') } else { @('/Fe:CppSweep.exe') }
+    & (Join-Path $native 'bin/cl.exe') /nologo /std:c++17 /W4 /WX /O2 /MT /utf-8 /GS @flags @sources /link /INCREMENTAL:NO ws2_32.lib libcrypto-3-x64.lib libssl-3-x64.lib
     $code = $LASTEXITCODE
 }
 finally { Pop-Location }

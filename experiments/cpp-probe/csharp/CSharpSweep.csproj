@@ -8,12 +8,14 @@
     <AssemblyName>CSharpSweep</AssemblyName>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="QuickProxyNet" Version="[5.0.0]" />
     <PackageReference Include="YamlDotNet" Version="[16.3.0]" />
     <ProjectReference Include="../../../src/ProxyPartnerLite/Host/ProxyPartnerLite.Host.csproj" />
     <Compile Include="../../../build/DesktopBaseline/IndependentNodeProbe.cs" />
+    <Compile Include="../../../build/DesktopBaseline/NativeWebsiteProbe.cs" />
     <Compile Include="../../../build/DesktopBaseline/ShadowsocksTlsObfs.cs" />
   </ItemGroup>
 </Project>

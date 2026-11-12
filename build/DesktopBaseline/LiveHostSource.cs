@@ -592,7 +592,8 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                 if (!history.TryGetValue((node.Name, site.Id), out var window)) continue;
                 var sample = window.Latest;
                 var result = new DesktopResult(sample.TargetId, sample.ElapsedMs, sample.HttpStatus, sample.ObservedUtc,
-                    sample.Independent ? independentMethod ?? "HTTPS" : "HTTPS", sample.HttpStatus switch
+                    sample.NativeTransport ? "Shadowsocks · C++ HTTPS" : sample.Independent ? independentMethod ?? "HTTPS" : "HTTPS",
+                    sample.HttpStatus switch
                     {
                         401 => ResultState.AuthenticationRequired,
                         403 => ResultState.Restricted,
