@@ -33,11 +33,13 @@
     "id": "chatgpt_web",
     "name": "ChatGPT",
     "file": "chatgpt_web.ico",
-    "source": "https://images.ctfassets.net/j22is2dtoxu1/intercom-img-b10ab9f4d70661d93db667c0/9716417ee02ffe9988beb6aeb2507856/openai-logo_2B-282-29.png?fm=png&w=64",
-    "provenance": "ChatGPT Help Center official app icon; one 32×32 PNG frame in ICO",
-    "source_sha256": "70b7ce661716c0a72e94d71b3d7bdf9c8c8cc7930f9ce108267ece9657943743",
-    "sha256": "261fbd424f9f6b8312f061d4e6c1bf494ddd456483e66e740d9f5fe2b943e3b4",
-    "bytes": 1312
+    "source": "https://thumb.wikimedia.org/wikipedia/commons/thumb/0/04/ChatGPT_logo.svg/250px-ChatGPT_logo.svg.png",
+    "reference": "https://commons.wikimedia.org/wiki/File:ChatGPT_logo.svg",
+    "provenance": "Classic green ChatGPT tile; archived vector revision 2023-09-03; original OpenAI, vector credit Zhing Za; one 32×32 PNG frame in ICO",
+    "source_sha256": "22d06d20fb6c488f28062b0777a79c26e8f480de94bb2e6e6b719dbef56d9da6",
+    "archived_vector_sha256": "5a8dad2864cc1c8109ebae74bea447df2f30b978bdad56749247c406e1cb2227",
+    "sha256": "1053203c8ee6d4b3db5e20b61409a9e0e2ed25c6f7b15abff562acd64e18978e",
+    "bytes": 1731
   },
   {
     "id": "anthropic_api",
