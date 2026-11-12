@@ -26,6 +26,7 @@ struct BioMethod;
 extern "C" {
 unsigned __int64 strlen(const char*);
 void* memcpy(void*, const void*, unsigned __int64);
+void* memmove(void*, const void*, unsigned __int64);
 void* memset(void*, int, unsigned __int64);
 int memcmp(const void*, const void*, unsigned __int64);
 

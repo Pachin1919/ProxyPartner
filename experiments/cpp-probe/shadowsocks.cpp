@@ -275,9 +275,14 @@ int request(Ssl* ssl, const Site& site) {
         used += count;
         for (int end = previous > 3 ? previous : 3; end < used; ++end) {
             if (memcmp(headers + end - 3, "\r\n\r\n", 4) != 0) continue;
-            if (used < 12 || memcmp(headers, "HTTP/1.", 7) != 0 || headers[8] != ' ') return 0;
+            if (end < 11 || memcmp(headers, "HTTP/1.", 7) != 0 || headers[8] != ' ') return 0;
             for (int i = 9; i < 12; ++i) if (headers[i] < '0' || headers[i] > '9') return 0;
-            return (headers[9] - '0') * 100 + (headers[10] - '0') * 10 + headers[11] - '0';
+            const int status = (headers[9] - '0') * 100 + (headers[10] - '0') * 10 + headers[11] - '0';
+            if (status < 100 || status > 599) return 0;
+            if (status >= 200 || status == 101) return status;
+            used -= end + 1;
+            memmove(headers, headers + end + 1, used);
+            end = 2;
         }
     }
     return 0;
