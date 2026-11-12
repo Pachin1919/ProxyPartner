@@ -3,7 +3,7 @@ Build a Windows node-quality test panel, not a proxy client. Start with CODEX_ST
 
 ## Non-negotiable
 - No Node/npm, JS/HTML UI, Electron/WebView, local UI/API/SOCKS server, new TUN/driver, or administrator requirement.
-- Host observation is read-only. A local card double-click, Enter on a selected table row, or “Apply to Clash” may select a member of a manual Mihomo Selector through the verified named pipe. Mihomo may persist that selection through its own cache. Never modify mode, profiles, subscriptions, DNS, routes or connections. No cross-device control. Live delay/healthcheck routes are excluded from default read-only access.
+- Never modify the host proxy's mode, selection, profiles, subscriptions, DNS, routes, caches or connections. No remote-control features. Live delay/healthcheck routes are excluded from default read-only access.
 - Discover the user's existing local Verge/Mihomo. Do not request a subscription URL. Do not read arbitrary profile directories or publish credentials.
 - C# collector + SQLite; Go probe only when needed. Budget: tray target25 MiB, window35 MiB, total product-process peak gate40 MiB. Read spec/PERFORMANCE.md. These are goals, not measured claims.
 - Native AOT and a Win32 virtual list are the first low-memory candidate. Avalonia is conditional on the same measured budget, not a mandatory dependency.

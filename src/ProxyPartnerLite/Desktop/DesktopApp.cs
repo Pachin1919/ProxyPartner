@@ -23,8 +23,8 @@ public sealed unsafe partial class DesktopApp
     private DesktopPreferences preferences;
     private readonly nint module = GetModuleHandle(0);
     private nint tray, panel, status, search, groups, list, font, icon, smallIcon;
-    private const int SweepStatusId = 132, OpenProxyControl = 133;
-    private nint sweepStatus, proxyButton;
+    private const int SweepStatusId = 132;
+    private nint sweepStatus;
     private string sweepText = "";
     private int snapshotPosted;
     private nint serverTestButton, combinedFont;
@@ -47,9 +47,7 @@ public sealed unsafe partial class DesktopApp
     private string L(string zh, string en) => preferences.English ? en : zh;
     private string PanelTitle => L("ProxyPartner · 节点质量面板", "ProxyPartner · Node quality");
     private string ViewLabel => tableMode ? L("切换卡片", "Cards") : L("切换表格", "Table");
-    private string TableHint => source is IDesktopProxyControlSource
-        ? L("选中节点后按 Enter 切换", "Select a node, then press Enter")
-        : L("表格 · 可按列排序", "Table · sort by column");
+    private string TableHint => L("表格 · 可按列排序", "Table · sort by column");
 
     // Run on the caller's Windows UI thread. The caller owns the source lifecycle.
     public static int Run(IDesktopSnapshotSource source, bool startInTray = false, string? settingsPath = null)
@@ -101,12 +99,6 @@ public sealed unsafe partial class DesktopApp
         int result;
         while ((result = GetMessage(&msg, 0, 0, 0)) > 0)
         {
-            if (tableMode && msg.Window == list && msg.Id == WmKeyDown && msg.WParam == 0x0d &&
-                source is IDesktopProxyControlSource)
-            {
-                if ((msg.LParam & (1 << 30)) == 0) SwitchToNode(TableSelection());
-                continue;
-            }
             if (panel != 0 && msg.Id == WmKeyDown && msg.WParam == 0x74 && source is IDesktopCurrentTestSource test)
             {
                 test.RequestCurrentTest();
@@ -133,7 +125,7 @@ public sealed unsafe partial class DesktopApp
         {
             var cls = new WindowClass
             {
-                Size = (uint)sizeof(WindowClass), Style = name == CardsClass ? 8u : 0u, // CS_DBLCLKS
+                Size = (uint)sizeof(WindowClass),
                 Proc = &WindowProc, Instance = module,
                 Icon = icon, SmallIcon = smallIcon, Cursor = LoadCursor(0, 32512), Background = 16, Name = className
             };
@@ -148,7 +140,7 @@ public sealed unsafe partial class DesktopApp
     private nint Handle(nint window, uint msg, nuint wParam, nint lParam)
     {
         if (window == cards) return HandleCards(msg, wParam, lParam);
-        if (window == settingsWindow || window == detailWindow || window == proxyWindow) return HandleAux(window, msg, wParam, lParam);
+        if (window == settingsWindow || window == detailWindow) return HandleAux(window, msg, wParam, lParam);
         if (window == tray)
         {
             if (msg == taskbarCreated && taskbarCreated != 0)
@@ -208,13 +200,11 @@ public sealed unsafe partial class DesktopApp
                     rows = [];
                     if (settingsWindow != 0) DestroyWindow(settingsWindow);
                     if (detailWindow != 0) DestroyWindow(detailWindow);
-                    if (proxyWindow != 0) DestroyWindow(proxyWindow);
                     FreeCardArtwork();
                     panel = status = search = groups = list = cards = toggle = title = searchLabel = sortButton = hint = settingsButton = detailButton = serverTestButton = 0;
                     lastStatusText = null;
-                    sweepStatus = proxyButton = 0;
+                    sweepStatus = 0;
                     sweepText = "";
-                    cardBodyPress = null;
                     FreeFonts();
                     if (editBrush != 0) DeleteObject(editBrush);
                     if (toolsBrush != 0) DeleteObject(toolsBrush);
@@ -260,7 +250,6 @@ public sealed unsafe partial class DesktopApp
                     if (id == SortMenu) ShowSortMenu();
                     if (id == OpenSettings) ShowSettings();
                     if (id == OpenDetails) ShowDetails();
-                    if (id == OpenProxyControl) ShowProxyControl();
                     if (id == TestServers && source is IDesktopCurrentTestSource servers) servers.RequestSweep();
                     if (id >= SortFirst && id < SortFirst + Columns.Length) Sort(id - SortFirst);
                     return 0;
@@ -338,8 +327,6 @@ public sealed unsafe partial class DesktopApp
         groups = Child("BUTTON", L("策略组", "Groups"), WsTabStop | 11, Groups);
         settingsButton = Child("BUTTON", L("设置", "Settings"), WsTabStop | 11, OpenSettings);
         detailButton = Child("BUTTON", L("详情", "Details"), WsTabStop | 11, OpenDetails);
-        if (source is IDesktopProxyControlSource)
-            proxyButton = Child("BUTTON", L("切换节点", "Switch"), WsTabStop | 11, OpenProxyControl);
         if (source is IDesktopCurrentTestSource)
             serverTestButton = Child("BUTTON", L("全部测速", "Test all"), WsTabStop | 11, TestServers);
         list = Child("SysListView32", "", WsTabStop | WsClipSiblings | 0x1000 | 1 | 4 | 8, 105);
@@ -459,7 +446,7 @@ public sealed unsafe partial class DesktopApp
         GetClientRect(panel, &size);
         int pad = Scale(14), width = Math.Max(0, size.Right - pad * 2), top = ToolbarHeight(size.Right);
         bool compact = size.Right < Scale(690);
-        int buttonCount = 5 + (serverTestButton == 0 ? 0 : 1) + (proxyButton == 0 ? 0 : 1);
+        int buttonCount = 5 + (serverTestButton == 0 ? 0 : 1);
         int searchWidth = compact ? width : Math.Min(Scale(288), width - Scale(buttonCount == 7 ? 536 : buttonCount == 6 ? 470 : 426));
         int controlX = compact ? pad : pad + searchWidth + Scale(10), controlY = Scale(compact ? 103 : 68);
         int labelWidth = Scale(preferences.English ? 50 : 42);
@@ -477,9 +464,8 @@ public sealed unsafe partial class DesktopApp
         MoveWindow(settingsButton, controlX + pitch * 3, controlY, slot, Scale(28), 0);
         MoveWindow(detailButton, controlX + pitch * 4, controlY, slot, Scale(28), 0);
         if (serverTestButton != 0) MoveWindow(serverTestButton, controlX + pitch * 5, controlY, Math.Min(slot, Scale(36)), Scale(28), 0);
-        if (proxyButton != 0) MoveWindow(proxyButton, controlX + pitch * 5 + Math.Min(slot, Scale(36)) + Scale(7), controlY, slot, Scale(28), 0);
         int hintX = size.Right < Scale(940) ? pad : controlX + pitch * 5 +
-            (serverTestButton == 0 ? 0 : Math.Min(slot, Scale(36)) + Scale(7)) + (proxyButton == 0 ? 0 : pitch);
+            (serverTestButton == 0 ? 0 : Math.Min(slot, Scale(36)) + Scale(7));
         int hintY = size.Right < Scale(940) ? controlY + Scale(30) : controlY;
         MoveWindow(hint, hintX, hintY, Math.Max(0, size.Right - pad - hintX), Scale(24), 0);
         int contentPad = Scale(24);
@@ -556,7 +542,6 @@ public sealed unsafe partial class DesktopApp
             if (detailWindow != 0) RefreshDetails();
         }
         UpdateStatus(snapshot);
-        UpdateProxyControl(snapshot.ProxyControl);
     }
 
     private int TableSelection() => (int)Send(list, LvmGetNextItem, nuint.MaxValue, 2);
@@ -634,10 +619,7 @@ public sealed unsafe partial class DesktopApp
                 if (sweep.BatchTotal > 0)
                     probe += L($" · 机房 {sweep.Completed}/{sweep.BatchTotal}", $" · Servers {sweep.Completed}/{sweep.BatchTotal}");
             }
-            string feedback = proxyFeedback is not null &&
-                (pendingProxyControl is not null || Environment.TickCount64 < proxyFeedbackUntil)
-                ? $" · {proxyFeedback}" : "";
-            SetStatusText($"{snapshot.Host} · {connection}{feedback}{count}{probe}");
+            SetStatusText($"{snapshot.Host} · {connection}{count}{probe}");
             return;
         }
         string collection = snapshot.Collection switch
@@ -715,7 +697,7 @@ public sealed unsafe partial class DesktopApp
         string value = item->SubItem switch
         {
             0 => row.Kind == NodeKind.Group ? $"{L("[组]", "[Group]")} {row.Name}" : row.Name,
-            1 => row.SelectedMember ?? (row.SelectionOnly ? L("已选", "Selected") : row.IsCurrent ? L("当前", "Current") : "—"),
+            1 => row.SelectedMember ?? (row.IsCurrent ? L("当前", "Current") : "—"),
             2 => row.Native.Format(preferences.English), 3 => FormatSiteLatency(row.OpenAi),
             4 => FormatSiteLatency(row.ChatGpt), 5 => FormatSiteLatency(row.GitHub),
             6 => Timestamp(row.LastObservedUtc), 7 => ScoreText(row),

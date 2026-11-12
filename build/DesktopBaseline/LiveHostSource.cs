@@ -5,9 +5,8 @@ using System.Diagnostics.CodeAnalysis;
 using System.Net;
 using System.Net.Sockets;
 
-internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTestSource, IDesktopProxyControlSource, IDisposable
+internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTestSource, IDisposable
 {
-    private sealed record SelectionRequest(DesktopProxyControl Control, string Group, string Member);
     private sealed class WebsiteRound(string name, ProbeProfile profile, bool counted, int targetCount,
         CancellationToken stop) : IDisposable
     {
@@ -35,7 +34,6 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
     private int queuedOrRunning;
     private int sweepRequested;
     private string? nodeRequested;
-    private SelectionRequest? selectionRequested;
     private DesktopSnapshot snapshot = new("Clash Verge", CollectionState.Connecting, null, null, []);
 
     internal LiveHostSource() => poll = Task.Run(PollAsync);
@@ -59,12 +57,6 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
     public void RequestNodeTest(string node)
     {
         Interlocked.Exchange(ref nodeRequested, node);
-        Wake();
-    }
-
-    public void RequestProxySelection(DesktopProxyControl control, string group, string member)
-    {
-        Interlocked.Exchange(ref selectionRequested, new(control, group, member));
         Wake();
     }
 
@@ -95,11 +87,10 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
         int webLimit = (Environment.GetEnvironmentVariable("PROXYPARTNER_SWEEP_CONCURRENCY") switch
         {
             "8" => 8,
-            "12" => 12,
-            _ => 16
+            "16" => 16,
+            _ => 12
         }) - SiteCount;
         var client = new ReadOnlyHostClient();
-        var readOptions = new HostReadOptions(IncludeMode: true);
         var samples = new List<WebsiteProbe>(ReadOnlyHostClient.CurrentProbeTargetCount);
         var history = new Dictionary<(string Node, string Target), WebsiteWindow>();
         var serverResults = new Dictionary<string, DesktopResult>(StringComparer.Ordinal);
@@ -127,8 +118,6 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
         Task<WebsiteProbe?>? currentTask = null;
         var currentSamples = new ConcurrentQueue<WebsiteProbe>();
         IReadOnlyList<HostGroup>? testedGroups = null;
-        string? testedMode = null;
-        DesktopProxySelection? lastSelection = null;
         int? previousPid = null;
         Task<bool>? wake = null;
         bool SweepIdle() => batch.Count == 0 && websiteBatch.Count == 0 &&
@@ -140,13 +129,12 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
         }
         bool HasPendingRequest() => autoSweepPending && SweepIdle() ||
             Volatile.Read(ref nodeRequested) is not null ||
-            Volatile.Read(ref selectionRequested) is not null ||
             Volatile.Read(ref sweepRequested) != 0 || currentTask is null && Volatile.Read(ref queuedOrRunning) != 0;
         try
         {
             do
             {
-                var read = await client.ReadAsync(readOptions, cancellationToken: stop.Token).ConfigureAwait(false);
+                var read = await client.ReadAsync(cancellationToken: stop.Token).ConfigureAwait(false);
                 if (stop.IsCancellationRequested) return;
                 if (read.Facts is { } facts && read.CoreProcessId is int corePid)
                 {
@@ -177,25 +165,9 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                         unavailableNode = null;
                         current = null;
                         testedGroups = null;
-                        lastSelection = null;
                         roster = null;
                         profileStamp = default;
                         previousPid = corePid;
-                    }
-                    var command = Interlocked.Exchange(ref selectionRequested, null);
-                    if (command is not null)
-                    {
-                        bool confirmed = read.Status == HostStatus.ConnectedPipe &&
-                            await client.SelectMemberAsync(command.Control.CorePid, command.Control.CoreStarted,
-                                command.Group, command.Member, stop.Token).ConfigureAwait(false);
-                        lastSelection = new(command.Group, command.Member, confirmed);
-                        if (confirmed)
-                        {
-                            current = null;
-                            testedGroups = null;
-                            RequestCurrentTest();
-                            continue;
-                        }
                     }
                     var identity = facts.Nodes.Select(n => (n.Name, n.Type));
                     bool rosterChanged = roster is null || !roster.SetEquals(identity);
@@ -258,23 +230,6 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                     var websiteEligible = facts.Nodes.Where(n =>
                         profiles.TryGetValue(n.Name, out var profile) && profile.Type == n.Type)
                         .Select(n => n.Name).ToHashSet(StringComparer.Ordinal);
-                    DesktopProxyControl? control = read.Status == HostStatus.ConnectedPipe &&
-                        read.VerifiedHostStartedAtUtc is { } coreStarted
-                        ? new(corePid, coreStarted, facts.Groups.Where(group => group.Type == "Selector")
-                            .Select(group => new DesktopProxyGroup(group.Name, group.Selected, group.Members)).ToArray(),
-                            lastSelection, facts.Mode) : null;
-                    string? globalSelection = null;
-                    if (string.Equals(facts.Mode, "global", StringComparison.OrdinalIgnoreCase))
-                    {
-                        string? name = "GLOBAL";
-                        for (int depth = 0; depth <= facts.Groups.Count && name is not null; depth++)
-                        {
-                            if (facts.Nodes.Any(node => node.Name == name)) { globalSelection = name; break; }
-                            string? selected = facts.Groups.FirstOrDefault(group => group.Name == name)?.Selected;
-                            if (selected == name) break;
-                            name = selected;
-                        }
-                    }
                     if (priority is not null)
                     {
                         bool currentRequested = priority == current?.Node;
@@ -305,7 +260,7 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                             websiteDone, websiteTotal, websiteEligible.Count, facts.Nodes.Count);
                         PublishFacts(facts, samples, history, cachedRows, groupRows, serverResults, exitV4, exitV6, catalog, current,
                             sweep, running: currentTask is not null,
-                            pathChanged: samples.Count != 0 && testedGroups is null, testingNodes, globalSelection, control);
+                            pathChanged: samples.Count != 0 && testedGroups is null, testingNodes);
                     }
                     void RecordSite(WebsiteProbe sample)
                     {
@@ -329,9 +284,8 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                             DateTimeOffset.UtcNow - previous.ObservedUtc < ExitRecheckInterval;
                         return new(name, profiles[name], counted, recentlyConfirmed ? SiteCount : SiteCount + 2, stop.Token);
                     }
-                    if (testedGroups is not null && (testedMode != facts.Mode ||
-                        !testedGroups.Select(g => (g.Name, g.Selected))
-                            .SequenceEqual(facts.Groups.Select(g => (g.Name, g.Selected)))))
+                    if (testedGroups is not null && !testedGroups.Select(g => (g.Name, g.Selected))
+                        .SequenceEqual(facts.Groups.Select(g => (g.Name, g.Selected))))
                     {
                         testedGroups = null;
                         current = null;
@@ -342,7 +296,6 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                     {
                         samples.Clear();
                         testedGroups = facts.Groups;
-                        testedMode = facts.Mode;
                         currentTask = client.MeasureCurrentPathAsync(corePid, facts, sample =>
                         {
                             currentSamples.Enqueue(sample);
@@ -352,7 +305,7 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                     if (startSweep)
                     {
                         autoSweepPending = false;
-                        string? first = current?.Node ?? globalSelection;
+                        string? first = current?.Node;
                         batch = new Queue<string>(eligible.OrderBy(name => name != first));
                         batchTotal = batch.Count;
                         batchDone = 0;
@@ -512,16 +465,14 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                 }
                 else
                 {
-                    Interlocked.Exchange(ref selectionRequested, null);
                     if (GetSnapshot() is { Collection: not CollectionState.Disconnected } previous)
                     {
                         Publish(previous with
                         {
                             Collection = CollectionState.Disconnected,
                             VerifiedCurrentPath = null,
-                            ProxyControl = null,
                             Rows = previous.Rows.Select(row => row.IsCurrent
-                                ? row with { IsCurrent = false, CurrentTarget = null, SelectionOnly = false } : row).ToArray()
+                                ? row with { IsCurrent = false, CurrentTarget = null } : row).ToArray()
                         });
                     }
                 }
@@ -561,23 +512,21 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
         Dictionary<string, (DesktopRow Row, DateTimeOffset Expires)> cachedRows, DesktopRow[] groupRows,
         Dictionary<string, DesktopResult> serverResults, Dictionary<string, DesktopExitIp> exitV4,
         Dictionary<string, DesktopExitIp> exitV6, ProbeCatalog catalog, WebsiteProbe? current, DesktopServerSweep sweep,
-        bool running, bool pathChanged, IReadOnlyCollection<string>? testingNodes, string? globalSelection,
-        DesktopProxyControl? control)
+        bool running, bool pathChanged, IReadOnlyCollection<string>? testingNodes)
     {
         DateTimeOffset now = DateTimeOffset.UtcNow;
         var rows = new DesktopRow[facts.Nodes.Count + groupRows.Length];
         int index = 0;
         foreach (var node in facts.Nodes)
         {
-            bool selectionOnly = current is null && globalSelection == node.Name;
-            bool isCurrent = current?.Node == node.Name || selectionOnly;
+            bool isCurrent = current?.Node == node.Name;
             string? target = isCurrent ? current?.TargetId : null;
             bool testing = testingNodes?.Contains(node.Name) == true || isCurrent && running;
             var server = serverResults.GetValueOrDefault(node.Name);
             var v4 = exitV4.GetValueOrDefault(node.Name);
             var v6 = exitV6.GetValueOrDefault(node.Name);
             if (cachedRows.TryGetValue(node.Name, out var cached) && now <= cached.Expires &&
-                cached.Row.IsCurrent == isCurrent && cached.Row.SelectionOnly == selectionOnly &&
+                cached.Row.IsCurrent == isCurrent &&
                 cached.Row.Testing == testing && cached.Row.CurrentTarget == target &&
                 cached.Row.ServerPing == server && cached.Row.ExitV4 == v4 && cached.Row.ExitV6 == v6)
             {
@@ -667,7 +616,7 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
             var row = new DesktopRow("node:" + node.Name, node.Name, NodeKind.Leaf, isCurrent,
                 native, openAi, chatGpt, Untested, lastObserved, Quality: quality,
                 Google: google, YouTube: youtube, Anthropic: anthropic, CurrentTarget: target,
-                ServerPing: server, Testing: testing, ExitV4: v4, ExitV6: v6, SelectionOnly: selectionOnly,
+                ServerPing: server, Testing: testing, ExitV4: v4, ExitV6: v6,
                 IndependentProbe: support, Protocol: node.Type);
             cachedRows[node.Name] = (row, expires);
             rows[index++] = row;
@@ -680,7 +629,7 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                 samples.Any(s => s.Attempted), current?.TargetId,
                 current?.Direct == true, pathChanged)
             : null;
-        Publish(new("Mihomo " + facts.Version, CollectionState.Observing, current?.Node, facts.ObservedAtUtc, rows, test, sweep, control));
+        Publish(new("Mihomo " + facts.Version, CollectionState.Observing, current?.Node, facts.ObservedAtUtc, rows, test, sweep));
     }
 
     private void Publish(DesktopSnapshot next)

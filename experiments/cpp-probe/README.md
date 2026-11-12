@@ -22,3 +22,9 @@ Each process runs three rounds with eight concurrent nodes, five sequential HTTP
 For C++ concurrency experiments, omit `-CSharpExecutable` and pass `-CppWorkers 8,16,24,24,16,8 -CppRounds 1 -CppIdleSeconds 5`. The runner creates a fresh process and records the requested worker count for each trial. The C++ dialer uses `TCP_NODELAY`.
 
 The TLS obfuscation framing follows the repository's `ShadowsocksTlsObfs.cs` port of [gost v2.11.5 obfs.go](https://github.com/ginuerzh/gost/blob/v2.11.5/obfs.go), with its notice in `build/DesktopBaseline/Gost.LICENSE.txt`. The paired test omits the desktop UI, ICMP and exit-IP requests.
+
+## Desktop package
+
+On Windows x64, run `build/Publish-DesktopBaseline.ps1` with `-ToolchainRoot`, `-EvidenceDirectory`, `-OpenSslBin` and `-ProbeCaBundle`. The OpenSSL directory supplies x64 OpenSSL 3 DLLs and the CA file is a PEM trust bundle. Run `ProxyPartner.exe` from the resulting `win32/publish` directory with the DLLs and CA bundle beside it.
+
+The packaged C++ transport measures the five HTTPS websites on ChaCha20-Poly1305 Shadowsocks nodes with TLS obfuscation. The desktop uses managed probes for other node configurations and exit-IP checks. The app defaults to seven in-flight independent website requests and reserves five slots for the active route. Set `PROXYPARTNER_SWEEP_CONCURRENCY=16` in the launch environment to benchmark eleven independent slots.

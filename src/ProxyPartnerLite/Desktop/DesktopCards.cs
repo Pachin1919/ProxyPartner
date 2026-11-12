@@ -30,7 +30,6 @@ public sealed unsafe partial class DesktopApp
     private nint[]? siteIcons;
     private bool tableMode;
     private string? selectedId;
-    private string? cardBodyPress;
     private string filterText = "";
     private bool showGroups;
     private readonly HashSet<string> tested = new(StringComparer.Ordinal);
@@ -143,10 +142,6 @@ public sealed unsafe partial class DesktopApp
                 }
                 return 0;
             case 0x201: // WM_LBUTTONDOWN
-            case 0x203: // WM_LBUTTONDBLCLK
-                bool doubleClick = msg == 0x203;
-                string? firstCard = cardBodyPress;
-                cardBodyPress = null;
                 SetFocus(cards);
                 int x = (short)(lParam & 0xffff), y = (short)(lParam >> 16) + scrollY;
                 int col = x / (cardWidth + cardGap);
@@ -159,16 +154,8 @@ public sealed unsafe partial class DesktopApp
                     var check = CardCheckBounds(0, 0);
                     bool testButton = localX >= check.Left && localX < check.Right &&
                         localY >= check.Top && localY < check.Bottom;
-                    if (doubleClick)
-                    {
-                        if (!testButton && firstCard == rows[index].Id) SwitchToNode(index);
-                    }
-                    else
-                    {
-                        SelectCard(index);
-                        if (testButton) ActivateCardAction(index);
-                        else cardBodyPress = rows[index].Id;
-                    }
+                    SelectCard(index);
+                    if (testButton) ActivateCardAction(index);
                 }
                 return 0;
             case WmKeyDown:
@@ -377,7 +364,7 @@ public sealed unsafe partial class DesktopApp
                         : row.IsCurrent ? L("宿主当前", "Host current") : L("策略组", "Policy group"),
                     midpoint, at(38), right, Scale(16), row.CurrentTarget is not null ? CurrentInk : Muted, smallFont, 2);
             if (liveLatency && row.IsCurrent)
-                Label(dc, row.SelectionOnly ? L("GLOBAL 已选", "GLOBAL selected") : L("当前线路", "Current route"),
+                Label(dc, L("当前线路", "Current route"),
                     left, at(38), right, Scale(17), CurrentInk, smallFont, 2);
             Fill(dc, Box(left, at(48), Math.Max(0, right - left), 1), Border);
             DrawSites(dc, row, left, right, at(52), at(63), at(73));
@@ -538,9 +525,7 @@ public sealed unsafe partial class DesktopApp
     private string HoverText()
     {
         if ((uint)hoverIndex >= rows.Length)
-            return source is IDesktopProxyControlSource
-                ? L("双击卡片切换节点", "Double-click a card to switch")
-                : L("悬停查看站点状态", "Hover to see target details");
+            return L("悬停查看站点状态", "Hover to see target details");
         var row = rows[hoverIndex];
         if (hoverSite == -2)
             return ProbeSupportText(row.IndependentProbe) ?? L("优先测速此节点", "Test this node first");
@@ -575,7 +560,7 @@ public sealed unsafe partial class DesktopApp
             Label(item->Dc, sweepText, bounds.Left, bounds.Top, bounds.Right, bounds.Bottom - bounds.Top, Muted, font);
             return;
         }
-        if (item->Id is not (Toggle or SortMenu or Groups or OpenSettings or OpenDetails or TestServers or OpenProxyControl)) return;
+        if (item->Id is not (Toggle or SortMenu or Groups or OpenSettings or OpenDetails or TestServers)) return;
         bool activeButton = item->Id == Toggle || item->Id == Groups && showGroups;
         string label = item->Id switch
         {
@@ -583,7 +568,6 @@ public sealed unsafe partial class DesktopApp
             Groups => showGroups ? L("✓ 策略组", "✓ Groups") : L("策略组", "Groups"),
             OpenSettings => L("设置", "Settings"),
             OpenDetails => L("详情", "Details"),
-            OpenProxyControl => L("切换节点", "Switch"),
             TestServers => "",
             _ => descending ? L("排序 ↓", "Sort ↓") : L("排序 ↑", "Sort ↑")
         };

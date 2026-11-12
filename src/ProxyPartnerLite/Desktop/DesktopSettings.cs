@@ -6,6 +6,8 @@ namespace ProxyPartnerLite.Desktop;
 
 public sealed unsafe partial class DesktopApp
 {
+    private const int TestExitIp = 254;
+    private nint exitButton;
     private const string AuxClass = "ProxyPartner.Auxiliary";
     private const int SettingsContentHeight = 596;
     private const int OpenSettings = 124, OpenDetails = 125, EnglishId = 201, LightId = 202,
@@ -153,20 +155,6 @@ public sealed unsafe partial class DesktopApp
             settingsFont = face;
             ScrollSettings(settingsScroll);
         }
-        else if (window == proxyWindow)
-        {
-            Rect rect;
-            GetClientRect(window, &rect);
-            foreach (nint control in new[] { proxyGroup, proxyMember, proxyApply, proxyStatus })
-                Send(control, WmSetFont, (nuint)face, 1);
-            int width = Math.Max(0, rect.Right - Px(32));
-            MoveWindow(proxyGroup, Px(16), Px(16), width, Px(260), 1);
-            MoveWindow(proxyMember, Px(16), Px(54), width, Px(260), 1);
-            MoveWindow(proxyApply, Px(16), Px(94), Px(144), Px(29), 1);
-            MoveWindow(proxyStatus, Px(16), Px(133), width, Px(42), 1);
-            if (proxyFont != 0) DeleteObject(proxyFont);
-            proxyFont = face;
-        }
         else
         {
             Rect rect;
@@ -237,13 +225,6 @@ public sealed unsafe partial class DesktopApp
                     settingsControls.Clear();
                     draftTargets.Clear();
                 }
-                else if (window == proxyWindow)
-                {
-                    proxyWindow = proxyGroup = proxyMember = proxyApply = proxyStatus = 0;
-                    proxyOptions = null;
-                    if (proxyFont != 0) DeleteObject(proxyFont);
-                    proxyFont = 0;
-                }
                 else
                 {
                     detailWindow = detailText = exitButton = 0;
@@ -299,11 +280,6 @@ public sealed unsafe partial class DesktopApp
                     if (id == CancelSettings || id == 2) DestroyWindow(window);
                 }
                 else if (lParam != 0 && notification is 4 or 6 or 0x100) RevealSettingsControl(lParam);
-                return 0;
-            case WmCommand when window == proxyWindow:
-                if (((int)wParam & 0xffff) == ProxyGroupId && ((int)wParam >> 16) == 1 && pendingProxyControl is null)
-                    LoadProxyMembers();
-                if ((int)wParam == ApplyProxySelection) ApplyProxyMember();
                 return 0;
             case WmCommand when window == detailWindow && (int)wParam == TestExitIp:
                 int row = IndexOfSelection();
@@ -493,7 +469,6 @@ public sealed unsafe partial class DesktopApp
         Line(row.Name);
         if (row.Protocol is { } protocol && ProbeSupportText(row.IndependentProbe) is { } support)
             Line(L($"独立测速 · {protocol} · {support}", $"Independent probe · {protocol} · {support}"));
-        if (row.SelectionOnly) Line(L("GLOBAL 已选 · 等待验证实际线路", "GLOBAL selected · awaiting route verification"));
         if (CurrentSiteLabel(row.CurrentTarget) is { } activeSite)
             Line($"{L("当前测试线路", "Current tested route")} · {activeSite}");
         if (row.SelectedMember is { } member)
