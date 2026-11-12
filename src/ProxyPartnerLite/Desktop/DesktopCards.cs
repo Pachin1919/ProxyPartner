@@ -92,8 +92,8 @@ public sealed unsafe partial class DesktopApp
                 int width = area.Right - area.Left;
                 if (width > 0 && area.Top < area.Bottom)
                 {
-                    // A large dirty region is composed in bands so it never switches to unbuffered drawing for size alone.
-                    int bandHeight = Math.Max(1, 3_000_000 / width);
+                    // Limit each 32-bit paint buffer to about 4 MiB.
+                    int bandHeight = Math.Max(1, 1_000_000 / width);
                     for (int top = area.Top; top < area.Bottom; top += bandHeight)
                     {
                         Rect band = area;
@@ -255,8 +255,8 @@ public sealed unsafe partial class DesktopApp
         if ((uint)index >= rows.Length || rows[index].Kind != NodeKind.Leaf) return;
         string id = rows[index].Id;
         if (!tested.Add(id)) tested.Remove(id);
-        InvalidateRect(cards, 0, 0);
-        InvalidateRect(list, 0, 0);
+        InvalidateCard(index);
+        Send(list, LvmRedrawItems, (nuint)index, index);
         UpdateStatus();
     }
 
@@ -270,6 +270,7 @@ public sealed unsafe partial class DesktopApp
             return;
         }
         int pitch = cardHeight + cardGap;
+        int columnPitch = cardWidth + cardGap;
         int firstRow = (scrollY + area.Top) / pitch;
         int lastRow = (scrollY + Math.Max(0, area.Bottom - 1)) / pitch;
         int end = Math.Min(rows.Length, (lastRow + 1) * columns);
@@ -277,7 +278,8 @@ public sealed unsafe partial class DesktopApp
         nint finish = CardFinish.Begin(finishSession, dc);
         for (int index = firstRow * columns; index < end; index++)
         {
-            int x = index % columns * (cardWidth + cardGap);
+            int x = index % columns * columnPitch;
+            if (x >= area.Right || x + cardWidth <= area.Left) continue;
             int y = index / columns * pitch - scrollY;
             var row = rows[index];
             var tone = GetTone(row);
@@ -300,7 +302,8 @@ public sealed unsafe partial class DesktopApp
         SetBkMode(dc, 1);
         for (int index = firstRow * columns; index < end; index++)
         {
-            int x = index % columns * (cardWidth + cardGap);
+            int x = index % columns * columnPitch;
+            if (x >= area.Right || x + cardWidth <= area.Left) continue;
             int y = index / columns * pitch - scrollY;
             var row = rows[index];
             var tone = GetTone(row);

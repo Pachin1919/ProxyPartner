@@ -28,7 +28,8 @@ $publish = Split-Path -Parent $build.exe
 $files = [ordered]@{}
 foreach ($name in 'ProxyPartner.exe','ProxyPartner.NativeProbe.dll','libcrypto-3-x64.dll','libssl-3-x64.dll',
     'probe-ca-bundle.crt','NativeProbe.NOTICE.txt','OpenSSL.LICENSE.txt','Gost.LICENSE.txt',
-    'QuickProxyNet.LICENSE.txt','YamlDotNet.LICENSE.txt') {
+    'QuickProxyNet.LICENSE.txt','YamlDotNet.LICENSE.txt','TargetIcons/google.ico','TargetIcons/youtube.ico',
+    'TargetIcons/openai_api.ico','TargetIcons/chatgpt_web.ico','TargetIcons/anthropic_api.ico','TargetIcons/sources.json') {
     $path = Join-Path $publish $name
     $expected = $build.files | Where-Object name -ceq $name
     if (!$expected -or (Get-FileHash -LiteralPath $path).Hash -ne $expected.sha256) {
