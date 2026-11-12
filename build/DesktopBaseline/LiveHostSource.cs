@@ -87,8 +87,8 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
         int webLimit = (Environment.GetEnvironmentVariable("PROXYPARTNER_SWEEP_CONCURRENCY") switch
         {
             "8" => 8,
-            "16" => 16,
-            _ => 12
+            "12" => 12,
+            _ => 16
         }) - SiteCount;
         var client = new ReadOnlyHostClient();
         var samples = new List<WebsiteProbe>(ReadOnlyHostClient.CurrentProbeTargetCount);
@@ -112,6 +112,7 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
         string? serverPriority = null, websitePriority = null;
         int batchTotal = 0, batchDone = 0;
         int websiteTotal = 0, websiteDone = 0;
+        bool releaseSweepMemory = false;
         bool sweepStarted = false;
         string? unavailableNode = null;
         WebsiteProbe? current = null;
@@ -313,6 +314,7 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                             .OrderBy(name => name != first));
                         websiteTotal = websiteBatch.Count;
                         websiteDone = 0;
+                        releaseSweepMemory = websiteTotal > 0;
                         sweepStarted = true;
                     }
                     bool refreshHost = false;
@@ -460,6 +462,12 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                                 if (!names.Contains(key.Node)) history.Remove(key);
                             Volatile.Write(ref queuedOrRunning, 0);
                         }
+                    }
+                    if (releaseSweepMemory && websiteDone == websiteTotal && websiteActive.Count == 0)
+                    {
+                        releaseSweepMemory = false;
+                        // A completed sweep has disposed its probe sessions and buffers.
+                        GC.Collect(GC.MaxGeneration, GCCollectionMode.Aggressive, blocking: true, compacting: true);
                     }
                     if (refreshHost || HasPendingRequest()) continue;
                 }
