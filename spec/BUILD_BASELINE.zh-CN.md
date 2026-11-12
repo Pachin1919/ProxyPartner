@@ -26,6 +26,23 @@ pwsh -NoProfile -NonInteractive -File scripts/Test-WindowsBuildBaseline.ps1 -Che
 
 宿主证据来自 2026-11-09 已匹配管道服务进程身份的只读检查，Mihomo API 报 v1.19.21。脚本重算归档证据哈希并核对版本，记录原观察时刻和提交。该证据证明当时已读到运行元数据。有效节点配置的当前合并文件、加载关联和读取授权仍待核实。T00 只记录来源边界，配置探查按 [宿主接入和配置规则](ARCHITECTURE.md) 另行验证。
 
+## 打包与发布 Windows 便携版
+
+在干净的 Windows x64 checkout 上运行下列命令。构建机需要上面锁定的工具链和 x64 Git for Windows。打包脚本从该 Git 安装取 OpenSSL 3 DLL 和 CA 证书，构建 Native AOT 桌面和 C++ 测速组件，输出 ZIP、SHA256 文件和构建记录。工具链位于别处时传入 `-ToolchainRoot`。
+
+```powershell
+pwsh -NoProfile -File .\build\New-PortablePackage.ps1
+```
+
+脚本最后一行是 ZIP 路径，默认写入 `runs/release/`。验收时在新目录解压，核对 ZIP 和各文件的 SHA256，再启动解压后的 EXE。确认验收通过后，从同一 checkout 发布到 GitHub。把 `$zip` 设为已验收的 ZIP 路径，把 `$tag` 设为新的预览版本号，并以已登录的 GitHub CLI 运行：
+
+```powershell
+$sha = git rev-parse HEAD
+gh release create $tag $zip "$zip.sha256" --target $sha --title "ProxyPartner Lite $tag" --prerelease --draft --generate-notes
+```
+
+核对草稿附件后在 GitHub Releases 发布。预览版用户在 **Assets** 下载 `ProxyPartner-windows-x64.zip`，解压后运行 `ProxyPartner.exe`。 [GitHub CLI 发布参数](https://cli.github.com/manual/gh_release_create)
+
 ## 许可和来源
 
 - 自研代码采用 [MIT](../LICENSE)。Win32 探针调用 kernel32.dll 的 GetCurrentProcessId，SQLite 探针调用 Windows 自带 winsqlite3.dll 的公开导出。使用系统库，SQLite 上游对应源 ID 的核心代码属于公有领域。 [Win32 API](https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-getcurrentprocessid) · [SQLite 3.51.1](https://www.sqlite.org/releaselog/3_51_1.html) · [SQLite 版权说明](https://sqlite.org/copyright.html)

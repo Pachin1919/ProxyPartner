@@ -1,0 +1,11 @@
+ProxyPartner Lite · Windows x64
+
+1. 解压整个 ZIP，双击 ProxyPartner.exe。请把同目录的 DLL 和证书留在一起。
+2. 保持 Clash Verge Rev 运行，ProxyPartner 会尝试连接本机 Mihomo。也可以用 ProxyPartner.exe --demo 打开演示数据。
+3. 如需独立测试非当前节点，在 EXE 同目录创建 ProbeProfilePath.txt，写入一行已确认生效的本机 Clash 配置文件绝对路径。
+
+Extract the whole ZIP and double-click ProxyPartner.exe. Keep the DLLs and certificate bundle beside it.
+Keep Clash Verge Rev running for live measurements, or run ProxyPartner.exe --demo.
+For independent testing of other nodes, put the absolute path to your active local Clash configuration on one line in ProbeProfilePath.txt beside the EXE.
+
+https://github.com/Pachin1919/ProxyPartner
