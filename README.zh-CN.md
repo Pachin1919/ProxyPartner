@@ -18,6 +18,12 @@
 
 ## 试用 Windows 预览版
 
+1. 在 [GitHub Releases](https://github.com/Pachin1919/ProxyPartner/releases) 的 **Assets** 中下载 `ProxyPartner-windows-x64.zip`。
+2. 解压整个 ZIP，双击 `ProxyPartner.exe`。同目录的 DLL 和证书需要保留。运行便携版无需安装 .NET SDK 或 Visual Studio。
+3. 启动 Clash Verge Rev 后，ProxyPartner 会连接本机 Mihomo。要测其他节点，在 EXE 同目录创建 `ProbeProfilePath.txt`，写入一行当前生效的本地 Clash 配置文件绝对路径。
+
+### 从源码构建
+
 在 Windows x64 安装 .NET 10 SDK，并在 Visual Studio 或 Build Tools 中安装 **使用 C++ 的桌面开发**工作负载。构建会生成可以独立运行的 EXE。 [Native AOT 构建要求](https://learn.microsoft.com/en-us/dotnet/core/deploying/native-aot/#prerequisites)
 
 在仓库根目录打开 PowerShell，构建并打开演示。
@@ -28,9 +34,7 @@ Copy-Item .\build\DesktopBaseline\*.LICENSE.txt .\runs\preview
 & .\runs\preview\ProxyPartner.exe --demo
 ```
 
-要看自己的节点，先启动 Clash Verge Rev，再双击 `ProxyPartner.exe`。需要核实当前线路时，在 Clash 开启**系统代理**。预览版已在 Mihomo v1.19.21 上实测。
-
-要测其他节点，在 EXE 同目录创建 `ProbeProfilePath.txt`，写入一行当前生效的本地 Clash 配置文件绝对路径。订阅继续由 Clash 管理，ProxyPartner 从本地配置读取兼容节点的拨号参数。
+需要核实当前线路时，在 Clash 开启**系统代理**。预览版已在 Mihomo v1.19.21 上实测。 [便携包打包和发布步骤](spec/BUILD_BASELINE.zh-CN.md#打包与发布-windows-便携版)
 
 ## 独立测速兼容范围
 
