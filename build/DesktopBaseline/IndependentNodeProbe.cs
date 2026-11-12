@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.Collections.Concurrent;
 using System.Net;
 using System.Security.Cryptography;
 using System.Text;
@@ -12,7 +11,7 @@ using YamlDotNet.RepresentationModel;
 internal sealed record ProbeProfile(string Type, string Revision,
     Func<EndPoint, CancellationToken, ValueTask<Stream>> Connect);
 internal sealed record ProbeCatalog(Dictionary<string, ProbeProfile> Profiles, HashSet<string> Configured);
-internal readonly record struct IndependentMeasurement(WebsiteProbe[] Sites, IPAddress? First, IPAddress? Second);
+internal readonly record struct IndependentResult(WebsiteProbe? Site = null, IPAddress? Exit = null);
 
 internal static class IndependentNodeProbe
 {
@@ -332,86 +331,84 @@ internal static class IndependentNodeProbe
         map is null || map.Children.Keys.All(key =>
             key is YamlScalarNode { Value: { } name } && fields.Contains(name, StringComparer.Ordinal));
 
-    internal static async Task<IndependentMeasurement> MeasureAsync(string node, ProbeProfile profile,
-        IReadOnlyList<(string Id, Uri Url)> targets, Uri echo, Uri corroboration, CancellationToken stop)
+    internal sealed class Session : IDisposable
     {
-        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(stop);
-        deadline.CancelAfter(TimeSpan.FromSeconds(7));
-        var attempted = new ConcurrentDictionary<Uri, byte>();
-        using var handler = new SocketsHttpHandler
-        {
-            UseProxy = false, UseCookies = false, AllowAutoRedirect = false,
-            ActivityHeadersPropagator = null, MaxResponseDrainSize = 0, MaxResponseHeadersLength = 32,
-            ConnectCallback = (context, token) =>
-            {
-                if (!attempted.TryAdd(context.InitialRequestMessage.RequestUri!, 0))
-                    throw new HttpRequestException("Independent probe already dialed.");
-                return profile.Connect(context.DnsEndPoint, token);
-            }
-        };
-        using var client = new HttpClient(handler);
+        private static readonly HttpRequestOptionsKey<DialAttempt> AttemptKey = new("ProbeDialAttempt");
+        private sealed class DialAttempt { internal int Count; }
+        private readonly HttpClient client;
 
-        async Task<WebsiteProbe> MeasureSite((string Id, Uri Url) target)
+        internal Session(ProbeProfile profile)
         {
-            using var request = new HttpRequestMessage(HttpMethod.Get, target.Url);
-            if (target.Id == "anthropic_api")
+            client = new HttpClient(new SocketsHttpHandler
+            {
+                UseProxy = false, UseCookies = false, AllowAutoRedirect = false,
+                ActivityHeadersPropagator = null, MaxResponseDrainSize = 0, MaxResponseHeadersLength = 32,
+                ConnectCallback = (context, token) =>
+                {
+                    if (!context.InitialRequestMessage.Options.TryGetValue(AttemptKey, out var attempt) ||
+                        Interlocked.Increment(ref attempt.Count) != 1)
+                        throw new HttpRequestException("Independent probe already dialed.");
+                    return profile.Connect(context.DnsEndPoint, token);
+                }
+            });
+        }
+
+        internal async Task<IndependentResult> MeasureAsync(string node, int index, CancellationToken stop)
+        {
+            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(stop);
+            deadline.CancelAfter(TimeSpan.FromSeconds(7));
+            var targets = ReadOnlyHostClient.WebsiteTargets;
+            bool site = index < targets.Count;
+            var (id, uri) = site ? targets[index] : (null, index == targets.Count ? EchoUrl : CorroboratingEchoUrl);
+            using var request = new HttpRequestMessage(HttpMethod.Get, uri);
+            request.Options.Set(AttemptKey, new DialAttempt());
+            if (id == "anthropic_api")
                 request.Headers.TryAddWithoutValidation("anthropic-version", "2026-10-21");
             long start = Stopwatch.GetTimestamp();
             try
             {
                 using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead,
                     deadline.Token).ConfigureAwait(false);
-                return new(target.Id, node, false, true, (int)response.StatusCode,
-                    (int)Stopwatch.GetElapsedTime(start).TotalMilliseconds, DateTimeOffset.UtcNow, Independent: true);
+                if (id is null)
+                    return new(Exit: await ReadExitAsync(response, deadline.Token).ConfigureAwait(false));
+                return new(new(id, node, false, true, (int)response.StatusCode,
+                    (int)Stopwatch.GetElapsedTime(start).TotalMilliseconds, DateTimeOffset.UtcNow, Independent: true));
             }
             catch (OperationCanceledException) when (deadline.IsCancellationRequested)
             {
-                return new(target.Id, node, false, true, null, null, DateTimeOffset.UtcNow,
-                    TimedOut: !stop.IsCancellationRequested, Independent: true);
+                return id is null ? default : new(new(id, node, false, true, null, null, DateTimeOffset.UtcNow,
+                    TimedOut: !stop.IsCancellationRequested, Independent: true));
             }
-            catch (HttpRequestException)
+            catch (Exception error) when (error is HttpRequestException or IOException)
             {
-                return new(target.Id, node, false, true, null, null, DateTimeOffset.UtcNow, Independent: true);
+                return id is null ? default : new(new(id, node, false, true, null, null,
+                    DateTimeOffset.UtcNow, Independent: true));
             }
         }
 
-        var sites = targets.Select(MeasureSite).ToArray();
-        var firstIp = MeasureExitAsync(client, echo, deadline.Token);
-        // Leave a connection slot free before starting the second observer.
-        await Task.WhenAny(sites.Cast<Task>().Append(firstIp)).ConfigureAwait(false);
-        var secondIp = MeasureExitAsync(client, corroboration, deadline.Token);
-        return new(await Task.WhenAll(sites).ConfigureAwait(false),
-            await firstIp.ConfigureAwait(false), await secondIp.ConfigureAwait(false));
+        public void Dispose() => client.Dispose();
     }
 
-    private static async Task<IPAddress?> MeasureExitAsync(HttpClient client, Uri echo, CancellationToken token)
+    private static async Task<IPAddress?> ReadExitAsync(HttpResponseMessage response, CancellationToken token)
     {
-        try
-        {
-            using var response = await client.GetAsync(echo, HttpCompletionOption.ResponseHeadersRead, token).ConfigureAwait(false);
-            if (response.StatusCode != HttpStatusCode.OK) return null;
-            await using var stream = await response.Content.ReadAsStreamAsync(token).ConfigureAwait(false);
-            var buffer = new byte[65];
-            int count = await stream.ReadAtLeastAsync(buffer, buffer.Length, false, token).ConfigureAwait(false);
-            if (count == buffer.Length ||
-                !IPAddress.TryParse(Encoding.ASCII.GetString(buffer, 0, count).Trim(), out var address))
-                return null;
-            if (address.IsIPv4MappedToIPv6) address = address.MapToIPv4();
-            byte[] octets = address.GetAddressBytes();
-            bool publicAddress = octets.Length == 4
-                ? octets[0] is > 0 and < 224 and not (10 or 127) &&
-                    !(octets[0] == 169 && octets[1] == 254 || octets[0] == 172 && octets[1] is >= 16 and <= 31 ||
-                      octets[0] == 192 && (octets[1] == 168 || octets[1] == 0 && octets[2] is 0 or 2) ||
-                      octets[0] == 100 && octets[1] is >= 64 and <= 127 ||
-                      octets[0] == 198 && (octets[1] is 18 or 19 || octets[1] == 51 && octets[2] == 100) ||
-                      octets[0] == 203 && octets[1] == 0 && octets[2] == 113)
-                : (octets[0] & 0xe0) == 0x20 &&
-                    !(octets[0] == 0x20 && octets[1] == 1 && octets[2] == 0x0d && octets[3] == 0xb8);
-            return publicAddress ? address : null;
-        }
-        catch (Exception error) when (error is OperationCanceledException or HttpRequestException or IOException)
-        {
+        if (response.StatusCode != HttpStatusCode.OK) return null;
+        await using var stream = await response.Content.ReadAsStreamAsync(token).ConfigureAwait(false);
+        var buffer = new byte[65];
+        int count = await stream.ReadAtLeastAsync(buffer, buffer.Length, false, token).ConfigureAwait(false);
+        if (count == buffer.Length ||
+            !IPAddress.TryParse(Encoding.ASCII.GetString(buffer, 0, count).Trim(), out var address))
             return null;
-        }
+        if (address.IsIPv4MappedToIPv6) address = address.MapToIPv4();
+        byte[] octets = address.GetAddressBytes();
+        bool publicAddress = octets.Length == 4
+            ? octets[0] is > 0 and < 224 and not (10 or 127) &&
+                !(octets[0] == 169 && octets[1] == 254 || octets[0] == 172 && octets[1] is >= 16 and <= 31 ||
+                  octets[0] == 192 && (octets[1] == 168 || octets[1] == 0 && octets[2] is 0 or 2) ||
+                  octets[0] == 100 && octets[1] is >= 64 and <= 127 ||
+                  octets[0] == 198 && (octets[1] is 18 or 19 || octets[1] == 51 && octets[2] == 100) ||
+                  octets[0] == 203 && octets[1] == 0 && octets[2] == 113)
+            : (octets[0] & 0xe0) == 0x20 &&
+                !(octets[0] == 0x20 && octets[1] == 1 && octets[2] == 0x0d && octets[3] == 0xb8);
+        return publicAddress ? address : null;
     }
 }

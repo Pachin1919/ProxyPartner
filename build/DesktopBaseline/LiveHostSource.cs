@@ -8,10 +8,24 @@ using System.Net.Sockets;
 internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTestSource, IDesktopProxyControlSource, IDisposable
 {
     private sealed record SelectionRequest(DesktopProxyControl Control, string Group, string Member);
+    private sealed class WebsiteRound(string name, ProbeProfile profile, bool counted) : IDisposable
+    {
+        internal readonly string Name = name;
+        internal readonly string Revision = profile.Revision;
+        internal readonly bool Counted = counted;
+        internal readonly IndependentNodeProbe.Session Session = new(profile);
+        internal int NextTarget, InFlight;
+        internal IPAddress? FirstExit;
+        public void Dispose() => Session.Dispose();
+    }
+
     private static readonly DesktopResult Untested = new(null, null, null, null, "—", ResultState.Missing);
     private static readonly TimeSpan NativeFreshness = TimeSpan.FromMinutes(15);
+    private static readonly TimeSpan ExitRecheckInterval = TimeSpan.FromMinutes(5);
     private const int ParallelServerLimit = 5;
-    private const int ParallelWebsiteNodeLimit = 8;
+    private const int PerNodeRequestLimit = 2;
+    private const int SiteCount = ReadOnlyHostClient.CurrentProbeTargetCount;
+    private const int LastTarget = SiteCount + 1;
     private readonly CancellationTokenSource stop = new();
     private readonly SemaphoreSlim requested = new(0, 1);
     private readonly Task poll;
@@ -75,6 +89,13 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
 
     private async Task PollAsync()
     {
+        // Five slots are reserved for the simultaneous current-route requests.
+        int webLimit = (Environment.GetEnvironmentVariable("PROXYPARTNER_SWEEP_CONCURRENCY") switch
+        {
+            "8" => 8,
+            "12" => 12,
+            _ => 16
+        }) - SiteCount;
         var client = new ReadOnlyHostClient();
         var readOptions = new HostReadOptions(IncludeMode: true);
         var samples = new List<WebsiteProbe>(ReadOnlyHostClient.CurrentProbeTargetCount);
@@ -92,9 +113,9 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
         var batch = new Queue<string>();
         var websiteBatch = new Queue<string>();
         var serverActive = new Dictionary<Task<DesktopResult>, (string Name, string Host, bool Counted)>(ParallelServerLimit);
-        var websiteActive = new Dictionary<Task<IndependentMeasurement>,
-            (string Name, string Revision, bool Counted)>(ParallelWebsiteNodeLimit);
-        var pending = new List<Task>(ParallelServerLimit + ParallelWebsiteNodeLimit + 2);
+        var websiteActive = new List<WebsiteRound>(webLimit);
+        var websiteRequests = new Dictionary<Task<IndependentResult>, (WebsiteRound Round, int Target)>(webLimit);
+        var pending = new List<Task>(ParallelServerLimit + webLimit + 2);
         string? serverPriority = null, websitePriority = null;
         int batchTotal = 0, batchDone = 0;
         int websiteTotal = 0, websiteDone = 0;
@@ -110,6 +131,11 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
         Task<bool>? wake = null;
         bool SweepIdle() => batch.Count == 0 && websiteBatch.Count == 0 &&
             serverActive.Count == 0 && websiteActive.Count == 0;
+        void ClearWebsiteRounds()
+        {
+            foreach (var round in websiteActive) round.Dispose();
+            websiteActive.Clear();
+        }
         bool HasPendingRequest() => autoSweepPending && SweepIdle() ||
             Volatile.Read(ref nodeRequested) is not null ||
             Volatile.Read(ref selectionRequested) is not null ||
@@ -124,7 +150,7 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                 {
                     if (previousPid != corePid)
                     {
-                        await Task.WhenAll(serverActive.Keys.Cast<Task>().Concat(websiteActive.Keys)).ConfigureAwait(false);
+                        await Task.WhenAll(serverActive.Keys.Cast<Task>().Concat(websiteRequests.Keys)).ConfigureAwait(false);
                         if (currentTask is not null)
                         {
                             await currentTask.ConfigureAwait(false);
@@ -133,7 +159,8 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                             Volatile.Write(ref queuedOrRunning, 0);
                         }
                         serverActive.Clear();
-                        websiteActive.Clear();
+                        websiteRequests.Clear();
+                        ClearWebsiteRounds();
                         serverPriority = websitePriority = null;
                         samples.Clear();
                         history.Clear();
@@ -182,6 +209,13 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                         profileStamp = stamp;
                         batch.Clear();
                         websiteBatch.Clear();
+                        for (int i = websiteActive.Count - 1; i >= 0; i--)
+                        {
+                            var round = websiteActive[i];
+                            if (round.InFlight != 0) continue;
+                            round.Dispose();
+                            websiteActive.RemoveAt(i);
+                        }
                         serverPriority = websitePriority = null;
                         autoSweepPending = true;
                         testedGroups = null;
@@ -246,7 +280,13 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                         bool canPing = Array.BinarySearch(eligible, priority, StringComparer.Ordinal) >= 0;
                         bool canProbe = websiteEligible.Contains(priority);
                         serverPriority = canPing && !serverActive.Values.Any(job => job.Name == priority) ? priority : null;
-                        websitePriority = canProbe && !websiteActive.Values.Any(job => job.Name == priority) ? priority : null;
+                        var existing = websiteActive.Find(job => job.Name == priority);
+                        if (existing is not null)
+                        {
+                            websiteActive.Remove(existing);
+                            websiteActive.Insert(0, existing);
+                        }
+                        websitePriority = canProbe && existing is null ? priority : null;
                         unavailableNode = canProbe || currentRequested ? null : priority;
                     }
                     if (startSweep) unavailableNode = null;
@@ -258,7 +298,7 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                     void Emit()
                     {
                         var testingNodes = serverActive.Values.Select(job => job.Name)
-                            .Concat(websiteActive.Values.Select(job => job.Name)).ToArray();
+                            .Concat(websiteActive.Select(job => job.Name)).ToArray();
                         var sweep = new DesktopServerSweep(batchDone, batchTotal, sweepStarted, unavailableNode,
                             websiteDone, websiteTotal, websiteEligible.Count, facts.Nodes.Count);
                         PublishFacts(facts, samples, history, cachedRows, groupRows, serverResults, exitV4, exitV6, catalog, current,
@@ -273,14 +313,6 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                         if (history.TryGetValue(key, out var window) && window.Latest.Independent == sample.Independent)
                             window.Add(sample);
                         else history[key] = new(sample);
-                    }
-                    void RecordIndependent(string name, IndependentMeasurement measured)
-                    {
-                        foreach (var sample in measured.Sites) RecordSite(sample);
-                        if (measured.First is { } first)
-                            RecordExit(name, first, measured.Second?.AddressFamily == first.AddressFamily ? measured.Second : null);
-                        if (measured.Second is { } second && measured.First?.AddressFamily != second.AddressFamily)
-                            RecordExit(name, second, null);
                     }
                     void RecordExit(string name, IPAddress address, IPAddress? corroboration)
                     {
@@ -335,25 +367,45 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                             string host = serverMap[name];
                             serverActive.Add(ServerTargets.MeasureAsync(host, stop.Token), (name, host, counted));
                         }
-                        while (!autoSweepPending && websiteActive.Count < ParallelWebsiteNodeLimit &&
-                            TryTakeNode(ref websitePriority, ref websiteBatch, out string? name, out bool counted))
+                        while (!autoSweepPending && websiteRequests.Count < webLimit)
                         {
-                            if (!websiteEligible.Contains(name))
+                            WebsiteRound? round = null;
+                            if (websiteActive.Count < webLimit && websitePriority is not null &&
+                                TryTakeNode(ref websitePriority, ref websiteBatch, out var priorityName, out bool counted))
                             {
-                                if (counted) websiteTotal--;
-                                continue;
+                                if (websiteEligible.Contains(priorityName))
+                                {
+                                    round = new(priorityName, profiles[priorityName], counted);
+                                    websiteActive.Insert(0, round);
+                                }
+                                else if (counted) websiteTotal--;
                             }
-                            var profile = profiles[name];
-                            var probe = IndependentNodeProbe.MeasureAsync(name, profile, ReadOnlyHostClient.WebsiteTargets,
-                                IndependentNodeProbe.EchoUrl, IndependentNodeProbe.CorroboratingEchoUrl, stop.Token);
-                            websiteActive.Add(probe, (name, profile.Revision, counted));
+                            round ??= websiteActive.Find(static job => job.NextTarget < SiteCount &&
+                                job.InFlight < PerNodeRequestLimit);
+                            if (round is null && websiteActive.Count < webLimit && websiteBatch.TryDequeue(out string? name))
+                            {
+                                if (!websiteEligible.Contains(name))
+                                {
+                                    websiteTotal--;
+                                    continue;
+                                }
+                                round = new(name, profiles[name], counted: true);
+                                websiteActive.Add(round);
+                            }
+                            // Start exit observations after this node's five website requests have settled.
+                            round ??= websiteActive.Find(static job => job.NextTarget is SiteCount or LastTarget &&
+                                job.InFlight == 0);
+                            if (round is null) break;
+                            int target = round.NextTarget++;
+                            round.InFlight++;
+                            websiteRequests.Add(round.Session.MeasureAsync(round.Name, target, stop.Token), (round, target));
                         }
                         Emit();
                         if (serverActive.Count == 0 && websiteActive.Count == 0 && currentTask is null) break;
 
                         wake ??= requested.WaitAsync(TimeSpan.FromSeconds(30), stop.Token);
                         pending.AddRange(serverActive.Keys);
-                        pending.AddRange(websiteActive.Keys);
+                        pending.AddRange(websiteRequests.Keys);
                         pending.Add(wake);
                         if (currentTask is not null) pending.Add(currentTask);
                         await Task.WhenAny(pending).ConfigureAwait(false);
@@ -386,25 +438,45 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                                 if (job.Counted) batchDone++;
                             }
                         }
-                        foreach (var (finished, job) in websiteActive)
+                        foreach (var (finished, job) in websiteRequests)
                         {
                             if (!finished.IsCompleted) continue;
                             var result = await finished.ConfigureAwait(false);
-                            websiteActive.Remove(finished);
-                            if (autoSweepPending) continue;
-                            if (!websiteEligible.Contains(job.Name))
+                            websiteRequests.Remove(finished);
+                            var round = job.Round;
+                            round.InFlight--;
+                            bool valid = !autoSweepPending && websiteEligible.Contains(round.Name) &&
+                                profiles[round.Name].Revision == round.Revision;
+                            if (valid)
                             {
-                                if (job.Counted) websiteTotal--;
+                                if (result.Site is { } sample)
+                                    RecordSite(sample);
+                                else if (job.Target == SiteCount)
+                                {
+                                    round.FirstExit = result.Exit;
+                                    if (result.Exit is { } first)
+                                    {
+                                        var known = (first.AddressFamily == AddressFamily.InterNetwork ? exitV4 : exitV6)
+                                            .GetValueOrDefault(round.Name);
+                                        if (known is { ConfirmedSamples: > 0 } && known.Address == first.ToString() &&
+                                            DateTimeOffset.UtcNow - known.ObservedUtc < ExitRecheckInterval)
+                                            round.NextTarget++;
+                                    }
+                                }
+                                else
+                                {
+                                    if (round.FirstExit is { } first)
+                                        RecordExit(round.Name, first,
+                                            result.Exit?.AddressFamily == first.AddressFamily ? result.Exit : null);
+                                    if (result.Exit is { } second && round.FirstExit?.AddressFamily != second.AddressFamily)
+                                        RecordExit(round.Name, second, null);
+                                }
                             }
-                            else if (profiles[job.Name].Revision != job.Revision)
-                            {
-                                if (job.Counted) websiteBatch.Enqueue(job.Name);
-                            }
-                            else
-                            {
-                                RecordIndependent(job.Name, result);
-                                if (job.Counted) websiteDone++;
-                            }
+                            if (round.InFlight != 0 || valid && round.NextTarget <= LastTarget) continue;
+                            round.Dispose();
+                            websiteActive.Remove(round);
+                            if (valid && round.Counted) websiteDone++;
+                            else if (!autoSweepPending && round.Counted) websiteTotal--;
                         }
                         var finishedCurrent = currentTask is { IsCompleted: true } ? currentTask : null;
                         while (currentSamples.TryDequeue(out var sample))
@@ -447,8 +519,12 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
         }
         finally
         {
-            await Task.WhenAll(serverActive.Keys.Cast<Task>().Concat(websiteActive.Keys)).ConfigureAwait(false);
-            if (currentTask is not null) await currentTask.ConfigureAwait(false);
+            try
+            {
+                await Task.WhenAll(serverActive.Keys.Cast<Task>().Concat(websiteRequests.Keys)).ConfigureAwait(false);
+                if (currentTask is not null) await currentTask.ConfigureAwait(false);
+            }
+            finally { ClearWebsiteRounds(); }
         }
     }
 
