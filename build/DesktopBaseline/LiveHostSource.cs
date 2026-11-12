@@ -117,7 +117,7 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
         var serverActive = new Dictionary<Task<DesktopResult>, (string Name, string Host, bool Counted)>(ParallelServerLimit);
         var websiteActive = new List<WebsiteRound>(webLimit);
         var websiteRequests = new Dictionary<Task<IndependentResult>, (WebsiteRound Round, int Target)>(webLimit);
-        var pending = new List<Task>(ParallelServerLimit + webLimit + 2);
+        var pending = new List<Task>(ParallelServerLimit + webLimit + 3);
         string? serverPriority = null, websitePriority = null;
         int batchTotal = 0, batchDone = 0;
         int websiteTotal = 0, websiteDone = 0;
@@ -363,6 +363,8 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                         sweepStarted = true;
                     }
                     bool refreshHost = false;
+                    long nextProgress = 0;
+                    Task? progressWake = null;
                     while (!stop.IsCancellationRequested && !HasPendingRequest())
                     {
                         while (!autoSweepPending && serverActive.Count < ParallelServerLimit &&
@@ -409,8 +411,20 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                             round.InFlight++;
                             websiteRequests.Add(round.Session.MeasureAsync(round.Name, target), (round, target));
                         }
-                        Emit();
-                        if (serverActive.Count == 0 && websiteActive.Count == 0 && currentTask is null) break;
+                        bool idle = serverActive.Count == 0 && websiteActive.Count == 0 && currentTask is null;
+                        long now = Environment.TickCount64;
+                        if (idle || now >= nextProgress)
+                        {
+                            Emit();
+                            if (idle) break;
+                            nextProgress = now + 150;
+                            progressWake = null;
+                        }
+                        else
+                        {
+                            progressWake ??= Task.Delay(TimeSpan.FromMilliseconds(nextProgress - now), stop.Token);
+                            pending.Add(progressWake);
+                        }
 
                         wake ??= requested.WaitAsync(TimeSpan.FromSeconds(30), stop.Token);
                         pending.AddRange(serverActive.Keys);
