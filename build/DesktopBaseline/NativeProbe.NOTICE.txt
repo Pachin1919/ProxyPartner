@@ -1,5 +1,6 @@
 The C++ website probe links against OpenSSL 3 (Apache License 2.0).
 OpenSSL copyright and license: https://www.openssl.org/source/license.html
+See OpenSSL.LICENSE.txt for the license text.
 
 The accompanying CA bundle is supplied at build time. If sourced from curl's
 Mozilla CA extract, its license is Mozilla Public License 2.0.

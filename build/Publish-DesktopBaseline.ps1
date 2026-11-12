@@ -101,6 +101,7 @@ if ($OpenSslBin) {
     }
     Copy-Item -LiteralPath $ProbeCaBundle -Destination (Join-Path $publish 'probe-ca-bundle.crt')
     Copy-Item -LiteralPath (Join-Path $repo 'build/DesktopBaseline/NativeProbe.NOTICE.txt') -Destination $publish
+    Copy-Item -LiteralPath (Join-Path $repo 'build/DesktopBaseline/OpenSSL.LICENSE.txt') -Destination $publish
 }
 $data = [IO.File]::ReadAllBytes($exe)
 $pe = [BitConverter]::ToInt32($data,0x3c)

@@ -1,48 +1,19 @@
 # ProxyPartner Lite
 
-**Find the Clash node that works best for the sites you use.**
+**比较 Clash 节点在常用网站上的表现，再决定切哪条线路。**
 
-Google can respond in milliseconds while ChatGPT times out on the same node. ProxyPartner compares **Google, YouTube, OpenAI API, ChatGPT, and Anthropic API** across your existing nodes in one Windows window.
+同一个节点打开 Google 很快，访问 ChatGPT 也可能超时。ProxyPartner Lite 是一款 Windows 节点测速面板，接入本机 Clash Verge Rev 使用的 Mihomo 内核，把 Google、YouTube、OpenAI API、ChatGPT 和 Anthropic API 的测速结果放在同一个窗口。
 
-[Try the Windows preview](#try-the-windows-preview) · [简体中文](README.zh-CN.md) · [Measured results](docs/preview-validation.md)
+![ProxyPartner Lite 深色卡片界面，展示演示节点的评分和各网站的测速结果](docs/images/proxypartner-dark-zh.png)
 
-![ProxyPartner Lite card view in English and light mode, with node scores and per-site latency from the built-in demo](docs/images/proxypartner-light-en.png)
+- **按网站选节点。** 用卡片查看各站延迟和超时，用表格按评分排序。OpenAI API 和 ChatGPT 分开测。
+- **边用边测。** 兼容节点可以在后台独立测速，当前线路照常使用。选好节点后，双击卡片，或在表格选中一行后按 Enter 即可切换。
+- **查看出口 IP。** 两个外部服务分别回报看到的地址，面板显示两处结果是否一致。
 
-## What you can do
+Windows 预览版支持中英文、深浅主题，以及 VLESS、Shadowsocks、Trojan 和 VMess 的常见配置。一轮 Shadowsocks 实测跑完 41 个节点，用时约 11 秒，平均私有内存约 25 MiB。
 
-- **Compare before switching.** See the delay and result for each site. Scan the cards at a glance, or sort the table by score to narrow your choices.
-- **Test nodes you aren't using.** ProxyPartner starts a scan of compatible nodes when you open it. The scan runs alongside your current Clash connection.
-- **See what went wrong.** The panel distinguishes a timeout, a failed probe, and a node that needs a supported configuration. The quality score combines response rate, delay, and variation across recent samples.
-- **Check your exit IP.** Two external services report the address they see. The details panel shows whether they agree and tracks observed changes during the session.
-- **Switch when you decide.** Double-click a card or select a row and press **Enter** to switch through a manual Clash policy group. Use Chinese or English in light or dark mode.
+## C++ 独立网站测速
 
-A Windows test with a real Shadowsocks subscription finished **41 node probes in 11.46 seconds** and averaged **25.08 MiB of private memory**. All 33 nodes counted as non-current in that run returned a time for each of the five sites. [Test conditions and results](docs/preview-validation.md)
+在 Windows x64 上构建便携版时，向 `build/Publish-DesktopBaseline.ps1` 传入 `-ToolchainRoot`、`-EvidenceDirectory`、`-OpenSslBin` 和 `-ProbeCaBundle`。OpenSSL 目录提供 x64 的 OpenSSL 3 DLL，CA 参数指向 PEM 证书包。构建产物在证据目录下的 `win32/publish`，运行其中的 `ProxyPartner.exe`。
 
-## Try the Windows preview
-
-Build the preview on Windows x64 with the .NET 10 SDK and the Visual Studio **Desktop development with C++** workload. The build produces a self-contained EXE. [Native AOT build requirements](https://learn.microsoft.com/en-us/dotnet/core/deploying/native-aot/#prerequisites)
-
-From the repository root in PowerShell, run the build and open the demo.
-
-```powershell
-dotnet publish .\build\DesktopBaseline\DesktopBaseline.csproj -c Release -r win-x64 -o .\runs\preview
-Copy-Item .\build\DesktopBaseline\*.LICENSE.txt .\runs\preview
-& .\runs\preview\ProxyPartner.exe --demo
-```
-
-To see your nodes, start Clash Verge Rev, then open `ProxyPartner.exe` without `--demo`. Use Clash's **System Proxy** to enable current-route verification. The preview has been tested with Mihomo v1.19.21.
-
-To scan other nodes, put a file named `ProbeProfilePath.txt` beside the EXE. Give it one line containing the absolute path to your active local Clash configuration. Leave the subscription in Clash. ProxyPartner uses the local file to get the dial settings for each compatible node.
-
-## Independent probe compatibility
-
-| Node type | Configuration coverage |
-| --- | --- |
-| VLESS | Supported TLS and REALITY configurations. |
-| Shadowsocks | AEAD over TCP, including the `obfs` plugin in TLS mode. |
-| Trojan | TCP with TLS and WebSocket with TLS. |
-| VMess AEAD | `alterId=0` with TCP, WebSocket, or WebSocket with TLS. |
-
-The preview measures HTTP response time and reachability for API endpoints. Running a model requires separate credentials and a separate check. Measurements and exit-IP observations stay in memory for the current session.
-
-[Compatibility test details](docs/preview-validation.md) · [Project design](spec/DESIGN.zh-CN.md) · [MIT license](LICENSE)
+便携版使用 C++ 测试带 TLS 混淆的 ChaCha20-Poly1305 Shadowsocks 节点的五个网站。现有 C# 拨号继续覆盖其他配置和出口 IP 探测。站点详情会标明 C++ 测速来源。 [构建与测试说明](experiments/cpp-probe/README.md)
