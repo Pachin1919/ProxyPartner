@@ -8,12 +8,14 @@ using System.Net.Sockets;
 internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTestSource, IDesktopProxyControlSource, IDisposable
 {
     private sealed record SelectionRequest(DesktopProxyControl Control, string Group, string Member);
-    private sealed class WebsiteRound(string name, ProbeProfile profile, bool counted) : IDisposable
+    private sealed class WebsiteRound(string name, ProbeProfile profile, bool counted, int targetCount,
+        CancellationToken stop) : IDisposable
     {
         internal readonly string Name = name;
         internal readonly string Revision = profile.Revision;
         internal readonly bool Counted = counted;
-        internal readonly IndependentNodeProbe.Session Session = new(profile);
+        internal readonly int TargetCount = targetCount;
+        internal readonly IndependentNodeProbe.Session Session = new(profile, stop);
         internal int NextTarget, InFlight;
         internal IPAddress? FirstExit;
         public void Dispose() => Session.Dispose();
@@ -25,7 +27,6 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
     private const int ParallelServerLimit = 5;
     private const int PerNodeRequestLimit = 2;
     private const int SiteCount = ReadOnlyHostClient.CurrentProbeTargetCount;
-    private const int LastTarget = SiteCount + 1;
     private readonly CancellationTokenSource stop = new();
     private readonly SemaphoreSlim requested = new(0, 1);
     private readonly Task poll;
@@ -320,6 +321,13 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                         family[name] = UpdateExitObservation(family.GetValueOrDefault(name), address,
                             corroboration, DateTimeOffset.UtcNow);
                     }
+                    WebsiteRound StartWebsiteRound(string name, bool counted)
+                    {
+                        var previous = exitV4.GetValueOrDefault(name) ?? exitV6.GetValueOrDefault(name);
+                        bool recentlyConfirmed = previous is { ConfirmedSamples: > 0 } &&
+                            DateTimeOffset.UtcNow - previous.ObservedUtc < ExitRecheckInterval;
+                        return new(name, profiles[name], counted, recentlyConfirmed ? SiteCount : SiteCount + 2, stop.Token);
+                    }
                     if (testedGroups is not null && (testedMode != facts.Mode ||
                         !testedGroups.Select(g => (g.Name, g.Selected))
                             .SequenceEqual(facts.Groups.Select(g => (g.Name, g.Selected)))))
@@ -375,7 +383,7 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                             {
                                 if (websiteEligible.Contains(priorityName))
                                 {
-                                    round = new(priorityName, profiles[priorityName], counted);
+                                    round = StartWebsiteRound(priorityName, counted);
                                     websiteActive.Insert(0, round);
                                 }
                                 else if (counted) websiteTotal--;
@@ -389,16 +397,16 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                                     websiteTotal--;
                                     continue;
                                 }
-                                round = new(name, profiles[name], counted: true);
+                                round = StartWebsiteRound(name, counted: true);
                                 websiteActive.Add(round);
                             }
                             // Start exit observations after this node's five website requests have settled.
-                            round ??= websiteActive.Find(static job => job.NextTarget is SiteCount or LastTarget &&
+                            round ??= websiteActive.Find(static job => job.NextTarget >= SiteCount && job.NextTarget < job.TargetCount &&
                                 job.InFlight == 0);
                             if (round is null) break;
                             int target = round.NextTarget++;
                             round.InFlight++;
-                            websiteRequests.Add(round.Session.MeasureAsync(round.Name, target, stop.Token), (round, target));
+                            websiteRequests.Add(round.Session.MeasureAsync(round.Name, target), (round, target));
                         }
                         Emit();
                         if (serverActive.Count == 0 && websiteActive.Count == 0 && currentTask is null) break;
@@ -449,20 +457,10 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                                 profiles[round.Name].Revision == round.Revision;
                             if (valid)
                             {
-                                if (result.Site is { } sample)
-                                    RecordSite(sample);
+                                if (job.Target < SiteCount)
+                                    RecordSite(result.Site!);
                                 else if (job.Target == SiteCount)
-                                {
                                     round.FirstExit = result.Exit;
-                                    if (result.Exit is { } first)
-                                    {
-                                        var known = (first.AddressFamily == AddressFamily.InterNetwork ? exitV4 : exitV6)
-                                            .GetValueOrDefault(round.Name);
-                                        if (known is { ConfirmedSamples: > 0 } && known.Address == first.ToString() &&
-                                            DateTimeOffset.UtcNow - known.ObservedUtc < ExitRecheckInterval)
-                                            round.NextTarget++;
-                                    }
-                                }
                                 else
                                 {
                                     if (round.FirstExit is { } first)
@@ -472,7 +470,7 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                                         RecordExit(round.Name, second, null);
                                 }
                             }
-                            if (round.InFlight != 0 || valid && round.NextTarget <= LastTarget) continue;
+                            if (round.InFlight != 0 || valid && round.NextTarget < round.TargetCount) continue;
                             round.Dispose();
                             websiteActive.Remove(round);
                             if (valid && round.Counted) websiteDone++;

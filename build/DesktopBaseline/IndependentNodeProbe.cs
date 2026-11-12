@@ -336,9 +336,12 @@ internal static class IndependentNodeProbe
         private static readonly HttpRequestOptionsKey<DialAttempt> AttemptKey = new("ProbeDialAttempt");
         private sealed class DialAttempt { internal int Count; }
         private readonly HttpClient client;
+        private readonly CancellationTokenSource deadline;
+        private readonly CancellationToken stop;
 
-        internal Session(ProbeProfile profile)
+        internal Session(ProbeProfile profile, CancellationToken stop)
         {
+            this.stop = stop;
             client = new HttpClient(new SocketsHttpHandler
             {
                 UseProxy = false, UseCookies = false, AllowAutoRedirect = false,
@@ -351,22 +354,25 @@ internal static class IndependentNodeProbe
                     return profile.Connect(context.DnsEndPoint, token);
                 }
             });
+            deadline = CancellationTokenSource.CreateLinkedTokenSource(stop);
+            deadline.CancelAfter(TimeSpan.FromSeconds(7));
         }
 
-        internal async Task<IndependentResult> MeasureAsync(string node, int index, CancellationToken stop)
+        internal async Task<IndependentResult> MeasureAsync(string node, int index)
         {
-            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(stop);
-            deadline.CancelAfter(TimeSpan.FromSeconds(7));
             var targets = ReadOnlyHostClient.WebsiteTargets;
-            bool site = index < targets.Count;
-            var (id, uri) = site ? targets[index] : (null, index == targets.Count ? EchoUrl : CorroboratingEchoUrl);
-            using var request = new HttpRequestMessage(HttpMethod.Get, uri);
-            request.Options.Set(AttemptKey, new DialAttempt());
-            if (id == "anthropic_api")
-                request.Headers.TryAddWithoutValidation("anthropic-version", "2026-10-21");
-            long start = Stopwatch.GetTimestamp();
+            var (id, uri) = index < targets.Count
+                ? targets[index] : (null, index == targets.Count ? EchoUrl : CorroboratingEchoUrl);
+            bool attempted = false, timedOut = false;
             try
             {
+                deadline.Token.ThrowIfCancellationRequested();
+                using var request = new HttpRequestMessage(HttpMethod.Get, uri);
+                request.Options.Set(AttemptKey, new DialAttempt());
+                if (id == "anthropic_api")
+                    request.Headers.TryAddWithoutValidation("anthropic-version", "2026-10-21");
+                long start = Stopwatch.GetTimestamp();
+                attempted = true;
                 using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead,
                     deadline.Token).ConfigureAwait(false);
                 if (id is null)
@@ -376,17 +382,18 @@ internal static class IndependentNodeProbe
             }
             catch (OperationCanceledException) when (deadline.IsCancellationRequested)
             {
-                return id is null ? default : new(new(id, node, false, true, null, null, DateTimeOffset.UtcNow,
-                    TimedOut: !stop.IsCancellationRequested, Independent: true));
+                timedOut = !stop.IsCancellationRequested;
             }
-            catch (Exception error) when (error is HttpRequestException or IOException)
-            {
-                return id is null ? default : new(new(id, node, false, true, null, null,
-                    DateTimeOffset.UtcNow, Independent: true));
-            }
+            catch (Exception error) when (error is HttpRequestException or IOException) { }
+            return id is null ? default : new(new(id, node, false, attempted, null, null,
+                DateTimeOffset.UtcNow, TimedOut: timedOut, Independent: true));
         }
 
-        public void Dispose() => client.Dispose();
+        public void Dispose()
+        {
+            deadline.Dispose();
+            client.Dispose();
+        }
     }
 
     private static async Task<IPAddress?> ReadExitAsync(HttpResponseMessage response, CancellationToken token)
