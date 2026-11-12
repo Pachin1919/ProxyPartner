@@ -27,6 +27,7 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
     private const int ParallelServerLimit = 5;
     private const int PerNodeRequestLimit = 2;
     private const int SiteCount = ReadOnlyHostClient.CurrentProbeTargetCount;
+    private const string NativeProbeSource = "Shadowsocks · C++ HTTPS";
     private readonly CancellationTokenSource stop = new();
     private readonly SemaphoreSlim requested = new(0, 1);
     private readonly Task poll;
@@ -587,12 +588,13 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
             int siteCount = 0, stableCount = 0;
             bool? independentSource = null;
             bool mixedSources = false;
+            bool allNative = true;
             foreach (var site in ReadOnlyHostClient.WebsiteTargets)
             {
                 if (!history.TryGetValue((node.Name, site.Id), out var window)) continue;
                 var sample = window.Latest;
                 var result = new DesktopResult(sample.TargetId, sample.ElapsedMs, sample.HttpStatus, sample.ObservedUtc,
-                    sample.NativeTransport ? "Shadowsocks · C++ HTTPS" : sample.Independent ? independentMethod ?? "HTTPS" : "HTTPS",
+                    sample.NativeTransport ? NativeProbeSource : sample.Independent ? independentMethod ?? "HTTPS" : "HTTPS",
                     sample.HttpStatus switch
                     {
                         401 => ResultState.AuthenticationRequired,
@@ -616,6 +618,7 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                     if (siteExpiry < expires) expires = siteExpiry;
                     independentSource ??= sample.Independent;
                     mixedSources |= independentSource != sample.Independent;
+                    allNative &= sample.NativeTransport;
                     points += score.Score;
                     siteCount++;
                     if (score.HasStability) stableCount++;
@@ -638,7 +641,8 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                     ? Math.Min((int)Math.Round(points / siteCount), cap ?? 100) : null;
                 QualityState state = score is >= 80 ? QualityState.Good : score is < 60 || cap.HasValue
                     ? QualityState.Poor : score.HasValue ? QualityState.Restricted : QualityState.Insufficient;
-                quality = new(score, state, independentSource == true ? independentMethod ?? "HTTPS" : "HTTPS",
+                quality = new(score, state, allNative ? NativeProbeSource :
+                    independentSource == true ? independentMethod ?? "HTTPS" : "HTTPS",
                     cap, capTarget, siteCount, stableCount);
             }
             var support = independentMethod is null ? IndependentProbeState.UnsupportedProtocol

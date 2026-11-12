@@ -16,4 +16,4 @@ Windows 预览版支持中英文、深浅主题，以及 VLESS、Shadowsocks、T
 
 在 Windows x64 上构建便携版时，向 `build/Publish-DesktopBaseline.ps1` 传入 `-ToolchainRoot`、`-EvidenceDirectory`、`-OpenSslBin` 和 `-ProbeCaBundle`。OpenSSL 目录提供 x64 的 OpenSSL 3 DLL，CA 参数指向 PEM 证书包。构建产物在证据目录下的 `win32/publish`，运行其中的 `ProxyPartner.exe`。
 
-便携版使用 C++ 测试带 TLS 混淆的 ChaCha20-Poly1305 Shadowsocks 节点的五个网站。现有 C# 拨号继续覆盖其他配置和出口 IP 探测。站点详情会标明 C++ 测速来源。 [构建与测试说明](experiments/cpp-probe/README.md)
+便携版使用 C++ 测试带 TLS 混淆的 ChaCha20-Poly1305 Shadowsocks 节点的五个网站。现有 C# 拨号继续覆盖其他配置和出口 IP 探测。节点详情的评分来源会标明 C++ 测速。 [构建与测试说明](experiments/cpp-probe/README.md)
