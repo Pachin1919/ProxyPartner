@@ -24,7 +24,7 @@ $yaml = [YamlDotNet.RepresentationModel.YamlStream]::new()
 $reader = [IO.File]::OpenText($profile)
 try { $yaml.Load($reader) } finally { $reader.Dispose() }
 function Field($node, [string]$name) {
-    $node.Children[[YamlDotNet.RepresentationModel.YamlScalarNode]::new($name)]
+    return ,$node.Children[[YamlDotNet.RepresentationModel.YamlScalarNode]::new($name)]
 }
 $profiles = [Collections.Generic.Dictionary[string,object]]::new([StringComparer]::Ordinal)
 foreach ($node in (Field $yaml.Documents[0].RootNode 'proxies').Children) {
