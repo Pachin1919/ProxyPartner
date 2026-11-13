@@ -13,12 +13,11 @@ public sealed unsafe partial class DesktopApp
     private const int OpenSettings = 124, OpenDetails = 125, EnglishId = 201, LightId = 202,
         WeightFirst = 210, TargetListId = 220, UrlId = 221, ShortId = 222, SymbolId = 223,
         AddTarget = 224, EditTarget = 225, RemoveTarget = 226, SaveSettings = 227, CancelSettings = 228,
-        PickProbeProfile = 234, ClearProbeProfile = 235;
+        UseVergeProfile = 234, ProbeProfilePathId = 235;
     private nint settingsButton, detailButton, settingsWindow, detailWindow, detailText;
     private nint settingsFont, detailFont, englishBox, lightBox, targetsList, urlInput, shortInput, symbolInput, example, settingsStatus;
     private int settingsScroll;
-    private nint profileStatus;
-    private string? draftProfilePath;
+    private nint profilePathInput;
     private readonly nint[] weightInputs = new nint[6];
     private readonly List<(nint Handle, int X, int Y, int W, int H)> settingsControls = [];
     private readonly List<CustomTarget> draftTargets = [];
@@ -33,7 +32,6 @@ public sealed unsafe partial class DesktopApp
         settingsWindow = CreateAux(L("ProxyPartner · 设置", "ProxyPartner · Settings"), 740, 634, 0x200000);
         if (settingsWindow == 0) return;
         draftTargets.AddRange(preferences.CustomTargets);
-        draftProfilePath = preferences.ProbeProfilePath;
         int profileOffset = 0;
         const uint tab = WsTabStop | 0x4000; // BS_NOTIFY for keyboard focus
         const uint button = tab | 11, check = tab | 3, edit = WsTabStop | 0x800000 | 0x80;
@@ -55,11 +53,11 @@ public sealed unsafe partial class DesktopApp
         Send(lightBox, 0xf1, preferences.Light ? 1u : 0u, 0);
         if (source is IDesktopProbeProfileSource)
         {
-            Field("STATIC", L("独立测速配置", "Independent test profile"), 0, 0, 20, 80, 680, 20);
-            Field("BUTTON", L("选择 Clash YAML…", "Choose Clash YAML…"), button, PickProbeProfile, 20, 106, 170, 28);
-            Field("BUTTON", L("清除", "Clear"), button, ClearProbeProfile, 200, 106, 65, 28);
-            profileStatus = Field("STATIC", "", 0x4000, 0, 277, 108, 425, 26);
-            ShowDraftProfile();
+            Field("STATIC", L("独立测速配置 · Clash 当前生效的 YAML 路径",
+                "Independent test profile · path to the active Clash YAML"), 0, 0, 20, 80, 680, 20);
+            Field("BUTTON", L("填入 Verge 路径", "Fill Verge path"), button, UseVergeProfile, 20, 106, 156, 28);
+            profilePathInput = Field("EDIT", preferences.ProbeProfilePath ?? "", edit, ProbeProfilePathId, 188, 107, 516, 25);
+            Send(profilePathInput, 0xc5, 4096, 0);
             profileOffset = ProbeProfileHeight;
         }
         Field("STATIC", L("评分分项（%）", "Score components (%)"), 0, 0, 20, 88, 680, 20);
@@ -194,7 +192,7 @@ public sealed unsafe partial class DesktopApp
         GetClientRect(settingsWindow, &client);
         int dpi = (int)GetDpiForWindow(settingsWindow);
         int Px(int value) => (value * dpi + 48) / 96;
-        int extent = Px(SettingsContentHeight + (profileStatus != 0 ? ProbeProfileHeight : 0));
+        int extent = Px(SettingsContentHeight + (profilePathInput != 0 ? ProbeProfileHeight : 0));
         settingsScroll = Math.Clamp(position, 0, Math.Max(0, extent - client.Bottom));
         var bar = new Scroll
         {
@@ -236,8 +234,7 @@ public sealed unsafe partial class DesktopApp
                     settingsScroll = 0;
                     if (settingsFont != 0) DeleteObject(settingsFont);
                     settingsFont = example = 0;
-                    profileStatus = 0;
-                    draftProfilePath = null;
+                    profilePathInput = 0;
                     settingsControls.Clear();
                     draftTargets.Clear();
                 }
@@ -292,11 +289,13 @@ public sealed unsafe partial class DesktopApp
                 if (notification == 0)
                 {
                     if (id is AddTarget or EditTarget or RemoveTarget) ChangeTarget(id);
-                    if (id == PickProbeProfile) BrowseProbeProfile();
-                    if (id == ClearProbeProfile)
+                    if (id == UseVergeProfile)
                     {
-                        draftProfilePath = null;
-                        ShowDraftProfile();
+                        string path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                            "io.github.clash-verge-rev.clash-verge-rev", "clash-verge.yaml");
+                        if (File.Exists(path)) SetText(profilePathInput, path);
+                        else SetText(settingsStatus, L("未找到常用的 Verge 配置，请粘贴当前生效的 YAML 路径。",
+                            "Verge profile not found at its usual path. Paste the active YAML path."));
                     }
                     if (id == SaveSettings) CommitSettings();
                     if (id == CancelSettings || id == 2) DestroyWindow(window);
@@ -403,44 +402,6 @@ public sealed unsafe partial class DesktopApp
         SetText(settingsStatus, L("草稿已更新，按保存后生效。", "Draft updated. Save to apply."));
     }
 
-    private void ShowDraftProfile() => SetText(profileStatus, draftProfilePath ??
-        L("选择当前生效的配置，再点保存", "Choose the active profile, then Save"));
-
-    private void BrowseProbeProfile()
-    {
-        string initial = draftProfilePath is null
-            ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                "io.github.clash-verge-rev.clash-verge-rev")
-            : Path.GetDirectoryName(draftProfilePath)!;
-        const int capacity = 4097;
-        char* file = stackalloc char[capacity];
-        file[0] = '\0';
-        fixed (char* filter = "Clash YAML (*.yaml;*.yml)\0*.yaml;*.yml\0",
-            directory = initial, title = L("选择 Clash 当前生效的配置", "Choose the active Clash configuration"))
-        {
-            var dialog = new OpenFileDialog
-            {
-                Size = (uint)sizeof(OpenFileDialog), Owner = settingsWindow, Filter = filter, FilterIndex = 1,
-                File = file, FileCapacity = capacity, InitialDirectory = directory, Title = title,
-                Flags = 0x00080000 | 0x1000 | 0x0800 | 0x0008 | 0x0004
-            };
-            if (GetOpenFileName(&dialog) == 0)
-            {
-                if (CommDlgExtendedError() != 0)
-                    SetText(profileStatus, L("无法打开文件选择窗口。", "Could not open the file picker."));
-                return;
-            }
-        }
-        string path = new(file);
-        if (!DesktopPreferences.IsLocalYaml(path))
-        {
-            SetText(profileStatus, L("请选择本机的 YAML 文件。", "Choose a local YAML file."));
-            return;
-        }
-        draftProfilePath = path;
-        ShowDraftProfile();
-    }
-
     private void CommitSettings()
     {
         var parts = ReadWeights(0);
@@ -451,8 +412,16 @@ public sealed unsafe partial class DesktopApp
                 "Each weight group must total 100%. Saved preferences were kept."));
             return;
         }
+        string? profile = profilePathInput == 0 ? preferences.ProbeProfilePath : ReadField(profilePathInput, 4097).Trim().Trim('"');
+        if (profile == "") profile = null;
+        if (profile is not null && profile != preferences.ProbeProfilePath &&
+            (!DesktopPreferences.IsLocalYaml(profile) || !File.Exists(profile)))
+        {
+            SetText(settingsStatus, L("请输入本机存在的 YAML 文件路径。", "Enter the path to an existing local YAML file."));
+            return;
+        }
         var updated = new DesktopPreferences(Send(englishBox, 0xf0, 0, 0) == 1, Send(lightBox, 0xf0, 0, 0) == 1,
-            parts, sites, draftTargets.ToArray(), draftProfilePath);
+            parts, sites, draftTargets.ToArray(), profile);
         try { updated.Save(settingsPath); }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException)
         {

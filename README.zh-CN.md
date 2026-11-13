@@ -20,7 +20,7 @@
 
 1. 在 [GitHub Releases](https://github.com/Pachin1919/ProxyPartner/releases) 的 **Assets** 中下载 `ProxyPartner-windows-x64.zip`。
 2. 解压整个 ZIP，双击 `ProxyPartner.exe`。同目录的 DLL 和证书需要保留。运行便携版无需安装 .NET SDK 或 Visual Studio。
-3. 启动 Clash Verge Rev 后，ProxyPartner 会连接本机 Mihomo。要测其他节点，在 **设置 → 独立测速配置 → 选择 Clash YAML** 里选中当前生效的本机配置并保存。选一次后，软件会记住路径并自动扫描兼容节点。
+3. 启动 Clash Verge Rev 后，ProxyPartner 会连接本机 Mihomo。要测其他节点，在 **设置 → 独立测速配置** 点 **填入 Verge 路径**，核对后保存。配置在其他位置时，粘贴当前生效的本机 YAML 路径。软件会记住路径并自动扫描兼容节点。
 
 ### 从源码构建
 

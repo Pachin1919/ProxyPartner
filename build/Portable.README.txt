@@ -2,10 +2,10 @@ ProxyPartner Lite · Windows x64
 
 1. 解压整个 ZIP，双击 ProxyPartner.exe。请把同目录的 DLL 和证书留在一起。
 2. 保持 Clash Verge Rev 运行，ProxyPartner 会尝试连接本机 Mihomo。也可以用 ProxyPartner.exe --demo 打开演示数据。
-3. 如需独立测试非当前节点，在 设置 → 独立测速配置 → 选择 Clash YAML 里选中当前生效的本机配置并保存。
+3. 如需独立测试非当前节点，在 设置 → 独立测速配置 点 填入 Verge 路径，核对后保存。配置在其他位置时，粘贴当前生效的本机 YAML 路径。
 
 Extract the whole ZIP and double-click ProxyPartner.exe. Keep the DLLs and certificate bundle beside it.
 Keep Clash Verge Rev running for live measurements, or run ProxyPartner.exe --demo.
-To test other nodes independently, open Settings → Independent test profile, choose the active local Clash YAML file, and click Save.
+To test other nodes independently, open Settings → Independent test profile, click Fill Verge path, check the active YAML path, then Save. Paste the path if your active file is elsewhere.
 
 https://github.com/Pachin1919/ProxyPartner
