@@ -428,11 +428,12 @@ public sealed unsafe partial class DesktopApp
             SetText(settingsStatus, L("无法保存本机配置。", "Could not save the local preferences."));
             return;
         }
-        if (source is IDesktopProbeProfileSource profiles && preferences.ProbeProfilePath != updated.ProbeProfilePath)
-            profiles.SetProbeProfilePath(updated.ProbeProfilePath);
+        var previous = preferences;
         preferences = updated;
         DestroyWindow(settingsWindow);
-        ApplyPreferences();
+        if (previous.English != updated.English || previous.Light != updated.Light) ApplyPreferences();
+        if (source is IDesktopProbeProfileSource profiles && previous.ProbeProfilePath != updated.ProbeProfilePath)
+            profiles.SetProbeProfilePath(updated.ProbeProfilePath);
     }
 
     private void ApplyPreferences()
