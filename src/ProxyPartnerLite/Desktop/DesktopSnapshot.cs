@@ -2,6 +2,7 @@ namespace ProxyPartnerLite.Desktop;
 
 public enum NodeKind { Leaf, Group }
 public enum CollectionState { Synthetic, Disconnected, Observing, Idle, SleepGap, SourceStopped, Connecting }
+public enum HostConnectionIssue { None, NotDetected, Ambiguous, IdentityRejected, AccessDenied, PipeUnavailable, TimedOut, InvalidResponse, TransportError }
 public enum ResultState { Missing, Measured, Stale, Incomparable, AuthenticationRequired, Restricted, Failed, HttpError, TimedOut }
 public enum IndependentProbeState { Unknown, Available, UnsupportedProtocol, UnsupportedOptions, MissingConfiguration }
 public enum QualityState { Insufficient, Good, Poor, Restricted }
@@ -57,7 +58,7 @@ public sealed record DesktopServerSweep(int Completed, int BatchTotal, bool Requ
 public sealed record DesktopSnapshot(
     string Host, CollectionState Collection, string? VerifiedCurrentPath,
     DateTimeOffset? UpdatedUtc, IReadOnlyList<DesktopRow> Rows, DesktopCurrentTest? CurrentTest = null,
-    DesktopServerSweep? ServerSweep = null);
+    DesktopServerSweep? ServerSweep = null, HostConnectionIssue ConnectionIssue = HostConnectionIssue.None);
 
 public interface IDesktopCurrentTestSource
 {

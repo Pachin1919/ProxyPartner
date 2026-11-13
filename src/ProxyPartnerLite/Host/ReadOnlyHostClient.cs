@@ -26,9 +26,10 @@ public sealed partial class ReadOnlyHostClient
         {
             return new HostReadResult(Classify(error, cancellationToken), null, null, null, null, []);
         }
-        var result = await ReadForCoreAsync(core, "verge-mihomo", options ?? new HostReadOptions(), fallback,
+        options ??= new HostReadOptions();
+        var result = await ReadForCoreAsync(core, "verge-mihomo", options, fallback,
             cancellationToken).ConfigureAwait(false);
-        if (result.Status != HostStatus.ConnectedPipe || options?.IncludeVergeRuntimePath != true)
+        if (result.Status != HostStatus.ConnectedPipe || !options.IncludeVergeRuntimePath)
             return result;
 
         // Verge v2.4.7 dirs::app_home_dir and Config::generate_file(ConfigType::Run).

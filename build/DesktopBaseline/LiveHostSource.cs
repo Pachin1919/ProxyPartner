@@ -489,16 +489,31 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                 }
                 else
                 {
-                    if (GetSnapshot() is { Collection: not CollectionState.Disconnected } previous)
+                    var issue = read.Status switch
                     {
+                        HostStatus.HostUnavailable when read.CoreProcessId is null => HostConnectionIssue.NotDetected,
+                        HostStatus.HostUnavailable or HostStatus.FallbackAuthorizationRequired => HostConnectionIssue.PipeUnavailable,
+                        HostStatus.Ambiguous => HostConnectionIssue.Ambiguous,
+                        HostStatus.IdentityRejected => HostConnectionIssue.IdentityRejected,
+                        HostStatus.AccessDenied => HostConnectionIssue.AccessDenied,
+                        HostStatus.TimedOut => HostConnectionIssue.TimedOut,
+                        HostStatus.InvalidResponse => HostConnectionIssue.InvalidResponse,
+                        _ => HostConnectionIssue.TransportError
+                    };
+                    var previous = GetSnapshot();
+                    if (previous.Collection != CollectionState.Disconnected || previous.ConnectionIssue != issue)
                         Publish(previous with
                         {
                             Collection = CollectionState.Disconnected,
+                            ConnectionIssue = issue,
                             VerifiedCurrentPath = null,
-                            Rows = previous.Rows.Select(row => row.IsCurrent
-                                ? row with { IsCurrent = false, CurrentTarget = null } : row).ToArray()
+                            CurrentTest = null,
+                            ServerSweep = null,
+                            Rows = previous.Collection == CollectionState.Observing
+                                ? previous.Rows.Select(row => row.IsCurrent
+                                    ? row with { IsCurrent = false, CurrentTarget = null } : row).ToArray()
+                                : previous.Rows
                         });
-                    }
                 }
                 wake ??= requested.WaitAsync(TimeSpan.FromSeconds(30), stop.Token);
                 await wake.ConfigureAwait(false);

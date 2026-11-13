@@ -591,7 +591,18 @@ public sealed unsafe partial class DesktopApp
             {
                 CollectionState.Connecting => L("正在连接", "Connecting"),
                 CollectionState.Observing => L("已连接", "Connected"),
-                _ => L("未连接", "Disconnected")
+                _ => snapshot.ConnectionIssue switch
+                {
+                    HostConnectionIssue.NotDetected => L("未检测到本机 Mihomo，请启动 Clash Verge Rev", "Local Mihomo not found. Start Clash Verge Rev."),
+                    HostConnectionIssue.Ambiguous => L("检测到多个宿主实例，请保留一个", "Multiple host instances detected. Keep one running."),
+                    HostConnectionIssue.IdentityRejected => L("无法确认本机 Mihomo 的身份", "Could not verify the local Mihomo instance."),
+                    HostConnectionIssue.AccessDenied => L("本机 Mihomo 拒绝读取，请检查 Clash Verge Rev 的运行状态", "Mihomo denied read access. Check Clash Verge Rev."),
+                    HostConnectionIssue.PipeUnavailable => L("已检测到 Mihomo，本机接口暂不可用", "Mihomo detected. Its local interface is unavailable."),
+                    HostConnectionIssue.TimedOut => L("读取本机 Mihomo 超时", "Reading from local Mihomo timed out."),
+                    HostConnectionIssue.InvalidResponse => L("本机 Mihomo 返回的数据无法读取", "Local Mihomo returned unreadable data."),
+                    HostConnectionIssue.TransportError => L("读取本机 Mihomo 失败", "Could not read from local Mihomo."),
+                    _ => L("未连接", "Disconnected")
+                }
             };
             string count = snapshot.Collection == CollectionState.Observing
                 ? (showGroups ? L($" · 显示 {rows.Length} 项", $" · {rows.Length} items shown")
@@ -612,7 +623,8 @@ public sealed unsafe partial class DesktopApp
                 if (sweep.UnavailableNode is not null)
                     probe += L(" · 该节点暂无独立测速入口", " · This node has no independent probe route");
                 if (sweep.ProbeEligible == 0 && sweep.NodeCount > 0)
-                    probe += L(" · 在设置中检查独立测速配置", " · Check the independent test profile in Settings");
+                    probe += L(" · 暂无可独立测速节点，请检查设置中的 Clash 运行配置",
+                        " · No nodes available for independent tests. Check the Clash runtime profile in Settings.");
                 else if (sweep.ProbeEligible < sweep.NodeCount)
                     probe += L($" · 可独立测速 {sweep.ProbeEligible}/{sweep.NodeCount}",
                         $" · Independent probe coverage {sweep.ProbeEligible}/{sweep.NodeCount}");
