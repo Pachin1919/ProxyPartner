@@ -372,11 +372,8 @@ public sealed unsafe partial class DesktopApp
         }
         else ApplyDpi(initialDpi, null);
         source.SnapshotChanged += OnSnapshotChanged;
-        if (source is IDesktopCurrentTestSource test)
-        {
-            test.RequestSweep();
+        if (source is IDesktopCurrentTestSource)
             SetTimer(panel, CurrentProbeTimer, CurrentProbeIntervalMs, 0);
-        }
         Refresh();
         ShowWindow(panel, 5);
         UpdateWindow(panel);

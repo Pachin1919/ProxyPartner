@@ -26,8 +26,17 @@ public sealed partial class ReadOnlyHostClient
         {
             return new HostReadResult(Classify(error, cancellationToken), null, null, null, null, []);
         }
-        return await ReadForCoreAsync(core, "verge-mihomo", options ?? new HostReadOptions(), fallback,
+        var result = await ReadForCoreAsync(core, "verge-mihomo", options ?? new HostReadOptions(), fallback,
             cancellationToken).ConfigureAwait(false);
+        if (result.Status != HostStatus.ConnectedPipe || options?.IncludeVergeRuntimePath != true)
+            return result;
+
+        // Verge v2.4.7 dirs::app_home_dir and Config::generate_file(ConfigType::Run).
+        string appDirectory = Path.GetDirectoryName((core.Service?.Ui.Image ?? core.Image)!)!;
+        string portable = Path.Combine(appDirectory, ".config");
+        string data = File.Exists(Path.Combine(portable, "PORTABLE"))
+            ? portable : Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+        return result with { VergeRuntimePath = Path.Combine(data, "io.github.clash-verge-rev.clash-verge-rev", "clash-verge.yaml") };
     }
 
     internal static async Task<HostReadResult> ReadForCoreAsync(CoreIdentity core, string pipe,

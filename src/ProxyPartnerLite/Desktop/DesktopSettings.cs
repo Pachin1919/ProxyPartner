@@ -53,8 +53,8 @@ public sealed unsafe partial class DesktopApp
         Send(lightBox, 0xf1, preferences.Light ? 1u : 0u, 0);
         if (source is IDesktopProbeProfileSource)
         {
-            Field("STATIC", L("独立测速配置 · Clash 当前生效的 YAML 路径",
-                "Independent test profile · path to the active Clash YAML"), 0, 0, 20, 80, 680, 20);
+            Field("STATIC", L("独立测速配置 · 留空自动识别 Verge",
+                "Independent test profile · leave blank for automatic Verge discovery"), 0, 0, 20, 80, 680, 20);
             Field("BUTTON", L("填入 Verge 路径", "Fill Verge path"), button, UseVergeProfile, 20, 106, 156, 28);
             profilePathInput = Field("EDIT", preferences.ProbeProfilePath ?? "", edit, ProbeProfilePathId, 188, 107, 516, 25);
             Send(profilePathInput, 0xc5, 4096, 0);

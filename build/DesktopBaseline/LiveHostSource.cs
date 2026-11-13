@@ -98,6 +98,7 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
         };
         const int MaxIndependentRequests = 16 - SiteCount;
         var client = new ReadOnlyHostClient();
+        var readOptions = new HostReadOptions { IncludeVergeRuntimePath = true };
         var samples = new List<WebsiteProbe>(ReadOnlyHostClient.CurrentProbeTargetCount);
         var history = new Dictionary<(string Node, string Target), WebsiteWindow>();
         var serverResults = new Dictionary<string, DesktopResult>(StringComparer.Ordinal);
@@ -107,7 +108,7 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
         var catalog = IndependentNodeProbe.Load(null);
         HashSet<(string Name, string Type)>? roster = null;
         (string? Path, DateTime LastWrite, long Length) profileStamp = default;
-        bool autoSweepPending = false;
+        bool autoSweepPending = false, manualSweepPending = false;
         var exitV4 = new Dictionary<string, DesktopExitIp>(StringComparer.Ordinal);
         var exitV6 = new Dictionary<string, DesktopExitIp>(StringComparer.Ordinal);
         var batch = new Queue<string>();
@@ -136,7 +137,7 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
             foreach (var round in websiteActive) round.Dispose();
             websiteActive.Clear();
         }
-        bool HasPendingRequest() => autoSweepPending && SweepIdle() ||
+        bool HasPendingRequest() => (autoSweepPending || manualSweepPending) && SweepIdle() && currentTask is null ||
             Volatile.Read(ref selectedProfilePath) != profileSelection ||
             Volatile.Read(ref nodeRequested) is not null ||
             Volatile.Read(ref sweepRequested) != 0 || currentTask is null && Volatile.Read(ref queuedOrRunning) != 0;
@@ -145,7 +146,7 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
             do
             {
                 profileSelection = Volatile.Read(ref selectedProfilePath);
-                var read = await client.ReadAsync(cancellationToken: stop.Token).ConfigureAwait(false);
+                var read = await client.ReadAsync(readOptions, cancellationToken: stop.Token).ConfigureAwait(false);
                 if (stop.IsCancellationRequested) return;
                 if (read.Facts is { } facts && read.CoreProcessId is int corePid)
                 {
@@ -179,12 +180,14 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                         roster = null;
                         profileStamp = default;
                         previousPid = corePid;
+                        Interlocked.Exchange(ref queuedOrRunning, 1);
                     }
                     var identity = facts.Nodes.Select(n => (n.Name, n.Type));
                     bool rosterChanged = roster is null || !roster.SetEquals(identity);
                     if (rosterChanged) roster = identity.ToHashSet();
                     string? profilePath = IndependentNodeProbe.ConfiguredPath(
-                        read.Status == HostStatus.ConnectedPipe && read.VerifiedPeerProcessId == corePid, profileSelection);
+                        read.Status == HostStatus.ConnectedPipe && read.VerifiedPeerProcessId == corePid,
+                        profileSelection, read.VergeRuntimePath);
                     var profileFile = profilePath is null ? null : new FileInfo(profilePath);
                     var stamp = profileFile is { Exists: true }
                         ? (profilePath, profileFile.LastWriteTimeUtc, profileFile.Length) : default;
@@ -206,8 +209,9 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                         testedGroups = null;
                         current = null;
                     }
-                    bool manualSweep = Interlocked.Exchange(ref sweepRequested, 0) == 1;
-                    bool startSweep = (manualSweep || autoSweepPending) && SweepIdle();
+                    manualSweepPending |= Interlocked.Exchange(ref sweepRequested, 0) == 1;
+                    bool startSweep = (manualSweepPending || autoSweepPending) && SweepIdle() &&
+                        currentTask is null && Volatile.Read(ref queuedOrRunning) == 0;
                     string? priority = Interlocked.Exchange(ref nodeRequested, null);
                     if (startSweep || priority is not null || rosterChanged || configChanged)
                     {
@@ -217,9 +221,10 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                                 serverResults.Remove(name);
                         serverMap = updatedMap;
                     }
-                    if (rosterChanged || configChanged || (manualSweep && startSweep))
+                    if (rosterChanged || configChanged || (manualSweepPending && startSweep))
                     {
-                        var updated = IndependentNodeProbe.Load(profilePath);
+                        bool automatic = profilePath is not null && profilePath == read.VergeRuntimePath;
+                        var updated = IndependentNodeProbe.Load(profilePath, automatic ? facts.Nodes : null);
                         foreach (var (name, old) in catalog.Profiles)
                         {
                             if (updated.Profiles.TryGetValue(name, out var replacement) && replacement.Revision == old.Revision)
@@ -316,7 +321,7 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                     }
                     if (startSweep)
                     {
-                        autoSweepPending = false;
+                        autoSweepPending = manualSweepPending = false;
                         string? first = current?.Node;
                         batch = new Queue<string>(eligible.OrderBy(name => name != first));
                         batchTotal = batch.Count;
