@@ -89,12 +89,14 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
     private async Task PollAsync()
     {
         // Five slots are reserved for the simultaneous current-route requests.
-        int webLimit = (Environment.GetEnvironmentVariable("PROXYPARTNER_SWEEP_CONCURRENCY") switch
+        int? configuredLimit = Environment.GetEnvironmentVariable("PROXYPARTNER_SWEEP_CONCURRENCY") switch
         {
             "8" => 8,
             "12" => 12,
-            _ => 16
-        }) - SiteCount;
+            "16" => 16,
+            _ => null
+        };
+        const int MaxIndependentRequests = 16 - SiteCount;
         var client = new ReadOnlyHostClient();
         var samples = new List<WebsiteProbe>(ReadOnlyHostClient.CurrentProbeTargetCount);
         var history = new Dictionary<(string Node, string Target), WebsiteWindow>();
@@ -111,9 +113,9 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
         var batch = new Queue<string>();
         var websiteBatch = new Queue<string>();
         var serverActive = new Dictionary<Task<DesktopResult>, (string Name, string Host, bool Counted)>(ParallelServerLimit);
-        var websiteActive = new List<WebsiteRound>(webLimit);
-        var websiteRequests = new Dictionary<Task<IndependentResult>, (WebsiteRound Round, int Target)>(webLimit);
-        var pending = new List<Task>(ParallelServerLimit + webLimit + 3);
+        var websiteActive = new List<WebsiteRound>(MaxIndependentRequests);
+        var websiteRequests = new Dictionary<Task<IndependentResult>, (WebsiteRound Round, int Target)>(MaxIndependentRequests);
+        var pending = new List<Task>(ParallelServerLimit + MaxIndependentRequests + 3);
         string? serverPriority = null, websitePriority = null;
         int batchTotal = 0, batchDone = 0;
         int websiteTotal = 0, websiteDone = 0;
@@ -239,6 +241,7 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                     var websiteEligible = facts.Nodes.Where(n =>
                         profiles.TryGetValue(n.Name, out var profile) && profile.Type == n.Type)
                         .Select(n => n.Name).ToHashSet(StringComparer.Ordinal);
+                    int webLimit = (configuredLimit ?? (websiteEligible.Count >= 100 ? 12 : 16)) - SiteCount;
                     if (priority is not null)
                     {
                         bool currentRequested = priority == current?.Node;

@@ -30,7 +30,6 @@ internal static unsafe partial class Win32
 
     [StructLayout(LayoutKind.Sequential)]
     internal struct Rect { public int Left, Top, Right, Bottom; }
-
     [StructLayout(LayoutKind.Sequential)]
     internal struct Point { public int X, Y; }
     [StructLayout(LayoutKind.Sequential)]
