@@ -66,6 +66,11 @@ public interface IDesktopCurrentTestSource
     void RequestNodeTest(string node);
 }
 
+public interface IDesktopProbeProfileSource
+{
+    void SetProbeProfilePath(string? path);
+}
+
 public interface IDesktopSnapshotSource
 {
     // Each snapshot and its row collection must remain immutable after publication.

@@ -30,6 +30,33 @@ internal static unsafe partial class Win32
 
     [StructLayout(LayoutKind.Sequential)]
     internal struct Rect { public int Left, Top, Right, Bottom; }
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct OpenFileDialog
+    {
+        public uint Size;
+        public nint Owner, Instance;
+        public char* Filter, CustomFilter;
+        public uint CustomFilterCapacity, FilterIndex;
+        public char* File;
+        public uint FileCapacity;
+        public char* FileTitle;
+        public uint FileTitleCapacity;
+        public char* InitialDirectory, Title;
+        public uint Flags;
+        public ushort FileOffset, ExtensionOffset;
+        public char* DefaultExtension;
+        public nint UserData, Hook;
+        public char* TemplateName;
+        public nint Reserved;
+        public uint ReservedFlags, ExtendedFlags;
+    }
+
+    [LibraryImport("comdlg32", EntryPoint = "GetOpenFileNameW")]
+    internal static partial int GetOpenFileName(OpenFileDialog* dialog);
+
+    [LibraryImport("comdlg32")]
+    internal static partial uint CommDlgExtendedError();
     [StructLayout(LayoutKind.Sequential)]
     internal struct Point { public int X, Y; }
     [StructLayout(LayoutKind.Sequential)]

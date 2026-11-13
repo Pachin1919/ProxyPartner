@@ -42,6 +42,7 @@ public sealed unsafe partial class DesktopApp
         this.settingsPath = Path.GetFullPath(settingsPath ?? Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ProxyPartner", "Desktop", "settings.json"));
         preferences = DesktopPreferences.Load(this.settingsPath);
+        if (source is IDesktopProbeProfileSource profiles) profiles.SetProbeProfilePath(preferences.ProbeProfilePath);
     }
 
     private string L(string zh, string en) => preferences.English ? en : zh;
@@ -613,7 +614,9 @@ public sealed unsafe partial class DesktopApp
             {
                 if (sweep.UnavailableNode is not null)
                     probe += L(" · 该节点暂无独立测速入口", " · This node has no independent probe route");
-                if (sweep.ProbeEligible < sweep.NodeCount)
+                if (sweep.ProbeEligible == 0 && sweep.NodeCount > 0)
+                    probe += L(" · 在设置中检查独立测速配置", " · Check the independent test profile in Settings");
+                else if (sweep.ProbeEligible < sweep.NodeCount)
                     probe += L($" · 可独立测速 {sweep.ProbeEligible}/{sweep.NodeCount}",
                         $" · Independent probe coverage {sweep.ProbeEligible}/{sweep.NodeCount}");
                 if (sweep.BatchTotal > 0)

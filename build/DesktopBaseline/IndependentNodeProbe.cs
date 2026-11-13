@@ -49,14 +49,16 @@ internal static class IndependentNodeProbe
         _ => null
     };
 
-    internal static string? ConfiguredPath(bool verifiedPipe)
+    internal static string? ConfiguredPath(bool verifiedPipe, string? selectedProfile)
     {
         if (Environment.GetEnvironmentVariable("PROXYPARTNER_NODE_PROBES") is { Length: > 0 } configured)
             return configured;
 
+        string links = Path.Combine(AppContext.BaseDirectory, "ProbeNodes.json");
+        if (!verifiedPipe) return links;
+        if (selectedProfile is not null) return selectedProfile;
         var pointer = new FileInfo(Path.Combine(AppContext.BaseDirectory, "ProbeProfilePath.txt"));
-        if (!verifiedPipe || !pointer.Exists)
-            return Path.Combine(AppContext.BaseDirectory, "ProbeNodes.json");
+        if (!pointer.Exists) return links;
         try
         {
             if (pointer.Length is > 0 and <= 4096)

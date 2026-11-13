@@ -5,7 +5,7 @@ using System.Diagnostics.CodeAnalysis;
 using System.Net;
 using System.Net.Sockets;
 
-internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTestSource, IDisposable
+internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTestSource, IDesktopProbeProfileSource, IDisposable
 {
     private sealed class WebsiteRound(string name, ProbeProfile profile, bool counted, int targetCount,
         CancellationToken stop) : IDisposable
@@ -29,17 +29,22 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
     private const string NativeProbeSource = "Shadowsocks · C++ HTTPS";
     private readonly CancellationTokenSource stop = new();
     private readonly SemaphoreSlim requested = new(0, 1);
-    private readonly Task poll;
+    private Task? poll;
     private readonly object wakeGate = new();
     private int queuedOrRunning;
     private int sweepRequested;
     private string? nodeRequested;
+    private string? selectedProfilePath;
     private DesktopSnapshot snapshot = new("Clash Verge", CollectionState.Connecting, null, null, []);
-
-    internal LiveHostSource() => poll = Task.Run(PollAsync);
 
     public DesktopSnapshot GetSnapshot() => Volatile.Read(ref snapshot);
     public event Action? SnapshotChanged;
+
+    public void SetProbeProfilePath(string? path)
+    {
+        if (Interlocked.Exchange(ref selectedProfilePath, path) != path) Wake();
+        poll ??= Task.Run(PollAsync);
+    }
 
     public void RequestCurrentTest()
     {
@@ -121,6 +126,7 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
         IReadOnlyList<HostGroup>? testedGroups = null;
         int? previousPid = null;
         Task<bool>? wake = null;
+        string? profileSelection = null;
         bool SweepIdle() => batch.Count == 0 && websiteBatch.Count == 0 &&
             serverActive.Count == 0 && websiteActive.Count == 0;
         void ClearWebsiteRounds()
@@ -129,12 +135,14 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
             websiteActive.Clear();
         }
         bool HasPendingRequest() => autoSweepPending && SweepIdle() ||
+            Volatile.Read(ref selectedProfilePath) != profileSelection ||
             Volatile.Read(ref nodeRequested) is not null ||
             Volatile.Read(ref sweepRequested) != 0 || currentTask is null && Volatile.Read(ref queuedOrRunning) != 0;
         try
         {
             do
             {
+                profileSelection = Volatile.Read(ref selectedProfilePath);
                 var read = await client.ReadAsync(cancellationToken: stop.Token).ConfigureAwait(false);
                 if (stop.IsCancellationRequested) return;
                 if (read.Facts is { } facts && read.CoreProcessId is int corePid)
@@ -174,7 +182,7 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                     bool rosterChanged = roster is null || !roster.SetEquals(identity);
                     if (rosterChanged) roster = identity.ToHashSet();
                     string? profilePath = IndependentNodeProbe.ConfiguredPath(
-                        read.Status == HostStatus.ConnectedPipe && read.VerifiedPeerProcessId == corePid);
+                        read.Status == HostStatus.ConnectedPipe && read.VerifiedPeerProcessId == corePid, profileSelection);
                     var profileFile = profilePath is null ? null : new FileInfo(profilePath);
                     var stamp = profileFile is { Exists: true }
                         ? (profilePath, profileFile.LastWriteTimeUtc, profileFile.Length) : default;
@@ -649,7 +657,7 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
     public void Dispose()
     {
         stop.Cancel();
-        try { poll.GetAwaiter().GetResult(); }
+        try { poll?.GetAwaiter().GetResult(); }
         catch (OperationCanceledException) when (stop.IsCancellationRequested) { }
         finally
         {
