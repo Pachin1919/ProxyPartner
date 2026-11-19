@@ -4,7 +4,7 @@ public enum NodeKind { Leaf, Group }
 public enum CollectionState { Synthetic, Disconnected, Observing, Idle, SleepGap, SourceStopped, Connecting }
 public enum HostConnectionIssue { None, NotDetected, Ambiguous, IdentityRejected, AccessDenied, PipeUnavailable, TimedOut, InvalidResponse, TransportError }
 public enum ResultState { Missing, Measured, Stale, Incomparable, AuthenticationRequired, Restricted, Failed, HttpError, TimedOut }
-public enum IndependentProbeState { Unknown, Available, UnsupportedProtocol, UnsupportedOptions, MissingConfiguration }
+public enum IndependentProbeState { Unknown, Available, UnsupportedProtocol, UnsupportedOptions, MissingConfiguration, WorkerMissing }
 public enum QualityState { Insufficient, Good, Poor, Restricted }
 
 public sealed record DesktopQuality(int? Score, QualityState State, string Source,

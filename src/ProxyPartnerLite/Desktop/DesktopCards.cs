@@ -69,6 +69,7 @@ public sealed unsafe partial class DesktopApp
         IndependentProbeState.UnsupportedProtocol => L("协议不支持", "Unsupported protocol"),
         IndependentProbeState.UnsupportedOptions => L("配置组合不支持", "Unsupported options"),
         IndependentProbeState.MissingConfiguration => L("缺少拨号配置", "Missing dial config"),
+        IndependentProbeState.WorkerMissing => L("缺少协议测速组件", "Missing protocol probe"),
         _ => null
     };
 

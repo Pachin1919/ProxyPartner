@@ -27,9 +27,27 @@ public sealed partial class ReadOnlyHostClient
             return new HostReadResult(Classify(error, cancellationToken), null, null, null, null, []);
         }
         options ??= new HostReadOptions();
-        var result = await ReadForCoreAsync(core, "verge-mihomo", options, fallback,
+        const string standardPipe = "verge-mihomo";
+        const string productionPrefix = "verge-mihomo-production-";
+        string pipe = standardPipe;
+        try
+        {
+            var candidates = Directory.EnumerateFiles(@"\\.\pipe\").Select(Path.GetFileName)
+                .Where(name => name is not null && name.StartsWith(productionPrefix, StringComparison.Ordinal) &&
+                    name.Length == productionPrefix.Length + 64 &&
+                    name.AsSpan(productionPrefix.Length).IndexOfAnyExcept("0123456789abcdef") < 0)
+                .Take(2).ToArray();
+            if (candidates.Length > 1)
+                return new(HostStatus.Ambiguous, null, core.Pid, core.StartedAtUtc, null, []);
+            if (candidates.Length == 1) pipe = candidates[0]!;
+        }
+        catch (Exception error) when (IsBoundaryError(error))
+        {
+            return new(Classify(error, cancellationToken), null, core.Pid, core.StartedAtUtc, null, []);
+        }
+        var result = await ReadForCoreAsync(core, pipe, options, fallback,
             cancellationToken).ConfigureAwait(false);
-        if (result.Status != HostStatus.ConnectedPipe || !options.IncludeVergeRuntimePath)
+        if (result.Status != HostStatus.ConnectedPipe || !options.IncludeVergeRuntimePath || pipe != standardPipe)
             return result;
 
         // Verge v2.4.7 dirs::app_home_dir and Config::generate_file(ConfigType::Run).

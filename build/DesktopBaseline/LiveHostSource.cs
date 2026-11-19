@@ -244,7 +244,8 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                     var eligible = facts.Nodes.Select(n => n.Name).Where(serverMap.ContainsKey)
                         .Order(StringComparer.Ordinal).ToArray();
                     var websiteEligible = facts.Nodes.Where(n =>
-                        profiles.TryGetValue(n.Name, out var profile) && profile.Type == n.Type)
+                        profiles.TryGetValue(n.Name, out var profile) && profile.Type == n.Type &&
+                        (profile.WorkerProfile is null || GoWebsiteProbe.IsInstalled))
                         .Select(n => n.Name).ToHashSet(StringComparer.Ordinal);
                     int webLimit = (configuredLimit ?? (websiteEligible.Count >= 100 ? 12 : 16)) - SiteCount;
                     if (priority is not null)
@@ -281,7 +282,7 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                     }
                     void RecordSite(WebsiteProbe sample)
                     {
-                        if (sample.Node is not { } node) return;
+                        if (sample.Node is not { } node || !sample.Attempted) return;
                         cachedRows.Remove(node);
                         var key = (node, sample.TargetId);
                         if (history.TryGetValue(key, out var window) && window.Latest.Independent == sample.Independent)
@@ -326,7 +327,9 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                         batch = new Queue<string>(eligible.OrderBy(name => name != first));
                         batchTotal = batch.Count;
                         batchDone = 0;
-                        websiteBatch = new Queue<string>(websiteEligible.Order(StringComparer.Ordinal)
+                        // On-demand protocol workers are limited to explicit single-node tests.
+                        websiteBatch = new Queue<string>(websiteEligible
+                            .Where(name => profiles[name].WorkerProfile is null).Order(StringComparer.Ordinal)
                             .OrderBy(name => name != first));
                         websiteTotal = websiteBatch.Count;
                         websiteDone = 0;
@@ -649,7 +652,8 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
             }
             var support = independentMethod is null ? IndependentProbeState.UnsupportedProtocol
                 : catalog.Profiles.TryGetValue(node.Name, out var profile) && profile.Type == node.Type
-                    ? IndependentProbeState.Available
+                    ? profile.WorkerProfile is not null && !GoWebsiteProbe.IsInstalled
+                        ? IndependentProbeState.WorkerMissing : IndependentProbeState.Available
                     : catalog.Configured.Contains(node.Name) ? IndependentProbeState.UnsupportedOptions
                     : IndependentProbeState.MissingConfiguration;
             var row = new DesktopRow("node:" + node.Name, node.Name, NodeKind.Leaf, isCurrent,

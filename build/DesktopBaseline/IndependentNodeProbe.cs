@@ -10,7 +10,8 @@ using YamlDotNet.Core;
 using YamlDotNet.RepresentationModel;
 
 internal sealed record ProbeProfile(string Type, string Revision,
-    Func<EndPoint, CancellationToken, ValueTask<Stream>> Connect, NativeShadowsocksProfile? NativeProfile = null);
+    Func<EndPoint, CancellationToken, ValueTask<Stream>>? Connect,
+    NativeShadowsocksProfile? NativeProfile = null, GoProbeRequest? WorkerProfile = null);
 internal sealed record ProbeCatalog(Dictionary<string, ProbeProfile> Profiles, HashSet<string> Configured);
 internal readonly record struct IndependentResult(WebsiteProbe? Site = null, IPAddress? Exit = null);
 
@@ -46,6 +47,8 @@ internal static class IndependentNodeProbe
         "Shadowsocks" => "Shadowsocks · HTTPS",
         "Trojan" => "Trojan · HTTPS",
         "Vmess" => "VMess · HTTPS",
+        "AnyTLS" => "AnyTLS · Go HTTPS",
+        "Mieru" => "Mieru · Go HTTPS",
         _ => null
     };
 
@@ -198,11 +201,73 @@ internal static class IndependentNodeProbe
                     "vless" => ReadVless(entry, server, port),
                     "ss" => ReadShadowsocks(entry, server, port),
                     "trojan" or "vmess" => ReadTrojanOrVmess(entry, server, port),
+                    "anytls" or "mieru" => ReadWorkerProfile(entry, server, port),
                     _ => null
                 };
             }
             yield return (name, profile);
         }
+    }
+
+    private static ProbeProfile? ReadWorkerProfile(YamlMappingNode entry, string server, int port)
+    {
+        if (Text(entry, "password") is not { Length: > 0 and <= 4096 } password) return null;
+        GoProbeRequest settings;
+        string protocol;
+        if (Text(entry, "type") == "anytls")
+        {
+            if (!HasOnly(entry, ["name", "type", "server", "port", "password", "udp", "sni", "alpn",
+                "client-fingerprint", "fingerprint", "skip-cert-verify", "ech-opts"]) ||
+                Field(entry, "skip-cert-verify") is not (null or YamlScalarNode { Value: "false" }))
+                return null;
+            string? sni = Text(entry, "sni");
+            if (Field(entry, "sni") is not null && (sni is null ||
+                sni.Length != 0 && Uri.CheckHostName(sni) == UriHostNameType.Unknown)) return null;
+            string? echConfig = null;
+            if (Field(entry, "ech-opts") is { } ech)
+            {
+                if (ech is not YamlMappingNode options || !HasOnly(options, ["enable", "config"])) return null;
+                switch (Text(options, "enable"))
+                {
+                    case "true" when Text(options, "config") is { Length: > 0 and <= 4096 } config:
+                        echConfig = config;
+                        break;
+                    case "false" or null when Field(options, "config") is null:
+                        break;
+                    default:
+                        return null;
+                }
+            }
+            List<string>? alpn = null;
+            if (Field(entry, "alpn") is { } alpnField)
+            {
+                if (alpnField is not YamlSequenceNode { Children.Count: <= 8 } sequence) return null;
+                alpn = [];
+                foreach (var item in sequence.Children)
+                {
+                    if (item is not YamlScalarNode { Value: { Length: > 0 and <= 32 } value }) return null;
+                    alpn.Add(value);
+                }
+            }
+            protocol = "AnyTLS";
+            settings = new("anytls", server, port, password, Sni: sni, Alpn: alpn,
+                ClientFingerprint: Text(entry, "client-fingerprint"), Fingerprint: Text(entry, "fingerprint"),
+                EchConfig: echConfig);
+        }
+        else
+        {
+            if (!HasOnly(entry, ["name", "type", "server", "port", "password", "udp", "username", "transport",
+                "multiplexing", "handshake-mode", "traffic-pattern"]) ||
+                Text(entry, "username") is not { Length: > 0 and <= 256 } username ||
+                Text(entry, "transport") is not ("TCP" or "UDP") ||
+                Text(entry, "traffic-pattern") is { Length: > 4096 }) return null;
+            protocol = "Mieru";
+            settings = new("mieru", server, port, password, Username: username, Transport: Text(entry, "transport"),
+                Multiplexing: Text(entry, "multiplexing"), HandshakeMode: Text(entry, "handshake-mode"),
+                TrafficPattern: Text(entry, "traffic-pattern"));
+        }
+        string revision = Revision(JsonSerializer.Serialize(settings, GoProbeJson.Default.GoProbeRequest));
+        return new(protocol, revision, null, WorkerProfile: settings);
     }
 
     private static ProbeProfile? ReadTrojanOrVmess(YamlMappingNode entry, string server, int port)
@@ -350,11 +415,13 @@ internal static class IndependentNodeProbe
         private readonly CancellationToken stop;
         private readonly NativeShadowsocksProfile? nativeProfile;
         private readonly NativeWebsiteProbe? native;
+        private readonly GoProbeRequest? workerProfile;
         private readonly long deadlineTick;
 
         internal Session(ProbeProfile profile, CancellationToken stop)
         {
             this.stop = stop;
+            workerProfile = profile.WorkerProfile;
             nativeProfile = profile.NativeProfile;
             native = nativeProfile is null ? null : NativeWebsiteProbe.Get();
             client = new(() => new HttpClient(new SocketsHttpHandler
@@ -366,7 +433,7 @@ internal static class IndependentNodeProbe
                     if (!context.InitialRequestMessage.Options.TryGetValue(AttemptKey, out var attempt) ||
                         Interlocked.Increment(ref attempt.Count) != 1)
                         throw new HttpRequestException("Independent probe already dialed.");
-                    return profile.Connect(context.DnsEndPoint, token);
+                    return profile.Connect!(context.DnsEndPoint, token);
                 }
             }));
             deadline = CancellationTokenSource.CreateLinkedTokenSource(stop);
@@ -379,6 +446,8 @@ internal static class IndependentNodeProbe
             var targets = ReadOnlyHostClient.WebsiteTargets;
             var (id, uri) = index < targets.Count
                 ? targets[index] : (null, index == targets.Count ? EchoUrl : CorroboratingEchoUrl);
+            if (workerProfile is { } worker)
+                return await GoWebsiteProbe.MeasureAsync(worker, node, id, uri, stop).ConfigureAwait(false);
             bool attempted = false, timedOut = false;
             bool useNative = id is not null && native is not null;
             try
@@ -431,9 +500,12 @@ internal static class IndependentNodeProbe
         await using var stream = await response.Content.ReadAsStreamAsync(token).ConfigureAwait(false);
         var buffer = new byte[65];
         int count = await stream.ReadAtLeastAsync(buffer, buffer.Length, false, token).ConfigureAwait(false);
-        if (count == buffer.Length ||
-            !IPAddress.TryParse(Encoding.ASCII.GetString(buffer, 0, count).Trim(), out var address))
-            return null;
+        return count == buffer.Length ? null : ParseExitAddress(Encoding.ASCII.GetString(buffer, 0, count).Trim());
+    }
+
+    internal static IPAddress? ParseExitAddress(string? value)
+    {
+        if (!IPAddress.TryParse(value, out var address)) return null;
         if (address.IsIPv4MappedToIPv6) address = address.MapToIPv4();
         byte[] octets = address.GetAddressBytes();
         bool publicAddress = octets.Length == 4
