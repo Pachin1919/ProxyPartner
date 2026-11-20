@@ -264,13 +264,13 @@ public sealed unsafe partial class DesktopApp
                     if (id == OpenDetails) ShowDetails();
                     if (id == TestServers && source is IDesktopCurrentTestSource servers)
                     {
-                        var (start, end) = VisibleCardRange();
+                        var (start, lastVisible) = VisibleCardRange();
                         if (tableMode)
                         {
                             start = (int)Send(list, LvmFirst + 39, 0, 0); // LVM_GETTOPINDEX
-                            end = start + (int)Send(list, LvmFirst + 40, 0, 0) + 1; // LVM_GETCOUNTPERPAGE
+                            lastVisible = start + (int)Send(list, LvmFirst + 40, 0, 0) + 1; // LVM_GETCOUNTPERPAGE
                         }
-                        servers.RequestSweep(rows.Skip(start).Take(end - start)
+                        servers.RequestSweep(rows.Skip(start).Take(lastVisible - start)
                             .Where(static row => row.Kind == NodeKind.Leaf).Select(static row => row.Name).ToArray());
                     }
                     if (id >= SortFirst && id < SortFirst + Columns.Length) Sort(id - SortFirst);
