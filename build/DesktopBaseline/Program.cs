@@ -11,4 +11,8 @@ try
     using var source = new LiveHostSource();
     return DesktopApp.Run(source, startInTray, settingsPath);
 }
-finally { NativeWebsiteProbe.Stop(); }
+finally
+{
+    NativeNodeWebsiteProbe.Shutdown();
+    NativeWebsiteProbe.Stop();
+}

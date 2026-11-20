@@ -7,7 +7,10 @@ public enum HostStatus
     InvalidResponse, TransportError, TimedOut, Cancelled
 }
 
-public sealed record HostReadOptions(bool IncludeProviders = false);
+public sealed record HostReadOptions(bool IncludeProviders = false)
+{
+    public bool IncludeVergeRuntimePath { get; init; }
+}
 
 /// <summary>An explicit grant for a local controller-only file and a single running core.</summary>
 public sealed record LoopbackFallbackAuthorization(
@@ -24,7 +27,10 @@ public sealed record HostFacts(
 public sealed record HostRequestFact(string Path, int HttpStatus);
 public sealed record HostReadResult(
     HostStatus Status, HostFacts? Facts, int? CoreProcessId, DateTimeOffset? CoreStartedAtUtc,
-    int? VerifiedPeerProcessId, IReadOnlyList<HostRequestFact> Requests);
+    int? VerifiedPeerProcessId, IReadOnlyList<HostRequestFact> Requests)
+{
+    public string? VergeRuntimePath { get; init; }
+}
 
 internal sealed class HostFailure(HostStatus status) : Exception
 {

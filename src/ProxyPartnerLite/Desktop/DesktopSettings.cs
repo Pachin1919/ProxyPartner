@@ -9,13 +9,15 @@ public sealed unsafe partial class DesktopApp
     private const int TestExitIp = 254;
     private nint exitButton;
     private const string AuxClass = "ProxyPartner.Auxiliary";
-    private const int SettingsContentHeight = 596;
+    private const int SettingsContentHeight = 596, ProbeProfileHeight = 65;
     private const int OpenSettings = 124, OpenDetails = 125, EnglishId = 201, LightId = 202,
         WeightFirst = 210, TargetListId = 220, UrlId = 221, ShortId = 222, SymbolId = 223,
-        AddTarget = 224, EditTarget = 225, RemoveTarget = 226, SaveSettings = 227, CancelSettings = 228;
+        AddTarget = 224, EditTarget = 225, RemoveTarget = 226, SaveSettings = 227, CancelSettings = 228,
+        UseVergeProfile = 234, ProbeProfilePathId = 235;
     private nint settingsButton, detailButton, settingsWindow, detailWindow, detailText;
     private nint settingsFont, detailFont, englishBox, lightBox, targetsList, urlInput, shortInput, symbolInput, example, settingsStatus;
     private int settingsScroll;
+    private nint profilePathInput;
     private readonly nint[] weightInputs = new nint[6];
     private readonly List<(nint Handle, int X, int Y, int W, int H)> settingsControls = [];
     private readonly List<CustomTarget> draftTargets = [];
@@ -30,12 +32,13 @@ public sealed unsafe partial class DesktopApp
         settingsWindow = CreateAux(L("ProxyPartner · 设置", "ProxyPartner · Settings"), 740, 634, 0x200000);
         if (settingsWindow == 0) return;
         draftTargets.AddRange(preferences.CustomTargets);
+        int profileOffset = 0;
         const uint tab = WsTabStop | 0x4000; // BS_NOTIFY for keyboard focus
         const uint button = tab | 11, check = tab | 3, edit = WsTabStop | 0x800000 | 0x80;
         nint Field(string cls, string caption, uint style, int id, int x, int y, int width, int height)
         {
             nint handle = AuxChild(settingsWindow, cls, caption, style, id);
-            settingsControls.Add((handle, x, y, width, height));
+            settingsControls.Add((handle, x, y + profileOffset, width, height));
             return handle;
         }
         Field("STATIC", L("显示与测试偏好", "Display and testing preferences"), 0, 0, 20, 18, 670, 21);
@@ -48,6 +51,15 @@ public sealed unsafe partial class DesktopApp
         }
         Send(englishBox, 0xf1, preferences.English ? 1u : 0u, 0);
         Send(lightBox, 0xf1, preferences.Light ? 1u : 0u, 0);
+        if (source is IDesktopProbeProfileSource)
+        {
+            Field("STATIC", L("独立测速配置 · 留空自动识别 Verge",
+                "Independent test profile · leave blank for automatic Verge discovery"), 0, 0, 20, 80, 680, 20);
+            Field("BUTTON", L("填入 Verge 路径", "Fill Verge path"), button, UseVergeProfile, 20, 106, 156, 28);
+            profilePathInput = Field("EDIT", preferences.ProbeProfilePath ?? "", edit, ProbeProfilePathId, 188, 107, 516, 25);
+            Send(profilePathInput, 0xc5, 4096, 0);
+            profileOffset = ProbeProfileHeight;
+        }
         Field("STATIC", L("评分分项（%）", "Score components (%)"), 0, 0, 20, 88, 680, 20);
         Field("STATIC", L("AI 工作目标（%）", "AI work targets (%)"), 0, 0, 20, 151, 680, 20);
         string[] labels = [L("成功率", "Success rate"), L("延迟", "Latency"), L("稳定性", "Stability"), "OPENAI", "GPT", "GitHub"];
@@ -180,7 +192,7 @@ public sealed unsafe partial class DesktopApp
         GetClientRect(settingsWindow, &client);
         int dpi = (int)GetDpiForWindow(settingsWindow);
         int Px(int value) => (value * dpi + 48) / 96;
-        int extent = Px(SettingsContentHeight);
+        int extent = Px(SettingsContentHeight + (profilePathInput != 0 ? ProbeProfileHeight : 0));
         settingsScroll = Math.Clamp(position, 0, Math.Max(0, extent - client.Bottom));
         var bar = new Scroll
         {
@@ -222,6 +234,7 @@ public sealed unsafe partial class DesktopApp
                     settingsScroll = 0;
                     if (settingsFont != 0) DeleteObject(settingsFont);
                     settingsFont = example = 0;
+                    profilePathInput = 0;
                     settingsControls.Clear();
                     draftTargets.Clear();
                 }
@@ -276,6 +289,14 @@ public sealed unsafe partial class DesktopApp
                 if (notification == 0)
                 {
                     if (id is AddTarget or EditTarget or RemoveTarget) ChangeTarget(id);
+                    if (id == UseVergeProfile)
+                    {
+                        string path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                            "io.github.clash-verge-rev.clash-verge-rev", "clash-verge.yaml");
+                        if (File.Exists(path)) SetText(profilePathInput, path);
+                        else SetText(settingsStatus, L("未找到常用的 Verge 配置，请粘贴当前生效的 YAML 路径。",
+                            "Verge profile not found at its usual path. Paste the active YAML path."));
+                    }
                     if (id == SaveSettings) CommitSettings();
                     if (id == CancelSettings || id == 2) DestroyWindow(window);
                 }
@@ -391,17 +412,28 @@ public sealed unsafe partial class DesktopApp
                 "Each weight group must total 100%. Saved preferences were kept."));
             return;
         }
+        string? profile = profilePathInput == 0 ? preferences.ProbeProfilePath : ReadField(profilePathInput, 4097).Trim().Trim('"');
+        if (profile == "") profile = null;
+        if (profile is not null && profile != preferences.ProbeProfilePath &&
+            (!DesktopPreferences.IsLocalYaml(profile) || !File.Exists(profile)))
+        {
+            SetText(settingsStatus, L("请输入本机存在的 YAML 文件路径。", "Enter the path to an existing local YAML file."));
+            return;
+        }
         var updated = new DesktopPreferences(Send(englishBox, 0xf0, 0, 0) == 1, Send(lightBox, 0xf0, 0, 0) == 1,
-            parts, sites, draftTargets.ToArray());
+            parts, sites, draftTargets.ToArray(), profile);
         try { updated.Save(settingsPath); }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException)
         {
             SetText(settingsStatus, L("无法保存本机配置。", "Could not save the local preferences."));
             return;
         }
+        var previous = preferences;
         preferences = updated;
         DestroyWindow(settingsWindow);
-        ApplyPreferences();
+        if (previous.English != updated.English || previous.Light != updated.Light) ApplyPreferences();
+        if (source is IDesktopProbeProfileSource profiles && previous.ProbeProfilePath != updated.ProbeProfilePath)
+            profiles.SetProbeProfilePath(updated.ProbeProfilePath);
     }
 
     private void ApplyPreferences()

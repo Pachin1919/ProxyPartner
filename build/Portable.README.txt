@@ -1,11 +1,29 @@
 ProxyPartner Lite · Windows x64
 
 1. 解压整个 ZIP，双击 ProxyPartner.exe。请把同目录的 DLL 和证书留在一起。
-2. 保持 Clash Verge Rev 运行，ProxyPartner 会尝试连接本机 Mihomo。也可以用 ProxyPartner.exe --demo 打开演示数据。
-3. 如需独立测试非当前节点，在 EXE 同目录创建 ProbeProfilePath.txt，写入一行已确认生效的本机 Clash 配置文件绝对路径。
+2. 保持 Clash Verge Rev 运行。ProxyPartner 会连接本机 Mihomo，先测当前线路，再自动扫描可以独立测速的节点。
+3. 如果运行配置在其他位置，可在 设置 → 独立测速配置 保存当前生效的本机 YAML 路径。使用 ProxyPartner.exe --demo 可打开演示数据。
 
 Extract the whole ZIP and double-click ProxyPartner.exe. Keep the DLLs and certificate bundle beside it.
-Keep Clash Verge Rev running for live measurements, or run ProxyPartner.exe --demo.
-For independent testing of other nodes, put the absolute path to your active local Clash configuration on one line in ProbeProfilePath.txt beside the EXE.
+Keep Clash Verge Rev running. ProxyPartner connects to local Mihomo, tests the current route, then automatically tests nodes it can dial independently.
+For a runtime configuration stored elsewhere, save the active local YAML path in Settings → Independent test profile. Run ProxyPartner.exe --demo for sample data.
+
+命令行在 Windows Terminal 或 PowerShell 里运行，接受带有 proxies 列表的 Clash YAML。
+
+  .\ProxyPartner.Cli.exe inspect --profile 'D:\profiles\nodes.yaml'
+  .\ProxyPartner.Cli.exe probe --profile 'D:\profiles\nodes.yaml' --node '节点名称'
+  .\ProxyPartner.Cli.exe probe --profile 'D:\profiles\nodes.yaml' --all --rounds 3 --kernel-latency
+
+probe 逐节点输出 JSON Lines，包含五站 HTTP 状态和延迟、评分及多轮平均耗时。--kernel-latency 只读取已有内核样本。
+--parallel 设置同时处理的节点数（默认 4，最多 12）。Go 探测子进程仍限制为同时运行一个。
+入口 DNS 或站点无 HTTP 响应时最多重试一次。站点的 retried 字段记录是否重试，评分计入第一次失败的样本。
+AnyTLS 和 Mieru 使用已安装的适配器。它们支持 YAML nameserver-policy 的精确域名和 +.域名后缀 HTTPS DNS。
+该解析走常规 HTTPS 并校验证书，支持把 h3=true 或 skip-cert-verify=true 的端点按常规 HTTPS 使用。
+带有 age.exe 的构建可直接读取标准 AGE 配置。inspect 和 probe 都接受 --age-identity 指定本机对应的 AGE 密钥文件，解密后的 YAML 通过进程管道解析，不生成明文文件。
+
+  .\ProxyPartner.Cli.exe inspect --profile 'D:\profiles\nodes.yaml' --age-identity 'D:\profiles\identity.txt'
+
+AGE 组件来自官方 age v1.3.2（https://github.com/FiloSottile/age/releases/tag/v1.3.2）。KJXENC1 需要提供已导出的 YAML。
+0 表示命令成功（probe 要求全部指定站点均响应且节点都有得分），1 表示测速部分失败，2 表示输入错误，130 表示取消。
 
 https://github.com/Pachin1919/ProxyPartner

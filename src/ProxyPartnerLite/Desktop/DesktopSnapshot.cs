@@ -2,8 +2,9 @@ namespace ProxyPartnerLite.Desktop;
 
 public enum NodeKind { Leaf, Group }
 public enum CollectionState { Synthetic, Disconnected, Observing, Idle, SleepGap, SourceStopped, Connecting }
+public enum HostConnectionIssue { None, NotDetected, Ambiguous, IdentityRejected, AccessDenied, PipeUnavailable, TimedOut, InvalidResponse, TransportError }
 public enum ResultState { Missing, Measured, Stale, Incomparable, AuthenticationRequired, Restricted, Failed, HttpError, TimedOut }
-public enum IndependentProbeState { Unknown, Available, UnsupportedProtocol, UnsupportedOptions, MissingConfiguration }
+public enum IndependentProbeState { Unknown, Available, UnsupportedProtocol, UnsupportedOptions, MissingConfiguration, WorkerMissing }
 public enum QualityState { Insufficient, Good, Poor, Restricted }
 
 public sealed record DesktopQuality(int? Score, QualityState State, string Source,
@@ -45,7 +46,8 @@ public sealed record DesktopRow(
     DesktopResult? Google = null, DesktopResult? YouTube = null, DesktopResult? Anthropic = null,
     string? CurrentTarget = null, DesktopResult? ServerPing = null, bool Testing = false,
     DesktopExitIp? ExitV4 = null, DesktopExitIp? ExitV6 = null,
-    IndependentProbeState IndependentProbe = IndependentProbeState.Unknown, string? Protocol = null);
+    IndependentProbeState IndependentProbe = IndependentProbeState.Unknown, string? Protocol = null,
+    bool Queued = false, uint ActiveSites = 0);
 
 public sealed record DesktopCurrentTest(bool Running, int Completed, int Total, int Verified, int TimedOut,
     bool Attempted, string? CurrentTarget, bool Direct, bool PathChanged);
@@ -57,13 +59,19 @@ public sealed record DesktopServerSweep(int Completed, int BatchTotal, bool Requ
 public sealed record DesktopSnapshot(
     string Host, CollectionState Collection, string? VerifiedCurrentPath,
     DateTimeOffset? UpdatedUtc, IReadOnlyList<DesktopRow> Rows, DesktopCurrentTest? CurrentTest = null,
-    DesktopServerSweep? ServerSweep = null);
+    DesktopServerSweep? ServerSweep = null, HostConnectionIssue ConnectionIssue = HostConnectionIssue.None);
 
 public interface IDesktopCurrentTestSource
 {
     void RequestCurrentTest();
     void RequestSweep();
+    void RequestSweep(IReadOnlyList<string> preferredNodes) => RequestSweep();
     void RequestNodeTest(string node);
+}
+
+public interface IDesktopProbeProfileSource
+{
+    void SetProbeProfilePath(string? path);
 }
 
 public interface IDesktopSnapshotSource
