@@ -34,7 +34,7 @@ public sealed partial class ReadOnlyHostClient
             return null;
 
         var nodes = facts.Nodes.Select(node => node.Name).ToHashSet(StringComparer.Ordinal);
-        var probes = ProbeTargets.Select(target => MeasureWebsiteAsync(core, target, nodes, token)).ToArray();
+        var probes = ProbeTargets.Select(target => MeasureWebsiteAsync(core, pipeName, target, nodes, token)).ToArray();
         var pending = probes.ToList();
         WebsiteProbe? anchor = null;
         int anchorIndex = probes.Length;
@@ -58,7 +58,7 @@ public sealed partial class ReadOnlyHostClient
         return anchor;
     }
 
-    private static async Task<WebsiteProbe> MeasureWebsiteAsync(CoreIdentity core, (string Id, Uri Url) target,
+    private static async Task<WebsiteProbe> MeasureWebsiteAsync(CoreIdentity core, string pipeName, (string Id, Uri Url) target,
         HashSet<string> nodes, CancellationToken token)
     {
         bool attempted = false;
