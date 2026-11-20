@@ -410,13 +410,12 @@ internal static class IndependentNodeProbe
     {
         private static readonly HttpRequestOptionsKey<DialAttempt> AttemptKey = new("ProbeDialAttempt");
         private sealed class DialAttempt { internal int Count; }
+        private const int TimeoutMs = 7000;
         private readonly Lazy<HttpClient> client;
-        private readonly CancellationTokenSource deadline;
         private readonly CancellationToken stop;
         private readonly NativeShadowsocksProfile? nativeProfile;
         private readonly NativeWebsiteProbe? native;
         private readonly GoProbeRequest? workerProfile;
-        private readonly long deadlineTick;
 
         internal Session(ProbeProfile profile, CancellationToken stop)
         {
@@ -436,9 +435,6 @@ internal static class IndependentNodeProbe
                     return profile.Connect!(context.DnsEndPoint, token);
                 }
             }));
-            deadline = CancellationTokenSource.CreateLinkedTokenSource(stop);
-            deadline.CancelAfter(TimeSpan.FromSeconds(7));
-            deadlineTick = Environment.TickCount64 + 7000;
         }
 
         internal async Task<IndependentResult> MeasureAsync(string node, int index)
@@ -448,6 +444,9 @@ internal static class IndependentNodeProbe
                 ? targets[index] : (null, index == targets.Count ? EchoUrl : CorroboratingEchoUrl);
             if (workerProfile is { } worker)
                 return await GoWebsiteProbe.MeasureAsync(worker, node, id, uri, stop).ConfigureAwait(false);
+            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(stop);
+            long deadlineTick = Environment.TickCount64 + TimeoutMs;
+            deadline.CancelAfter(TimeoutMs);
             bool attempted = false, timedOut = false;
             bool useNative = id is not null && native is not null;
             try
@@ -489,7 +488,6 @@ internal static class IndependentNodeProbe
 
         public void Dispose()
         {
-            deadline.Dispose();
             if (client.IsValueCreated) client.Value.Dispose();
         }
     }

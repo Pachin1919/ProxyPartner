@@ -9,6 +9,9 @@ public sealed unsafe partial class DesktopApp
     private const string TrayClass = "ProxyPartner.Tray", PanelClass = "ProxyPartner.Panel";
     private const uint TrayMessage = 0x8001, SnapshotMessage = 0x8002;
     private const int CurrentProbeTimer = 1;
+    private const int CardAnimationTimer = 2;
+    private int spinnerFrame;
+    private bool animatingCards;
     private const uint CurrentProbeIntervalMs = 10_000;
     private const int Open = 101, Exit = 102, Search = 103, Groups = 104, Toggle = 107, SortMenu = 108, SortFirst = 110;
     private const int TestServers = 131;
@@ -190,6 +193,12 @@ public sealed unsafe partial class DesktopApp
         {
             switch (msg)
             {
+                case WmTimer when wParam == CardAnimationTimer:
+                    spinnerFrame = (spinnerFrame + 1) & 3;
+                    var (first, end) = VisibleCardRange();
+                    for (int i = first; i < end; i++)
+                        if (rows[i].Testing) InvalidateCard(i, probeIconOnly: true);
+                    return 0;
                 case WmSize: Layout(); return 0;
                 case WmClose: DestroyWindow(panel); return 0;
                 case WmTimer when wParam == CurrentProbeTimer && source is IDesktopCurrentTestSource timerSource:
@@ -197,6 +206,8 @@ public sealed unsafe partial class DesktopApp
                     return 0;
                 case WmDestroy:
                     if (source is IDesktopCurrentTestSource) KillTimer(window, CurrentProbeTimer);
+                    KillTimer(window, CardAnimationTimer);
+                    animatingCards = false;
                     source.SnapshotChanged -= OnSnapshotChanged;
                     rows = [];
                     if (settingsWindow != 0) DestroyWindow(settingsWindow);
@@ -251,7 +262,17 @@ public sealed unsafe partial class DesktopApp
                     if (id == SortMenu) ShowSortMenu();
                     if (id == OpenSettings) ShowSettings();
                     if (id == OpenDetails) ShowDetails();
-                    if (id == TestServers && source is IDesktopCurrentTestSource servers) servers.RequestSweep();
+                    if (id == TestServers && source is IDesktopCurrentTestSource servers)
+                    {
+                        var (start, end) = VisibleCardRange();
+                        if (tableMode)
+                        {
+                            start = (int)Send(list, LvmFirst + 39, 0, 0); // LVM_GETTOPINDEX
+                            end = start + (int)Send(list, LvmFirst + 40, 0, 0) + 1; // LVM_GETCOUNTPERPAGE
+                        }
+                        servers.RequestSweep(rows.Skip(start).Take(end - start)
+                            .Where(static row => row.Kind == NodeKind.Leaf).Select(static row => row.Name).ToArray());
+                    }
                     if (id >= SortFirst && id < SortFirst + Columns.Length) Sort(id - SortFirst);
                     return 0;
                 case WmNotify:
@@ -575,6 +596,7 @@ public sealed unsafe partial class DesktopApp
     private void UpdateStatus(DesktopSnapshot? snapshot = null)
     {
         snapshot ??= source.GetSnapshot();
+        UpdateCardAnimation();
         string progress = snapshot.Collection == CollectionState.Observing &&
             snapshot.ServerSweep is { WebsiteTotal: > 0 } website
             ? L($"独立五站 {website.WebsiteCompleted}/{website.WebsiteTotal}",
@@ -677,6 +699,7 @@ public sealed unsafe partial class DesktopApp
             ShowWindow(incoming, 5);
         RedrawWindow(incoming, null, 0, 0x181); // RDW_INVALIDATE | RDW_ALLCHILDREN | RDW_UPDATENOW
         ShowWindow(outgoing, 0);
+        UpdateCardAnimation();
         SetFocus(incoming);
     }
 

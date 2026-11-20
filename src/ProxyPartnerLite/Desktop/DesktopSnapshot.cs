@@ -46,7 +46,8 @@ public sealed record DesktopRow(
     DesktopResult? Google = null, DesktopResult? YouTube = null, DesktopResult? Anthropic = null,
     string? CurrentTarget = null, DesktopResult? ServerPing = null, bool Testing = false,
     DesktopExitIp? ExitV4 = null, DesktopExitIp? ExitV6 = null,
-    IndependentProbeState IndependentProbe = IndependentProbeState.Unknown, string? Protocol = null);
+    IndependentProbeState IndependentProbe = IndependentProbeState.Unknown, string? Protocol = null,
+    bool Queued = false);
 
 public sealed record DesktopCurrentTest(bool Running, int Completed, int Total, int Verified, int TimedOut,
     bool Attempted, string? CurrentTarget, bool Direct, bool PathChanged);
@@ -64,6 +65,7 @@ public interface IDesktopCurrentTestSource
 {
     void RequestCurrentTest();
     void RequestSweep();
+    void RequestSweep(IReadOnlyList<string> preferredNodes) => RequestSweep();
     void RequestNodeTest(string node);
 }
 

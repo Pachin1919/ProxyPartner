@@ -13,6 +13,8 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
         internal readonly string Name = name;
         internal readonly string Revision = profile.Revision;
         internal readonly bool Counted = counted;
+        internal readonly int RequestLimit = profile.WorkerProfile is null ? PerNodeRequestLimit : 1;
+        internal readonly bool UsesWorker = profile.WorkerProfile is not null;
         internal readonly int TargetCount = targetCount;
         internal readonly IndependentNodeProbe.Session Session = new(profile, stop);
         internal int NextTarget, InFlight;
@@ -32,7 +34,7 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
     private Task? poll;
     private readonly object wakeGate = new();
     private int queuedOrRunning;
-    private int sweepRequested;
+    private string[]? sweepRequested;
     private string? nodeRequested;
     private string? selectedProfilePath;
     private DesktopSnapshot snapshot = new("Clash Verge", CollectionState.Connecting, null, null, []);
@@ -52,9 +54,11 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
             Wake();
     }
 
-    public void RequestSweep()
+    public void RequestSweep() => RequestSweep([]);
+
+    public void RequestSweep(IReadOnlyList<string> preferredNodes)
     {
-        Interlocked.Exchange(ref sweepRequested, 1);
+        Interlocked.Exchange(ref sweepRequested, preferredNodes.ToArray());
         Interlocked.CompareExchange(ref queuedOrRunning, 1, 0);
         Wake();
     }
@@ -108,11 +112,12 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
         var catalog = IndependentNodeProbe.Load(null);
         HashSet<(string Name, string Type)>? roster = null;
         (string? Path, DateTime LastWrite, long Length) profileStamp = default;
-        bool autoSweepPending = false, manualSweepPending = false;
+        bool autoSweepPending = false;
+        string[]? manualSweepPending = null;
         var exitV4 = new Dictionary<string, DesktopExitIp>(StringComparer.Ordinal);
         var exitV6 = new Dictionary<string, DesktopExitIp>(StringComparer.Ordinal);
         var batch = new Queue<string>();
-        var websiteBatch = new Queue<string>();
+        var websiteBatch = new LinkedList<string>();
         var serverActive = new Dictionary<Task<DesktopResult>, (string Name, string Host, bool Counted)>(ParallelServerLimit);
         var websiteActive = new List<WebsiteRound>(MaxIndependentRequests);
         var websiteRequests = new Dictionary<Task<IndependentResult>, (WebsiteRound Round, int Target)>(MaxIndependentRequests);
@@ -137,10 +142,10 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
             foreach (var round in websiteActive) round.Dispose();
             websiteActive.Clear();
         }
-        bool HasPendingRequest() => (autoSweepPending || manualSweepPending) && SweepIdle() && currentTask is null ||
+        bool HasPendingRequest() => SweepIdle() && (manualSweepPending is not null || autoSweepPending && currentTask is null) ||
             Volatile.Read(ref selectedProfilePath) != profileSelection ||
             Volatile.Read(ref nodeRequested) is not null ||
-            Volatile.Read(ref sweepRequested) != 0 || currentTask is null && Volatile.Read(ref queuedOrRunning) != 0;
+            Volatile.Read(ref sweepRequested) is not null || currentTask is null && Volatile.Read(ref queuedOrRunning) != 0;
         try
         {
             do
@@ -209,9 +214,9 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                         testedGroups = null;
                         current = null;
                     }
-                    manualSweepPending |= Interlocked.Exchange(ref sweepRequested, 0) == 1;
-                    bool startSweep = (manualSweepPending || autoSweepPending) && SweepIdle() &&
-                        currentTask is null && Volatile.Read(ref queuedOrRunning) == 0;
+                    manualSweepPending = Interlocked.Exchange(ref sweepRequested, null) ?? manualSweepPending;
+                    bool startSweep = SweepIdle() && (manualSweepPending is not null || autoSweepPending &&
+                        currentTask is null && Volatile.Read(ref queuedOrRunning) == 0);
                     string? priority = Interlocked.Exchange(ref nodeRequested, null);
                     if (startSweep || priority is not null || rosterChanged || configChanged)
                     {
@@ -221,7 +226,7 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                                 serverResults.Remove(name);
                         serverMap = updatedMap;
                     }
-                    if (rosterChanged || configChanged || (manualSweepPending && startSweep))
+                    if (rosterChanged || configChanged || (manualSweepPending is not null && startSweep))
                     {
                         bool automatic = profilePath is not null && profilePath == read.VergeRuntimePath;
                         var updated = IndependentNodeProbe.Load(profilePath, automatic ? facts.Nodes : null);
@@ -272,13 +277,18 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                         SelectedMember: group.Selected)).ToArray();
                     void Emit()
                     {
-                        var testingNodes = serverActive.Values.Select(job => job.Name)
-                            .Concat(websiteActive.Select(job => job.Name)).ToArray();
+                        var testingNodes = serverActive.Where(entry => !entry.Key.IsCompleted).Select(entry => entry.Value.Name)
+                            .Concat(websiteRequests.Where(entry => !entry.Key.IsCompleted).Select(entry => entry.Value.Round.Name))
+                            .ToHashSet(StringComparer.Ordinal);
+                        var queuedNodes = batch.Concat(websiteBatch).Concat(websiteActive.Select(round => round.Name))
+                            .ToHashSet(StringComparer.Ordinal);
+                        if (serverPriority is not null) queuedNodes.Add(serverPriority);
+                        if (websitePriority is not null) queuedNodes.Add(websitePriority);
                         var sweep = new DesktopServerSweep(batchDone, batchTotal, sweepStarted, unavailableNode,
-                            websiteDone, websiteTotal, websiteEligible.Count, facts.Nodes.Count);
+                            websiteDone, websiteTotal, websiteEligible.Count, facts.Nodes.Count(node => node.Type != "PassRule"));
                         PublishFacts(facts, samples, history, cachedRows, groupRows, serverResults, exitV4, exitV6, catalog, current,
                             sweep, running: currentTask is not null,
-                            pathChanged: samples.Count != 0 && testedGroups is null, testingNodes);
+                            pathChanged: samples.Count != 0 && testedGroups is null, testingNodes, queuedNodes);
                     }
                     void RecordSite(WebsiteProbe sample)
                     {
@@ -322,15 +332,17 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                     }
                     if (startSweep)
                     {
-                        autoSweepPending = manualSweepPending = false;
+                        string[] preferred = manualSweepPending ?? [];
+                        bool manual = manualSweepPending is not null;
+                        autoSweepPending = false;
+                        manualSweepPending = null;
                         string? first = current?.Node;
-                        batch = new Queue<string>(eligible.OrderBy(name => name != first));
+                        batch = new Queue<string>(Prioritize(eligible.OrderBy(name => name != first), preferred));
                         batchTotal = batch.Count;
                         batchDone = 0;
-                        // On-demand protocol workers are limited to explicit single-node tests.
-                        websiteBatch = new Queue<string>(websiteEligible
-                            .Where(name => profiles[name].WorkerProfile is null).Order(StringComparer.Ordinal)
-                            .OrderBy(name => name != first));
+                        websiteBatch = new LinkedList<string>(Prioritize(websiteEligible
+                            .Where(name => manual || profiles[name].WorkerProfile is null)
+                            .Order(StringComparer.Ordinal).OrderBy(name => name != first), preferred));
                         websiteTotal = websiteBatch.Count;
                         websiteDone = 0;
                         releaseSweepMemory = websiteTotal > 0;
@@ -355,28 +367,36 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                         while (!autoSweepPending && websiteRequests.Count < webLimit)
                         {
                             WebsiteRound? round = null;
-                            if (websiteActive.Count < webLimit && websitePriority is not null &&
-                                TryTakeNode(ref websitePriority, ref websiteBatch, out var priorityName, out bool counted))
+                            bool CanStart(string name) => profiles[name].WorkerProfile is null ||
+                                !websiteActive.Any(job => job.UsesWorker);
+                            if (websiteActive.Count < webLimit && websitePriority is { } priorityName)
                             {
-                                if (websiteEligible.Contains(priorityName))
+                                if (!websiteEligible.Contains(priorityName))
                                 {
-                                    round = StartWebsiteRound(priorityName, counted);
+                                    websitePriority = null;
+                                    if (websiteBatch.Remove(priorityName)) websiteTotal--;
+                                }
+                                else if (CanStart(priorityName))
+                                {
+                                    websitePriority = null;
+                                    round = StartWebsiteRound(priorityName, websiteBatch.Remove(priorityName));
                                     websiteActive.Insert(0, round);
                                 }
-                                else if (counted) websiteTotal--;
+                            }
+                            // Fill free node slots before starting a second request on any node.
+                            if (round is null && websiteActive.Count < webLimit)
+                            {
+                                for (var candidate = websiteBatch.First; candidate is not null; candidate = candidate.Next)
+                                {
+                                    if (!websiteEligible.Contains(candidate.Value) || !CanStart(candidate.Value)) continue;
+                                    round = StartWebsiteRound(candidate.Value, counted: true);
+                                    websiteBatch.Remove(candidate);
+                                    websiteActive.Add(round);
+                                    break;
+                                }
                             }
                             round ??= websiteActive.Find(static job => job.NextTarget < SiteCount &&
-                                job.InFlight < PerNodeRequestLimit);
-                            if (round is null && websiteActive.Count < webLimit && websiteBatch.TryDequeue(out string? name))
-                            {
-                                if (!websiteEligible.Contains(name))
-                                {
-                                    websiteTotal--;
-                                    continue;
-                                }
-                                round = StartWebsiteRound(name, counted: true);
-                                websiteActive.Add(round);
-                            }
+                                job.InFlight < job.RequestLimit);
                             // Start exit observations after this node's five website requests have settled.
                             round ??= websiteActive.Find(static job => job.NextTarget >= SiteCount && job.NextTarget < job.TargetCount &&
                                 job.InFlight == 0);
@@ -447,7 +467,9 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                             if (valid)
                             {
                                 if (job.Target < SiteCount)
-                                    RecordSite(result.Site!);
+                                {
+                                    if (result.Site is { } site) RecordSite(site);
+                                }
                                 else if (job.Target == SiteCount)
                                     round.FirstExit = result.Exit;
                                 else
@@ -549,12 +571,19 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
         return new(value, now, changes, Observers: 2, LastVerifiedAddress: value, ConsistentSince: now, ConfirmedSamples: 1);
     }
 
+    private static IEnumerable<string> Prioritize(IEnumerable<string> names, IReadOnlyList<string> preferred)
+    {
+        if (preferred.Count == 0) return names;
+        var included = names.ToHashSet(StringComparer.Ordinal);
+        return preferred.Where(included.Contains).Concat(names).Distinct(StringComparer.Ordinal);
+    }
+
     private void PublishFacts(HostFacts facts, List<WebsiteProbe> samples,
         Dictionary<(string Node, string Target), WebsiteWindow> history,
         Dictionary<string, (DesktopRow Row, DateTimeOffset Expires)> cachedRows, DesktopRow[] groupRows,
         Dictionary<string, DesktopResult> serverResults, Dictionary<string, DesktopExitIp> exitV4,
         Dictionary<string, DesktopExitIp> exitV6, ProbeCatalog catalog, WebsiteProbe? current, DesktopServerSweep sweep,
-        bool running, bool pathChanged, IReadOnlyCollection<string>? testingNodes)
+        bool running, bool pathChanged, IReadOnlySet<string> testingNodes, IReadOnlySet<string> queuedNodes)
     {
         DateTimeOffset now = DateTimeOffset.UtcNow;
         var rows = new DesktopRow[facts.Nodes.Count + groupRows.Length];
@@ -563,13 +592,14 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
         {
             bool isCurrent = current?.Node == node.Name;
             string? target = isCurrent ? current?.TargetId : null;
-            bool testing = testingNodes?.Contains(node.Name) == true || isCurrent && running;
+            bool testing = testingNodes.Contains(node.Name) || isCurrent && running;
+            bool queued = !testing && queuedNodes.Contains(node.Name);
             var server = serverResults.GetValueOrDefault(node.Name);
             var v4 = exitV4.GetValueOrDefault(node.Name);
             var v6 = exitV6.GetValueOrDefault(node.Name);
             if (cachedRows.TryGetValue(node.Name, out var cached) && now <= cached.Expires &&
                 cached.Row.IsCurrent == isCurrent &&
-                cached.Row.Testing == testing && cached.Row.CurrentTarget == target &&
+                cached.Row.Testing == testing && cached.Row.Queued == queued && cached.Row.CurrentTarget == target &&
                 cached.Row.ServerPing == server && cached.Row.ExitV4 == v4 && cached.Row.ExitV6 == v6)
             {
                 rows[index++] = cached.Row;
@@ -660,7 +690,7 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                 native, openAi, chatGpt, Untested, lastObserved, Quality: quality,
                 Google: google, YouTube: youtube, Anthropic: anthropic, CurrentTarget: target,
                 ServerPing: server, Testing: testing, ExitV4: v4, ExitV6: v6,
-                IndependentProbe: support, Protocol: node.Type);
+                IndependentProbe: support, Protocol: node.Type, Queued: queued);
             cachedRows[node.Name] = (row, expires);
             rows[index++] = row;
         }
