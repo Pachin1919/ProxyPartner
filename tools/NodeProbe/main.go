@@ -22,6 +22,9 @@ import (
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
+	if len(os.Args) == 2 && os.Args[1] == "--resolve" {
+		os.Exit(resolveEntry(ctx))
+	}
 	ctx, cancel := context.WithTimeout(ctx, 7*time.Second)
 	defer cancel()
 	// This one-shot worker exits at its single terminal boundary. The OS closes

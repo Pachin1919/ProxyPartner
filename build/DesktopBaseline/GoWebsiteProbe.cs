@@ -1,21 +1,25 @@
 using System.ComponentModel;
 using System.Diagnostics;
-using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.Json.Serialization.Metadata;
 
 internal sealed record GoProbeRequest(string Type, string Server, int Port, string Password,
     string? Username = null, string? Sni = null, string? Transport = null, string? Multiplexing = null,
     string? HandshakeMode = null, string? TrafficPattern = null, List<string>? Alpn = null,
     string? ClientFingerprint = null, string? Fingerprint = null, string? EchConfig = null,
-    string? TargetUrl = null, int TimeoutMs = 6000);
+    string? TargetUrl = null, int TimeoutMs = 6000, string? PortRange = null);
 
 internal sealed record GoProbeReply(string Status, int? HttpStatus, int? ElapsedMs, string? ExitIp);
+internal sealed record GoDnsRequest(string Host, string[] Endpoints);
+internal sealed record GoDnsReply(string? Address);
 
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase,
     DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull)]
 [JsonSerializable(typeof(GoProbeRequest))]
 [JsonSerializable(typeof(GoProbeReply))]
+[JsonSerializable(typeof(GoDnsRequest))]
+[JsonSerializable(typeof(GoDnsReply))]
 internal sealed partial class GoProbeJson : JsonSerializerContext { }
 
 internal static class GoWebsiteProbe
@@ -29,58 +33,9 @@ internal static class GoWebsiteProbe
     internal static async Task<IndependentResult> MeasureAsync(GoProbeRequest settings,
         string node, string? target, Uri url, CancellationToken stop)
     {
-        if (!IsInstalled) return default;
-        await Worker.WaitAsync(stop).ConfigureAwait(false);
-        GoProbeReply? reply = null;
-        using var budget = CancellationTokenSource.CreateLinkedTokenSource(stop);
-        budget.CancelAfter(TimeSpan.FromSeconds(8));
-        try
-        {
-            using var process = new Process
-            {
-                StartInfo = new(WorkerPath)
-                {
-                    UseShellExecute = false, CreateNoWindow = true, RedirectStandardInput = true,
-                    RedirectStandardOutput = true, RedirectStandardError = true,
-                    StandardInputEncoding = new UTF8Encoding(false)
-                }
-            };
-            if (!process.Start()) return default;
-            var discard = process.StandardError.BaseStream.CopyToAsync(Stream.Null);
-            try
-            {
-                await JsonSerializer.SerializeAsync(process.StandardInput.BaseStream,
-                    settings with { TargetUrl = url.AbsoluteUri }, GoProbeJson.Default.GoProbeRequest,
-                    budget.Token).ConfigureAwait(false);
-                process.StandardInput.Close();
-                byte[] response = new byte[ReplyLimit];
-                int count = await process.StandardOutput.BaseStream.ReadAtLeastAsync(response, response.Length,
-                    false, budget.Token).ConfigureAwait(false);
-                if (count is > 0 and < ReplyLimit)
-                {
-                    await process.WaitForExitAsync(budget.Token).ConfigureAwait(false);
-                    reply = JsonSerializer.Deserialize(response.AsSpan(0, count), GoProbeJson.Default.GoProbeReply);
-                    if (reply?.Status == "ok" && process.ExitCode != 0) reply = null;
-                }
-            }
-            finally
-            {
-                if (!process.HasExited)
-                {
-                    try { process.Kill(); }
-                    catch (InvalidOperationException) when (process.HasExited) { }
-                    await process.WaitForExitAsync().ConfigureAwait(false);
-                }
-                await discard.ConfigureAwait(false);
-            }
-        }
-        catch (OperationCanceledException) when (budget.IsCancellationRequested && !stop.IsCancellationRequested)
-        {
-            reply = new("timeout", null, null, null);
-        }
-        catch (Exception error) when (error is Win32Exception or IOException or JsonException) { }
-        finally { Worker.Release(); }
-
+        var (reply, timedOut) = await RunAsync(null, settings with { TargetUrl = url.AbsoluteUri },
+            GoProbeJson.Default.GoProbeRequest, GoProbeJson.Default.GoProbeReply, TimeSpan.FromSeconds(8), stop);
+        if (timedOut) reply = new("timeout", null, null, null);
         if (stop.IsCancellationRequested || reply is null) return default;
         if (target is null)
             return reply is { Status: "ok", HttpStatus: 200 }
@@ -91,5 +46,45 @@ internal static class GoWebsiteProbe
         return reply.Status is "timeout" or "request_failed" or "server_dns_failed"
             ? new(new(target, node, false, true, null, null, DateTimeOffset.UtcNow,
                 TimedOut: reply.Status == "timeout", Independent: true)) : default;
+    }
+
+    internal static async Task<string?> ResolveAsync(string host, string[] endpoints, CancellationToken stop)
+    {
+        var (reply, _) = await RunAsync("--resolve", new GoDnsRequest(host, endpoints), GoProbeJson.Default.GoDnsRequest,
+            GoProbeJson.Default.GoDnsReply, TimeSpan.FromSeconds(11), stop);
+        return reply?.Address;
+    }
+
+    private static async Task<(TReply? Reply, bool TimedOut)> RunAsync<TRequest, TReply>(string? argument,
+        TRequest request, JsonTypeInfo<TRequest> input, JsonTypeInfo<TReply> output, TimeSpan timeout, CancellationToken stop)
+        where TReply : class
+    {
+        if (!IsInstalled) return default;
+        await Worker.WaitAsync(stop).ConfigureAwait(false);
+        using var budget = CancellationTokenSource.CreateLinkedTokenSource(stop);
+        budget.CancelAfter(timeout);
+        try
+        {
+            var start = new ProcessStartInfo(WorkerPath)
+            {
+                UseShellExecute = false, CreateNoWindow = true, RedirectStandardInput = true,
+                RedirectStandardOutput = true, RedirectStandardError = true
+            };
+            if (argument is not null) start.ArgumentList.Add(argument);
+            byte[] response = new byte[ReplyLimit];
+            var (count, exit) = await ProbeChild.ReadAsync(start, response, budget.Token,
+                stream => JsonSerializer.SerializeAsync(stream, request, input, budget.Token)).ConfigureAwait(false);
+            if (count is 0 or ReplyLimit) return default;
+            var reply = JsonSerializer.Deserialize(response.AsSpan(0, count), output);
+            return exit != 0 && (reply is not GoProbeReply probe || probe.Status == "ok") ? default : (reply, false);
+        }
+        catch (OperationCanceledException) when (budget.IsCancellationRequested && !stop.IsCancellationRequested)
+        {
+            return (null, true);
+        }
+        catch (Exception error) when (error is Win32Exception or IOException or JsonException) { }
+        finally { Worker.Release(); }
+
+        return default;
     }
 }

@@ -13,8 +13,8 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
         internal readonly string Name = name;
         internal readonly string Revision = profile.Revision;
         internal readonly bool Counted = counted;
-        internal readonly int RequestLimit = profile.WorkerProfile is null ? PerNodeRequestLimit : 1;
-        internal readonly bool UsesWorker = profile.WorkerProfile is not null;
+        internal readonly int RequestLimit = !profile.RequiresWorker ? PerNodeRequestLimit : 1;
+        internal readonly bool UsesWorker = profile.RequiresWorker;
         internal readonly int TargetCount = targetCount;
         internal readonly IndependentNodeProbe.Session Session = new(profile, stop);
         internal int NextTarget, InFlight;
@@ -28,7 +28,7 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
     private const int ParallelServerLimit = 5;
     private const int PerNodeRequestLimit = 2;
     private const int SiteCount = ReadOnlyHostClient.CurrentProbeTargetCount;
-    private const string NativeProbeSource = "Shadowsocks · C++ HTTPS";
+    private static string NativeProbeSource(string type) => $"{type} · C++ HTTPS";
     private readonly CancellationTokenSource stop = new();
     private readonly SemaphoreSlim requested = new(0, 1);
     private Task? poll;
@@ -250,7 +250,7 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                         .Order(StringComparer.Ordinal).ToArray();
                     var websiteEligible = facts.Nodes.Where(n =>
                         profiles.TryGetValue(n.Name, out var profile) && profile.Type == n.Type &&
-                        (profile.WorkerProfile is null || GoWebsiteProbe.IsInstalled))
+                        (!profile.RequiresWorker || GoWebsiteProbe.IsInstalled))
                         .Select(n => n.Name).ToHashSet(StringComparer.Ordinal);
                     int webLimit = (configuredLimit ?? (websiteEligible.Count >= 100 ? 12 : 16)) - SiteCount;
                     if (priority is not null)
@@ -362,7 +362,7 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                         batchTotal = batch.Count;
                         batchDone = 0;
                         websiteBatch = new LinkedList<string>(Prioritize(websiteEligible
-                            .Where(name => manual || profiles[name].WorkerProfile is null)
+                            .Where(name => manual || !profiles[name].RequiresWorker)
                             .Order(StringComparer.Ordinal).OrderBy(name => name != first), preferred));
                         websiteTotal = websiteBatch.Count;
                         websiteDone = 0;
@@ -388,7 +388,7 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                         while (!autoSweepPending && websiteRequests.Count < webLimit)
                         {
                             WebsiteRound? round = null;
-                            bool CanStart(string name) => profiles[name].WorkerProfile is null ||
+                            bool CanStart(string name) => !profiles[name].RequiresWorker ||
                                 !websiteActive.Any(job => job.UsesWorker);
                             if (websiteActive.Count < webLimit && websitePriority is { } priorityName)
                             {
@@ -599,7 +599,7 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
         return preferred.Where(included.Contains).Concat(names).Distinct(StringComparer.Ordinal);
     }
 
-    private void PublishFacts(HostFacts facts, List<WebsiteProbe> samples,
+    internal void PublishFacts(HostFacts facts, List<WebsiteProbe> samples,
         Dictionary<(string Node, string Target), WebsiteWindow> history,
         Dictionary<string, (DesktopRow Row, DateTimeOffset Expires)> cachedRows, DesktopRow[] groupRows,
         Dictionary<string, DesktopResult> serverResults, Dictionary<string, DesktopExitIp> exitV4,
@@ -653,7 +653,7 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                 if (!history.TryGetValue((node.Name, site.Id), out var window)) continue;
                 var sample = window.Latest;
                 var result = new DesktopResult(sample.TargetId, sample.ElapsedMs, sample.HttpStatus, sample.ObservedUtc,
-                    sample.NativeTransport ? NativeProbeSource : sample.Independent ? independentMethod ?? "HTTPS" : "HTTPS",
+                    sample.NativeTransport ? NativeProbeSource(node.Type) : sample.Independent ? independentMethod ?? "HTTPS" : "HTTPS",
                     sample.HttpStatus switch
                     {
                         401 => ResultState.AuthenticationRequired,
@@ -700,13 +700,13 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                     ? Math.Min((int)Math.Round(points / siteCount), cap ?? 100) : null;
                 QualityState state = score is >= 80 ? QualityState.Good : score is < 60 || cap.HasValue
                     ? QualityState.Poor : score.HasValue ? QualityState.Restricted : QualityState.Insufficient;
-                quality = new(score, state, allNative ? NativeProbeSource :
+                quality = new(score, state, allNative ? NativeProbeSource(node.Type) :
                     independentSource == true ? independentMethod ?? "HTTPS" : "HTTPS",
                     cap, capTarget, siteCount, stableCount);
             }
             var support = independentMethod is null ? IndependentProbeState.UnsupportedProtocol
                 : catalog.Profiles.TryGetValue(node.Name, out var profile) && profile.Type == node.Type
-                    ? profile.WorkerProfile is not null && !GoWebsiteProbe.IsInstalled
+                    ? profile.RequiresWorker && !GoWebsiteProbe.IsInstalled
                         ? IndependentProbeState.WorkerMissing : IndependentProbeState.Available
                     : catalog.Configured.Contains(node.Name) ? IndependentProbeState.UnsupportedOptions
                     : IndependentProbeState.MissingConfiguration;
