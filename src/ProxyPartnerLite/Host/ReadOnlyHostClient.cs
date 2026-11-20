@@ -27,27 +27,15 @@ public sealed partial class ReadOnlyHostClient
             return new HostReadResult(Classify(error, cancellationToken), null, null, null, null, []);
         }
         options ??= new HostReadOptions();
-        const string standardPipe = "verge-mihomo";
-        const string productionPrefix = "verge-mihomo-production-";
-        string pipe = standardPipe;
-        try
-        {
-            var candidates = Directory.EnumerateFiles(@"\\.\pipe\").Select(Path.GetFileName)
-                .Where(name => name is not null && name.StartsWith(productionPrefix, StringComparison.Ordinal) &&
-                    name.Length == productionPrefix.Length + 64 &&
-                    name.AsSpan(productionPrefix.Length).IndexOfAnyExcept("0123456789abcdef") < 0)
-                .Take(2).ToArray();
-            if (candidates.Length > 1)
-                return new(HostStatus.Ambiguous, null, core.Pid, core.StartedAtUtc, null, []);
-            if (candidates.Length == 1) pipe = candidates[0]!;
-        }
+        string pipe;
+        try { pipe = DiscoverPipeName(); }
         catch (Exception error) when (IsBoundaryError(error))
         {
             return new(Classify(error, cancellationToken), null, core.Pid, core.StartedAtUtc, null, []);
         }
         var result = await ReadForCoreAsync(core, pipe, options, fallback,
             cancellationToken).ConfigureAwait(false);
-        if (result.Status != HostStatus.ConnectedPipe || !options.IncludeVergeRuntimePath || pipe != standardPipe)
+        if (result.Status != HostStatus.ConnectedPipe || !options.IncludeVergeRuntimePath || pipe != StandardPipe)
             return result;
 
         // Verge v2.4.7 dirs::app_home_dir and Config::generate_file(ConfigType::Run).
@@ -56,6 +44,21 @@ public sealed partial class ReadOnlyHostClient
         string data = File.Exists(Path.Combine(portable, "PORTABLE"))
             ? portable : Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
         return result with { VergeRuntimePath = Path.Combine(data, "io.github.clash-verge-rev.clash-verge-rev", "clash-verge.yaml") };
+    }
+
+    private const string StandardPipe = "verge-mihomo";
+
+    private static string DiscoverPipeName()
+    {
+        const string productionPrefix = "verge-mihomo-production-";
+        var candidates = Directory.EnumerateFiles(@"\\.\pipe\").Select(Path.GetFileName)
+            .Where(name => name is not null && name.StartsWith(productionPrefix, StringComparison.Ordinal) &&
+                name.Length == productionPrefix.Length + 64 &&
+                name.AsSpan(productionPrefix.Length).IndexOfAnyExcept("0123456789abcdef") < 0)
+            .Take(2).ToArray();
+        if (candidates.Length > 1)
+            throw new HostFailure(HostStatus.Ambiguous);
+        return candidates.Length == 1 ? candidates[0]! : StandardPipe;
     }
 
     internal static async Task<HostReadResult> ReadForCoreAsync(CoreIdentity core, string pipe,

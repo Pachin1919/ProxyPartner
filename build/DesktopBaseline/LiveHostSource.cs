@@ -278,8 +278,25 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                     void Emit()
                     {
                         var testingNodes = serverActive.Where(entry => !entry.Key.IsCompleted).Select(entry => entry.Value.Name)
-                            .Concat(websiteRequests.Where(entry => !entry.Key.IsCompleted).Select(entry => entry.Value.Round.Name))
                             .ToHashSet(StringComparer.Ordinal);
+                        var activeSites = new Dictionary<string, uint>(StringComparer.Ordinal);
+                        foreach (var (request, job) in websiteRequests)
+                        {
+                            if (request.IsCompleted) continue;
+                            testingNodes.Add(job.Round.Name);
+                            if (job.Target >= SiteCount) continue;
+                            // Bits follow the visible card order, independently of scheduler order.
+                            uint bit = ReadOnlyHostClient.WebsiteTargets[job.Target].Id switch
+                            {
+                                "google" => 1u,
+                                "youtube" => 2u,
+                                "openai_api" => 4u,
+                                "chatgpt_web" => 8u,
+                                "anthropic_api" => 16u,
+                                _ => 0u
+                            };
+                            activeSites[job.Round.Name] = activeSites.GetValueOrDefault(job.Round.Name) | bit;
+                        }
                         var queuedNodes = batch.Concat(websiteBatch).Concat(websiteActive.Select(round => round.Name))
                             .ToHashSet(StringComparer.Ordinal);
                         if (serverPriority is not null) queuedNodes.Add(serverPriority);
@@ -288,14 +305,18 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                             websiteDone, websiteTotal, websiteEligible.Count, facts.Nodes.Count(node => node.Type != "PassRule"));
                         PublishFacts(facts, samples, history, cachedRows, groupRows, serverResults, exitV4, exitV6, catalog, current,
                             sweep, running: currentTask is not null,
-                            pathChanged: samples.Count != 0 && testedGroups is null, testingNodes, queuedNodes);
+                            pathChanged: samples.Count != 0 && testedGroups is null, testingNodes, queuedNodes, activeSites);
                     }
                     void RecordSite(WebsiteProbe sample)
                     {
                         if (sample.Node is not { } node || !sample.Attempted) return;
-                        cachedRows.Remove(node);
                         var key = (node, sample.TargetId);
-                        if (history.TryGetValue(key, out var window) && window.Latest.Independent == sample.Independent)
+                        history.TryGetValue(key, out var window);
+                        // A current-route retest cannot replace fresh results produced by this node's explicit dialer.
+                        if (!sample.Independent && window?.Latest is { Independent: true } independent &&
+                            sample.ObservedUtc - independent.ObservedUtc <= WebsiteWindow.Freshness) return;
+                        cachedRows.Remove(node);
+                        if (window is not null && window.Latest.Independent == sample.Independent)
                             window.Add(sample);
                         else history[key] = new(sample);
                     }
@@ -583,7 +604,8 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
         Dictionary<string, (DesktopRow Row, DateTimeOffset Expires)> cachedRows, DesktopRow[] groupRows,
         Dictionary<string, DesktopResult> serverResults, Dictionary<string, DesktopExitIp> exitV4,
         Dictionary<string, DesktopExitIp> exitV6, ProbeCatalog catalog, WebsiteProbe? current, DesktopServerSweep sweep,
-        bool running, bool pathChanged, IReadOnlySet<string> testingNodes, IReadOnlySet<string> queuedNodes)
+        bool running, bool pathChanged, IReadOnlySet<string> testingNodes, IReadOnlySet<string> queuedNodes,
+        IReadOnlyDictionary<string, uint> activeSites)
     {
         DateTimeOffset now = DateTimeOffset.UtcNow;
         var rows = new DesktopRow[facts.Nodes.Count + groupRows.Length];
@@ -594,12 +616,14 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
             string? target = isCurrent ? current?.TargetId : null;
             bool testing = testingNodes.Contains(node.Name) || isCurrent && running;
             bool queued = !testing && queuedNodes.Contains(node.Name);
+            uint siteActivity = activeSites.GetValueOrDefault(node.Name);
             var server = serverResults.GetValueOrDefault(node.Name);
             var v4 = exitV4.GetValueOrDefault(node.Name);
             var v6 = exitV6.GetValueOrDefault(node.Name);
             if (cachedRows.TryGetValue(node.Name, out var cached) && now <= cached.Expires &&
                 cached.Row.IsCurrent == isCurrent &&
-                cached.Row.Testing == testing && cached.Row.Queued == queued && cached.Row.CurrentTarget == target &&
+                cached.Row.Testing == testing && cached.Row.Queued == queued && cached.Row.ActiveSites == siteActivity &&
+                cached.Row.CurrentTarget == target &&
                 cached.Row.ServerPing == server && cached.Row.ExitV4 == v4 && cached.Row.ExitV6 == v6)
             {
                 rows[index++] = cached.Row;
@@ -690,7 +714,7 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                 native, openAi, chatGpt, Untested, lastObserved, Quality: quality,
                 Google: google, YouTube: youtube, Anthropic: anthropic, CurrentTarget: target,
                 ServerPing: server, Testing: testing, ExitV4: v4, ExitV6: v6,
-                IndependentProbe: support, Protocol: node.Type, Queued: queued);
+                IndependentProbe: support, Protocol: node.Type, Queued: queued, ActiveSites: siteActivity);
             cachedRows[node.Name] = (row, expires);
             rows[index++] = row;
         }

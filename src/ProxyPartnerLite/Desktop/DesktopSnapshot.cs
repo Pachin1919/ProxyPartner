@@ -47,7 +47,7 @@ public sealed record DesktopRow(
     string? CurrentTarget = null, DesktopResult? ServerPing = null, bool Testing = false,
     DesktopExitIp? ExitV4 = null, DesktopExitIp? ExitV6 = null,
     IndependentProbeState IndependentProbe = IndependentProbeState.Unknown, string? Protocol = null,
-    bool Queued = false);
+    bool Queued = false, uint ActiveSites = 0);
 
 public sealed record DesktopCurrentTest(bool Running, int Completed, int Total, int Verified, int TimedOut,
     bool Attempted, string? CurrentTarget, bool Direct, bool PathChanged);

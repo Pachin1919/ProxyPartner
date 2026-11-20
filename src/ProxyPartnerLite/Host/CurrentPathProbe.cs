@@ -27,7 +27,8 @@ public sealed partial class ReadOnlyHostClient
     public async Task<WebsiteProbe?> MeasureCurrentPathAsync(int corePid, HostFacts facts, Action<WebsiteProbe> publish, CancellationToken token)
     {
         CoreIdentity core;
-        try { core = WindowsPeer.Discover(); }
+        string pipeName;
+        try { core = WindowsPeer.Discover(); pipeName = DiscoverPipeName(); }
         catch (Exception error) when (IsBoundaryError(error)) { return null; }
         if (core.Pid != corePid || token.IsCancellationRequested)
             return null;
@@ -100,7 +101,7 @@ public sealed partial class ReadOnlyHostClient
                 {
                     // Start the one-shot lookup while the TLS tunnel is open.
                     if (context.InitialRequestMessage.Method == HttpMethod.Get && context.InitialRequestMessage.RequestUri == target.Url)
-                        route ??= FindProbeRouteAsync(core, target.Url, localPort, nodes, deadline.Token);
+                        route ??= FindProbeRouteAsync(core, pipeName, target.Url, localPort, nodes, deadline.Token);
                     return ValueTask.FromResult(context.PlaintextStream);
                 }
             };
@@ -140,7 +141,7 @@ public sealed partial class ReadOnlyHostClient
         }
     }
 
-    private static async Task<MatchedProbeRoute?> FindProbeRouteAsync(CoreIdentity core, Uri target, int localPort,
+    private static async Task<MatchedProbeRoute?> FindProbeRouteAsync(CoreIdentity core, string pipeName, Uri target, int localPort,
         HashSet<string> nodes, CancellationToken token)
     {
         if (localPort == 0)
@@ -150,7 +151,7 @@ public sealed partial class ReadOnlyHostClient
             using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
             deadline.CancelAfter(TimeSpan.FromSeconds(2));
             var cancellation = deadline.Token;
-            await using var pipe = await OpenVerifiedPipeAsync(core, "verge-mihomo", cancellation).ConfigureAwait(false);
+            await using var pipe = await OpenVerifiedPipeAsync(core, pipeName, cancellation).ConfigureAwait(false);
             bool used = false;
             using var handler = new SocketsHttpHandler
             {

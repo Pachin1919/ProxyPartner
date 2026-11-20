@@ -475,8 +475,11 @@ public sealed unsafe partial class DesktopApp
 
     private string FormatSiteLatency(DesktopResult? result, bool compact = false) => result switch
     {
+        { State: ResultState.AuthenticationRequired } when !compact =>
+            (result.HttpStatus is int authStatus ? $"{authStatus} " : "") + L("需要认证", "Authentication required") +
+            (result.ElapsedMs is >= 0 and int authMs ? $" · {authMs} ms" : ""),
         { ElapsedMs: >= 0 and int ms, State: ResultState.Measured or ResultState.AuthenticationRequired
-            or ResultState.Restricted or ResultState.HttpError or ResultState.Stale } => compact ? $"{ms}ms" : $"{ms} ms",
+            or ResultState.Stale } => compact ? $"{ms}ms" : $"{ms} ms",
         _ => result?.Format(preferences.English, compact) ?? L("待测", compact ? "N/T" : "Untested")
     };
 
@@ -502,8 +505,10 @@ public sealed unsafe partial class DesktopApp
                 Label(dc, Sites[index].Short, start, iconY, end, Scale(23), Text, siteStatusFont, 1);
             }
             var result = SiteResult(row, index);
-            string state = FormatSiteLatency(result, compact: true);
-            uint ink = result?.IsProbeFailure == true ? FailureInk : result is null ? Muted : Text;
+            bool active = (row.ActiveSites & (1u << index)) != 0;
+            string state = active && (result is null || result.State == ResultState.Missing)
+                ? L("测试中", "Testing") : FormatSiteLatency(result, compact: true);
+            uint ink = result?.IsProbeFailure == true ? FailureInk : active ? CurrentInk : result is null ? Muted : Text;
             Label(dc, state, start, statusY, end, Scale(16), ink, siteStatusFont, 1);
         }
     }
@@ -565,8 +570,14 @@ public sealed unsafe partial class DesktopApp
         var row = rows[hoverIndex];
         if (hoverSite == -2)
             return ProbeSupportText(row.IndependentProbe) ?? L("优先测速此节点", "Test this node first");
-        return hoverSite < 0 ? row.Name :
-            $"{Sites[hoverSite].Name} · {FormatSiteLatency(SiteResult(row, hoverSite))}";
+        if (hoverSite < 0) return row.Name;
+        var result = SiteResult(row, hoverSite);
+        bool active = (row.ActiveSites & (1u << hoverSite)) != 0;
+        string detail = active && (result is null || result.State == ResultState.Missing)
+            ? L("测试中", "Testing") : FormatSiteLatency(result);
+        if (active && result is not null && result.State != ResultState.Missing)
+            detail += L(" · 更新中", " · Refreshing");
+        return $"{Sites[hoverSite].Name} · {detail}";
     }
 
     private void GetTooltipText(TooltipInfo* info)
