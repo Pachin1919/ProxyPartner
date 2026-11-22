@@ -25,6 +25,7 @@ func main() {
 	if len(os.Args) == 2 && os.Args[1] == "--resolve" {
 		os.Exit(resolveEntry(ctx))
 	}
+	batch := len(os.Args) == 2 && os.Args[1] == "--batch"
 	ctx, cancel := context.WithTimeout(ctx, 7*time.Second)
 	defer cancel()
 	// This one-shot worker exits at its single terminal boundary. The OS closes
@@ -82,14 +83,14 @@ func main() {
 		os.Exit(2)
 	}
 	allowed := map[string]bool{"https://chatgpt.com/": true, "https://api.openai.com/v1/models": true, "https://www.google.com/": true, "https://www.youtube.com/": true, "https://api.anthropic.com/v1/models": true, "https://ipv4.icanhazip.com/": true, "https://api.ipify.org/": true}
-	if !allowed[cfg.TargetURL] || cfg.TimeoutMs < 1 || cfg.TimeoutMs > 6000 {
+	if (!batch && !allowed[cfg.TargetURL] || batch && cfg.TargetURL != "") || cfg.TimeoutMs < 1 || cfg.TimeoutMs > 6000 {
 		finish(map[string]string{"status": "invalid_input"}, 2)
 	}
 	var trailing any
 	if decoder.Decode(&trailing) != io.EOF {
 		finish(map[string]string{"status": "invalid_input"}, 2)
 	}
-	ctx, cancelRequest := context.WithTimeout(ctx, time.Duration(cfg.TimeoutMs)*time.Millisecond)
+	requestCtx, cancelRequest := context.WithTimeout(ctx, time.Duration(cfg.TimeoutMs)*time.Millisecond)
 	defer cancelRequest()
 	if cfg.Type == "anytls" && (cfg.PortRange != "" || cfg.Username != "" || cfg.Transport != "" || cfg.Multiplexing != "" || cfg.HandshakeMode != "" || cfg.TrafficPattern != "") || cfg.Type == "mieru" && (cfg.ECHConfig != "" || cfg.SNI != "" || len(cfg.ALPN) > 0 || cfg.ClientFingerprint != "" || cfg.Fingerprint != "") {
 		finish(map[string]string{"status": "unsupported_configuration"}, 2)
@@ -123,8 +124,34 @@ func main() {
 	}}
 	defer transport.CloseIdleConnections()
 	client := &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	request, _ := http.NewRequestWithContext(ctx, http.MethodGet, cfg.TargetURL, nil)
-	if cfg.TargetURL == "https://api.anthropic.com/v1/models" {
+	if batch {
+		started := time.Now()
+		targets := [...]string{"https://chatgpt.com/", "https://api.openai.com/v1/models", "https://www.google.com/", "https://www.youtube.com/", "https://api.anthropic.com/v1/models"}
+		results := make(map[string]map[string]any, len(targets))
+		type observation struct {
+			url    string
+			result map[string]any
+		}
+		answers := make(chan observation, len(targets))
+		for _, target := range targets {
+			go func() {
+				result, _ := measure(requestCtx, client, target)
+				answers <- observation{target, result}
+			}()
+		}
+		for range targets {
+			answer := <-answers
+			results[answer.url] = answer.result
+		}
+		finish(map[string]any{"sites": results, "elapsedMs": time.Since(started).Milliseconds()}, 0)
+	}
+	result, code := measure(requestCtx, client, cfg.TargetURL)
+	finish(result, code)
+}
+
+func measure(ctx context.Context, client *http.Client, target string) (map[string]any, int) {
+	request, _ := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+	if target == "https://api.anthropic.com/v1/models" {
 		request.Header.Set("anthropic-version", "2026-10-21")
 	}
 	start := time.Now()
@@ -139,7 +166,7 @@ func main() {
 		}
 	} else {
 		result["httpStatus"] = response.StatusCode
-		if cfg.TargetURL == "https://ipv4.icanhazip.com/" || cfg.TargetURL == "https://api.ipify.org/" {
+		if target == "https://ipv4.icanhazip.com/" || target == "https://api.ipify.org/" {
 			body, readErr := io.ReadAll(io.LimitReader(response.Body, 65))
 			ip := net.ParseIP(strings.TrimSpace(string(body)))
 			if readErr != nil || len(body) > 64 || response.StatusCode != 200 || ip == nil || ip.To4() == nil {
@@ -154,5 +181,5 @@ func main() {
 	if err != nil {
 		code = 1
 	}
-	finish(result, code)
+	return result, code
 }

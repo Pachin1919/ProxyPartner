@@ -15,8 +15,10 @@ For a runtime configuration stored elsewhere, save the active local YAML path in
   .\ProxyPartner.Cli.exe probe --profile 'D:\profiles\nodes.yaml' --all --rounds 3 --kernel-latency
 
 probe 逐节点输出 JSON Lines，包含五站 HTTP 状态和延迟、评分及多轮平均耗时。--kernel-latency 只读取已有内核样本。
---parallel 设置同时处理的节点数（默认 4，最多 12）。Go 探测子进程仍限制为同时运行一个。
-入口 DNS 或站点无 HTTP 响应时最多重试一次。站点的 retried 字段记录是否重试，评分计入第一次失败的样本。
+--min-parallel 与 --max-parallel 设置节点并发范围，默认 4 至 8，合法范围 1 至 12。--parallel 设置固定并发。
+同一 Go 子进程并行测完一个节点的五站；同时最多一个 Go 子进程。排队和入口 DNS 解析先于五站计时。
+独立探测开始时上限为 6000 毫秒。原生和 Go 各采集前四个五站齐全样本，再把各自的平均耗时用作后续节点的截止时间。
+--node-timeout-ms 可固定五站截止时间。到期保留收到的响应，并记录未收到响应的超时项。网站请求不额外重试。
 AnyTLS 和 Mieru 使用已安装的适配器。它们支持 YAML nameserver-policy 的精确域名和 +.域名后缀 HTTPS DNS。
 该解析走常规 HTTPS 并校验证书，支持把 h3=true 或 skip-cert-verify=true 的端点按常规 HTTPS 使用。
 带有 age.exe 的构建可直接读取标准 AGE 配置。inspect 和 probe 都接受 --age-identity 指定本机对应的 AGE 密钥文件，解密后的 YAML 通过进程管道解析，不生成明文文件。

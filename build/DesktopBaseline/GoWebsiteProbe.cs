@@ -13,6 +13,7 @@ internal sealed record GoProbeRequest(string Type, string Server, int Port, stri
 internal sealed record GoProbeReply(string Status, int? HttpStatus, int? ElapsedMs, string? ExitIp);
 internal sealed record GoDnsRequest(string Host, string[] Endpoints);
 internal sealed record GoDnsReply(string? Address);
+internal sealed record GoProbeRound(Dictionary<string, GoProbeReply>? Sites, int ElapsedMs);
 
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase,
     DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull)]
@@ -20,6 +21,7 @@ internal sealed record GoDnsReply(string? Address);
 [JsonSerializable(typeof(GoProbeReply))]
 [JsonSerializable(typeof(GoDnsRequest))]
 [JsonSerializable(typeof(GoDnsReply))]
+[JsonSerializable(typeof(GoProbeRound))]
 internal sealed partial class GoProbeJson : JsonSerializerContext { }
 
 internal static class GoWebsiteProbe
@@ -55,8 +57,14 @@ internal static class GoWebsiteProbe
         return reply?.Address;
     }
 
+    internal static async Task<(GoProbeRound? Round, bool TimedOut)> MeasureRoundAsync(
+        GoProbeRequest settings, int timeoutMs, CancellationToken stop) =>
+        await RunAsync("--batch", settings with { TimeoutMs = timeoutMs }, GoProbeJson.Default.GoProbeRequest,
+            GoProbeJson.Default.GoProbeRound, TimeSpan.FromMilliseconds(timeoutMs + 750), stop, 2048);
+
     private static async Task<(TReply? Reply, bool TimedOut)> RunAsync<TRequest, TReply>(string? argument,
-        TRequest request, JsonTypeInfo<TRequest> input, JsonTypeInfo<TReply> output, TimeSpan timeout, CancellationToken stop)
+        TRequest request, JsonTypeInfo<TRequest> input, JsonTypeInfo<TReply> output, TimeSpan timeout, CancellationToken stop,
+        int replyLimit = ReplyLimit)
         where TReply : class
     {
         if (!IsInstalled) return default;
@@ -71,10 +79,10 @@ internal static class GoWebsiteProbe
                 RedirectStandardOutput = true, RedirectStandardError = true
             };
             if (argument is not null) start.ArgumentList.Add(argument);
-            byte[] response = new byte[ReplyLimit];
+            byte[] response = new byte[replyLimit];
             var (count, exit) = await ProbeChild.ReadAsync(start, response, budget.Token,
                 stream => JsonSerializer.SerializeAsync(stream, request, input, budget.Token)).ConfigureAwait(false);
-            if (count is 0 or ReplyLimit) return default;
+            if (count == 0 || count == response.Length) return default;
             var reply = JsonSerializer.Deserialize(response.AsSpan(0, count), output);
             return exit != 0 && (reply is not GoProbeReply probe || probe.Status == "ok") ? default : (reply, false);
         }
