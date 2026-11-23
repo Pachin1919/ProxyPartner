@@ -227,7 +227,7 @@ int wmain(int argc,wchar_t** argv) {
         app.prefs.profile=(root/L"inspect-only.yaml").wstring();
         {
             std::ofstream profile(app.prefs.profile);
-            profile<<"proxies:\n  - name: '"<<Utf8(L"contract-only · 香港")<<"'\n    type: ss\n    server: 127.0.0.1\n    port: 9\n    cipher: chacha20-ietf-poly1305\n    password: fixture-only\n    plugin: obfs\n    plugin-opts:\n      mode: tls\n      host: example.invalid\n";
+            profile<<"proxies:\n  - name: '"<<Utf8(L"contract-only · 香港")<<"'\n    type: anytls\n    server: 127.0.0.1\n    port: 9\n    password: fixture-only\n";
         }
         app.Start(true);
         deadline=GetTickCount64()+15000;
