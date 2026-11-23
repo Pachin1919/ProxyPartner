@@ -32,6 +32,14 @@ void InitializeHiddenApp() {
         app.icons[i]=static_cast<HICON>(LoadImageW(nullptr,path.c_str(),IMAGE_ICON,0,0,LR_LOADFROMFILE));
     }
 }
+bool CompleteCoverage(const std::vector<Node>& rows,size_t eligible,bool summary,int completed,int scored) {
+    if(!summary || eligible==0 || completed<static_cast<int>(eligible) || scored<static_cast<int>(eligible))return false;
+    size_t covered=0;
+    for(const auto& node:rows){
+        if(node.round>0 && node.score>=0 && std::all_of(node.sites.begin(),node.sites.end(),[](const Site& site){return site.attempted && !site.active;}))++covered;
+    }
+    return covered>=eligible;
+}
 int Acceptance(int argc,wchar_t** argv) {
     fs::path output;
     for(int i=2;i<argc;++i){
@@ -60,6 +68,7 @@ int Acceptance(int argc,wchar_t** argv) {
     };
     run(true);
     bool catalog=!app.nodes.empty();
+    size_t eligible=std::count_if(app.nodes.begin(),app.nodes.end(),[](const Node& node){return node.state==L"ready";});
     if(catalog)run(false);
     Json counts=Json::object();
     int scored=0,received=0;
@@ -76,9 +85,9 @@ int Acceptance(int argc,wchar_t** argv) {
     JOBOBJECT_BASIC_ACCOUNTING_INFORMATION processes{};
     bool accounting=QueryInformationJobObject(job,JobObjectExtendedLimitInformation,&memory,sizeof memory,nullptr) &&
         QueryInformationJobObject(job,JobObjectBasicAccountingInformation,&processes,sizeof processes,nullptr);
-    bool finished=catalog && app.sawSummary && !app.Running();
+    bool finished=catalog && !app.Running() && CompleteCoverage(app.nodes,eligible,app.sawSummary,app.completed,app.scored);
     Json result={{"status",finished && accounting?"COMPLETE":"INCOMPLETE"},{"nodes",app.nodes.size()},
-        {"received_nodes",received},{"scored_nodes",scored},{"cli_completed",app.completed},{"attempts",app.attempts},
+        {"eligible_nodes",eligible},{"received_nodes",received},{"scored_nodes",scored},{"cli_completed",app.completed},{"attempts",app.attempts},
         {"http_counts",counts},{"wall_ms",GetTickCount64()-started},{"deadline_ms",6000},
         {"peak_job_commit_bytes",memory.PeakJobMemoryUsed},{"total_job_processes",processes.TotalProcesses},
         {"active_job_processes_at_report",processes.ActiveProcesses},{"accounting",accounting},
@@ -142,11 +151,27 @@ int wmain(int argc,wchar_t** argv) {
     Check(app.nodes.size()==1 && app.nodes[0].probing && app.nodes[0].sites[4].active,"All five pending sites");
     Json sites=Json::array();
     for(int i=0;i<5;++i)sites.push_back({{"target",Utf8(SiteIds[i])},{"attempted",true},{"httpStatus",i==2?401:i==3?403:200},{"latencyMs",120+i},{"timedOut",false}});
-    Check(app.Event(Json{{"event","round"},{"node",Utf8(L"香港节点")},{"score",74},{"round",1},{"stableTargets",0},{"sites",sites}}),"Round accepted");
+    Check(app.Event(Json{{"event","round"},{"node",Utf8(L"香港节点")},{"score",74},{"round",1},{"stableTargets",0},
+        {"kernelLatencyMs",88},{"kernelObservedUtc","2026-11-23T00:00:00Z"},{"sites",sites}}),"Round accepted");
     auto& node=app.nodes[0];
     Check(node.score==74 && !node.probing && !node.sites[4].active,"Score and completed activity");
+    Check(CompleteCoverage(app.nodes,1,true,1,1),"Complete coverage permits HTTP 401 and 403");
+    Check(!CompleteCoverage(app.nodes,0,true,0,0),"Zero eligible coverage is incomplete");
+    Check(!CompleteCoverage(app.nodes,1,true,1,0),"Zero scored nodes is incomplete");
+    auto incomplete=app.nodes;
+    incomplete[0].sites[4].attempted=false;
+    Check(!CompleteCoverage(incomplete,1,true,1,1),"Unattempted site is incomplete");
+    incomplete=app.nodes;
+    incomplete[0].sites[4].timeout=true;
+    incomplete[0].sites[4].http=-1;
+    Check(CompleteCoverage(incomplete,1,true,1,1),"Attempted timeout with complete score can finish");
     Check(SiteText(node.sites[2],false,true).find(L"401")!=std::wstring::npos,"401 retained in detail");
     Check(SiteText(node.sites[3],false,true).find(L"403")!=std::wstring::npos,"403 retained in detail");
+    Check(SiteText(node.sites[2],false)==L"122 ms" && SiteText(node.sites[3],false)==L"123 ms","401 and 403 responses display actual timing");
+    Check(CoreText(node)==L"88 ms" && CoreText(node,true).find(L"2026-11-23T00:00:00Z")!=std::wstring::npos &&
+        CoreText(node,true).find(L"Mihomo")!=std::wstring::npos,"Core timing retains source and sample time");
+    Node missingCore;
+    Check(CoreText(missingCore)==L"无数据","Missing kernel sample remains missing");
     Check(node.sites[0].http==200 && node.sites[1].http==200 && node.sites[4].latency==124,"All five target positions");
     SetWindowTextW(app.search,L"香港");
     app.Filter();
@@ -236,6 +261,54 @@ int wmain(int argc,wchar_t** argv) {
         Check(realCliInspect,"Real native CLI inspect integration");
         if(app.Running())app.Finish(true);
     }
+    Check(!ValidTarget({L"file:///C:/test",L"EX",L"+"}),"Reject non HTTP registration");
+    Check(!ValidTarget({L"https://user:password@example.invalid",L"EX",L"+"}),"Reject target credentials");
+    fs::path legacy=root/L"legacy-settings.json",native=root/L"migrated-preferences.json";
+    Json legacyValue={{"English",true},{"Light",true},
+        {"Components",{{"First",50},{"Second",35},{"Third",15}}},
+        {"Targets",{{"First",60},{"Second",30},{"Third",10}}},
+        {"CustomTargets",Json::array({{{"Url","https://example.invalid/old"},{"ShortName","EX"},{"Symbol",Utf8(L"◆")}}})},
+        {"ProbeProfilePath",Utf8(app.prefs.profile)}};
+    std::string legacyBytes=legacyValue.dump();
+    {std::ofstream old(legacy,std::ios::binary);old<<legacyBytes;}
+    app.Load(native,legacy);
+    Check(app.prefs.english && app.prefs.light && app.prefs.components[0]==50 && app.prefs.customTargets.size()==1,"Legacy preferences imported");
+    Check(!fs::exists(native),"Legacy import does not write a new file on startup");
+    app.Theme();
+    app.ShowPreferences(false);
+    Check(app.preferencesWindow!=nullptr,"Hidden native preferences window created");
+    Check(Field(app.preferencesWindow,DemoExample).find(L"82.0")!=std::wstring::npos,"Default weight example");
+    SetDlgItemTextW(app.preferencesWindow,WeightFirst,L"51");
+    SendMessageW(app.preferencesWindow,WM_COMMAND,SaveTargets,0);
+    Check(app.preferencesWindow && !fs::exists(native),"Invalid demo weights do not save");
+    int weightValues[]={70,20,10,50,40,10};
+    for(int i=0;i<6;++i)SetDlgItemTextW(app.preferencesWindow,WeightFirst+i,std::to_wstring(weightValues[i]).c_str());
+    Check(Field(app.preferencesWindow,DemoExample).find(L"81.8")!=std::wstring::npos,"Edited weight example recalculates");
+    SetDlgItemTextW(app.preferencesWindow,TargetUrl,L"https://example.invalid/new");
+    SetDlgItemTextW(app.preferencesWindow,TargetShort,L"NEW");
+    SetDlgItemTextW(app.preferencesWindow,TargetSymbol,L"+");
+    SendMessageW(app.preferencesWindow,WM_COMMAND,AddTarget,0);
+    Check(app.draftTargets.size()==2,"Custom registration added to draft");
+    SetDlgItemTextW(app.preferencesWindow,TargetShort,L"EDITED");
+    SendMessageW(app.preferencesWindow,WM_COMMAND,EditTarget,0);
+    Check(app.draftTargets.back().shortName==L"EDITED","Custom registration edited");
+    RECT bounds{};GetWindowRect(app.preferencesWindow,&bounds);
+    MoveWindow(app.preferencesWindow,bounds.left,bounds.top,bounds.right-bounds.left,487,TRUE);
+    app.SizePreferences(INT_MAX);
+    RECT saveRect{},client{};GetWindowRect(GetDlgItem(app.preferencesWindow,SaveTargets),&saveRect);
+    MapWindowPoints(nullptr,app.preferencesWindow,reinterpret_cast<POINT*>(&saveRect),2);
+    GetClientRect(app.preferencesWindow,&client);
+    Check(saveRect.top>=0 && saveRect.bottom<=client.bottom,"Save reachable in 487px native viewport");
+    SendMessageW(app.preferencesWindow,WM_COMMAND,SaveTargets,0);
+    Check(!app.preferencesWindow && fs::exists(native),"Valid preferences saved");
+    Preferences reloaded;
+    Check(LoadPreferenceFile(native,reloaded,false) && reloaded.customTargets.size()==2 && reloaded.components[0]==70,"Native preferences roundtrip");
+    {std::ifstream original(legacy,std::ios::binary);std::string contents((std::istreambuf_iterator<char>(original)),{});Check(contents==legacyBytes,"Legacy preference file preserved");}
+    app.ShowPreferences(false);
+    app.RefreshRegistered(1);
+    SendMessageW(app.preferencesWindow,WM_COMMAND,RemoveTarget,0);
+    SendMessageW(app.preferencesWindow,WM_COMMAND,SaveTargets,0);
+    Check(LoadPreferenceFile(native,reloaded,false) && reloaded.customTargets.size()==1,"Registered removal persisted");
     if(app.font)DeleteObject(app.font);
     if(app.bold)DeleteObject(app.bold);
     if(app.scoreFont)DeleteObject(app.scoreFont);

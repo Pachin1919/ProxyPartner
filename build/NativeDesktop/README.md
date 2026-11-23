@@ -36,6 +36,10 @@ with a fixed 6000 ms deadline and adaptive concurrency 4–8. Supply an output f
 which does not exist. The report contains aggregate counts, scores and Job Object
 peak through report time, including the acceptance process and all CLI descendants.
 No node names, addresses, configuration contents or identity material are written.
+`COMPLETE` requires a nonzero eligible catalog, terminal summary, completed and
+scored counts covering that catalog, and five attempted terminal sites plus a
+numeric score for each eligible node. HTTP rejections and attempted timeouts may
+still complete. Missing attempts or zero scored nodes produce `INCOMPLETE`.
 
 ```powershell
 NativeDesktop.Tests.exe --acceptance --cli-dir F:/path/to/publish --profile F:/approved/profile.age --age-identity F:/approved/identity.txt --output F:/new-run/acceptance.json
@@ -50,3 +54,23 @@ Reuse is from this repository at `af29444` under its existing license. The Win32
 virtual list, card layout, colors, native icon loading, DPI handling and preference
 behavior follow `src/ProxyPartnerLite/Desktop/`. The existing
 `experiments/cpp-probe/desktop.cpp` is a transport DLL and provides no window code.
+
+The restored settings match the actual `af29444` scope. Component weights default
+to 50/35/15 and target weights to 60/30/10. Each group must total 100. They update
+the fixed sample example only. Custom HTTP(S) targets can be added, edited and
+removed, remain untested, and make no network requests. The same source JSON
+boundary reads legacy C# names and native preferences, preserving the original
+legacy file. Native preferences take precedence once saved. Missing or invalid
+preferences fall back to defaults without overwriting either file.
+
+The baseline has `--tray` and in-process history windows. It does not include
+automatic logon installation or a SQLite-backed desktop history path. These are
+not prerequisites for preserving that baseline. Current-route and exit/history
+fields will be connected once the backend's actual JSONL contract is frozen.
+
+Website cells show actual response timing when HTTP status and timing are present,
+including 401 and 403. Details and native hover hints retain the status semantics.
+Cards and the separate core-history table column display existing kernel latency,
+with source/sample time in the hint and details. Missing samples display no data.
+The default core sample option passes `--kernel-latency`, which reads existing
+history through the CLI. Explicit saved preferences retain their selected option.
