@@ -32,6 +32,14 @@ void InitializeHiddenApp() {
         app.icons[i]=static_cast<HICON>(LoadImageW(nullptr,path.c_str(),IMAGE_ICON,0,0,LR_LOADFROMFILE));
     }
 }
+bool CompleteCoverage(const std::vector<Node>& rows,size_t eligible,bool summary,int completed,int scored) {
+    if(!summary || eligible==0 || completed<static_cast<int>(eligible) || scored<static_cast<int>(eligible))return false;
+    size_t covered=0;
+    for(const auto& node:rows){
+        if(node.round>0 && node.score>=0 && std::all_of(node.sites.begin(),node.sites.end(),[](const Site& site){return site.attempted && !site.active;}))++covered;
+    }
+    return covered>=eligible;
+}
 int Acceptance(int argc,wchar_t** argv) {
     fs::path output;
     for(int i=2;i<argc;++i){
@@ -60,6 +68,7 @@ int Acceptance(int argc,wchar_t** argv) {
     };
     run(true);
     bool catalog=!app.nodes.empty();
+    size_t eligible=std::count_if(app.nodes.begin(),app.nodes.end(),[](const Node& node){return node.state==L"ready";});
     if(catalog)run(false);
     Json counts=Json::object();
     int scored=0,received=0;
@@ -76,9 +85,9 @@ int Acceptance(int argc,wchar_t** argv) {
     JOBOBJECT_BASIC_ACCOUNTING_INFORMATION processes{};
     bool accounting=QueryInformationJobObject(job,JobObjectExtendedLimitInformation,&memory,sizeof memory,nullptr) &&
         QueryInformationJobObject(job,JobObjectBasicAccountingInformation,&processes,sizeof processes,nullptr);
-    bool finished=catalog && app.sawSummary && !app.Running();
+    bool finished=catalog && !app.Running() && CompleteCoverage(app.nodes,eligible,app.sawSummary,app.completed,app.scored);
     Json result={{"status",finished && accounting?"COMPLETE":"INCOMPLETE"},{"nodes",app.nodes.size()},
-        {"received_nodes",received},{"scored_nodes",scored},{"cli_completed",app.completed},{"attempts",app.attempts},
+        {"eligible_nodes",eligible},{"received_nodes",received},{"scored_nodes",scored},{"cli_completed",app.completed},{"attempts",app.attempts},
         {"http_counts",counts},{"wall_ms",GetTickCount64()-started},{"deadline_ms",6000},
         {"peak_job_commit_bytes",memory.PeakJobMemoryUsed},{"total_job_processes",processes.TotalProcesses},
         {"active_job_processes_at_report",processes.ActiveProcesses},{"accounting",accounting},
@@ -145,6 +154,16 @@ int wmain(int argc,wchar_t** argv) {
     Check(app.Event(Json{{"event","round"},{"node",Utf8(L"香港节点")},{"score",74},{"round",1},{"stableTargets",0},{"sites",sites}}),"Round accepted");
     auto& node=app.nodes[0];
     Check(node.score==74 && !node.probing && !node.sites[4].active,"Score and completed activity");
+    Check(CompleteCoverage(app.nodes,1,true,1,1),"Complete coverage permits HTTP 401 and 403");
+    Check(!CompleteCoverage(app.nodes,0,true,0,0),"Zero eligible coverage is incomplete");
+    Check(!CompleteCoverage(app.nodes,1,true,1,0),"Zero scored nodes is incomplete");
+    auto incomplete=app.nodes;
+    incomplete[0].sites[4].attempted=false;
+    Check(!CompleteCoverage(incomplete,1,true,1,1),"Unattempted site is incomplete");
+    incomplete=app.nodes;
+    incomplete[0].sites[4].timeout=true;
+    incomplete[0].sites[4].http=-1;
+    Check(CompleteCoverage(incomplete,1,true,1,1),"Attempted timeout with complete score can finish");
     Check(SiteText(node.sites[2],false,true).find(L"401")!=std::wstring::npos,"401 retained in detail");
     Check(SiteText(node.sites[3],false,true).find(L"403")!=std::wstring::npos,"403 retained in detail");
     Check(node.sites[0].http==200 && node.sites[1].http==200 && node.sites[4].latency==124,"All five target positions");
