@@ -12,6 +12,7 @@
 
 #include "age.hpp"
 #include "host.hpp"
+#include "v2ray_fields.hpp"
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -92,20 +93,23 @@ std::optional<unsigned> integer(std::string_view value) {
     return number;
 }
 
-enum class Protocol { AnyTls, Mieru, Shadowsocks, Unsupported };
+enum class Protocol { AnyTls, Mieru, Shadowsocks, Vless, Vmess, Unsupported };
 struct Node {
     std::string name, server, port, username, password, sni, ech, pattern, multiplexing, handshake, obfs, cipher;
+    v2ray_fields::Fields v2ray;
     Protocol protocol = Protocol::Unsupported;
     Node() = default;
     Node(Node&&) noexcept = default;
     Node& operator=(Node&&) noexcept = default;
-    ~Node() { if (!password.empty()) OPENSSL_cleanse(password.data(), password.size()); }
+    ~Node() { if (!password.empty()) OPENSSL_cleanse(password.data(), password.size());OPENSSL_cleanse(v2ray.uuid.data(),v2ray.uuid.size()); }
 };
 const char* protocol_name(Protocol protocol) {
     switch (protocol) {
     case Protocol::AnyTls: return "AnyTLS";
     case Protocol::Mieru: return "Mieru";
     case Protocol::Shadowsocks: return "Shadowsocks";
+    case Protocol::Vless: return "Vless";
+    case Protocol::Vmess: return "Vmess";
     default: return "Unsupported";
     }
 }
@@ -137,6 +141,37 @@ bool port_ok(std::string_view value) {
     const auto port = integer(value);
     return port && *port >= 1 && *port <= 65535;
 }
+bool read_v2ray_yaml(yaml_document_t& document,yaml_node_t* entry,Node& node,bool vmess) {
+    auto value=[&](std::string_view key){return scalar(field(document,entry,key));};
+    bool allowed=vmess ? fields(document,entry,{"name","type","server","port","uuid","alterId","cipher","tls","servername","network","ws-opts","alpn","skip-cert-verify","udp","xudp","packet-addr","packet-encoding","global-padding","authenticated-length"}) :
+        fields(document,entry,{"name","type","server","port","uuid","network","tls","servername","client-fingerprint","flow","encryption","reality-opts","ws-opts","alpn","udp","xudp","packet-addr","packet-encoding","dialer-proxy","interface-name","ip-version","routing-mark","skip-cert-verify","tfo","mptcp","alterId","cipher"});
+    auto disabled=[&](const char* key){auto v=value(key);std::transform(v.begin(),v.end(),v.begin(),[](char c){return c>='A'&&c<='Z'?static_cast<char>(c+'a'-'A'):c;});return v.empty()||v=="false";};
+    if(!allowed || !disabled("skip-cert-verify") || !value("alterId").empty() && value("alterId")!="0")return false;
+    auto& out=node.v2ray;out.vmess=vmess;out.server=node.server;out.port=node.port;out.uuid=value("uuid");out.network=value("network");out.cipher=value("cipher");out.sni=value("servername");
+    auto tls=value("tls");std::transform(tls.begin(),tls.end(),tls.begin(),[](char c){return c>='A'&&c<='Z'?static_cast<char>(c+'a'-'A'):c;});if(!tls.empty()&&tls!="true"&&tls!="false")return false;out.security=tls=="true"?"tls":"none";
+    if(vmess){if(!disabled("global-padding")||!disabled("authenticated-length"))return false;}
+    else {
+        if(!value("encryption").empty()&&value("encryption")!="none" || !value("cipher").empty()&&value("cipher")!="none"&&value("cipher")!="auto" ||
+            !value("dialer-proxy").empty() || !value("interface-name").empty() || !value("ip-version").empty()&&value("ip-version")!="dual" ||
+            !value("routing-mark").empty()&&value("routing-mark")!="0" || !disabled("tfo")||!disabled("mptcp"))return false;
+        out.flow=value("flow");out.fingerprint=value("client-fingerprint");
+        if(auto reality=field(document,entry,"reality-opts")){if(!fields(document,reality,{"public-key","short-id"}))return false;out.security="reality";out.publicKey=scalar(field(document,reality,"public-key"));out.shortId=scalar(field(document,reality,"short-id"));}
+    }
+    if(auto ws=field(document,entry,"ws-opts")){
+        if(!fields(document,ws,{"path","headers","max-early-data","v2ray-http-upgrade","v2ray-http-upgrade-fast-open"}))return false;
+        out.path=scalar(field(document,ws,"path"));
+        auto early=scalar(field(document,ws,"max-early-data")),fast=scalar(field(document,ws,"v2ray-http-upgrade-fast-open"));
+        if(!early.empty()&&early!="0" || !fast.empty()&&fast!="false")return false;
+        if(auto headers=field(document,ws,"headers")){if(!fields(document,headers,{"Host","host"}) || headers->data.mapping.pairs.top-headers->data.mapping.pairs.start>1)return false;out.host=scalar(field(document,headers,"Host"));if(out.host.empty())out.host=scalar(field(document,headers,"host"));}
+        if(out.network=="ws"&&scalar(field(document,ws,"v2ray-http-upgrade"))=="true")out.network="httpupgrade";
+    }
+    if(auto alpn=field(document,entry,"alpn")){
+        if(alpn->type!=YAML_SEQUENCE_NODE)return false;
+        for(auto p=alpn->data.sequence.items.start;p!=alpn->data.sequence.items.top;++p){auto token=scalar(yaml_document_get_node(&document,*p));if(token.empty()||token.size()>255||!v2ray_fields::clean(token,255)||token.find(',')!=token.npos)return false;if(!out.alpn.empty())out.alpn+=',';out.alpn+=token;}
+    }
+    if(vmess && out.network!="tcp" && !out.network.empty())out.alpn="http/1.1";
+    return v2ray_fields::validate(out);
+}
 std::optional<Profile> parse_profile(std::string_view text) {
     yaml_parser_t parser{};
     yaml_document_t document{};
@@ -164,6 +199,7 @@ std::optional<Profile> parse_profile(std::string_view text) {
         node.port = value("port");
         node.password = value("password");
         const auto type = value("type");
+        if((type=="vless"||type=="vmess") && read_v2ray_yaml(document,entry,node,type=="vmess")) node.protocol=type=="vless"?Protocol::Vless:Protocol::Vmess;
         if (!node.server.empty() && node.server.size() <= 253 && !node.password.empty() &&
             node.password.size() <= (type=="ss"?12288u:4096u) && (type=="ss" || node.password.find('\0') == std::string::npos)) {
             if (type == "anytls" && port_ok(node.port) &&
@@ -440,7 +476,10 @@ struct Adapters {
     SsEcho ssEcho{};
     AnyEcho anyEcho{};
     MieruEcho mieruEcho{};
-    Library anytls, mieru, shadowsocks;
+    using V2Ray = int (*)(const char*,const char*,const V2RayConfigV1*,const char*,const char*,const char*,unsigned,HANDLE,int*);
+    using V2RayEcho = int (*)(const char*,const char*,const V2RayConfigV1*,const char*,const char*,const char*,unsigned,HANDLE,int*,char*,unsigned,unsigned*);
+    V2Ray v2rayWebsite{};V2RayEcho v2rayEcho{};
+    Library anytls, mieru, shadowsocks, v2ray;
     AnyTls any{};
     Mieru basic{};
     MieruV2 shaped{};
@@ -450,6 +489,10 @@ struct Adapters {
         auto needed = [&nodes](Protocol type) { return std::any_of(nodes.begin(), nodes.end(),
             [type](const Node& n) { return n.protocol == type; }); };
         const auto ca = root / L"probe-ca-bundle.crt";
+        if((needed(Protocol::Vless)||needed(Protocol::Vmess)) && v2ray.load(root/L"ProxyPartner.V2RayProbe.dll",ca)) {
+            v2rayWebsite=v2ray.entry<V2Ray>("ProbeV2RayWebsite");
+            if(echo)v2rayEcho=v2ray.entry<V2RayEcho>("ProbeV2RayEcho");
+        }
         if (needed(Protocol::AnyTls) && anytls.load(root / L"ProxyPartner.AnyTlsProbe.dll", ca))
             any = anytls.entry<AnyTls>("ProbeAnyTlsWebsite");
         if (needed(Protocol::Mieru) && mieru.load(root / L"ProxyPartner.MieruProbe.dll", ca)) {
@@ -476,6 +519,7 @@ struct Adapters {
         case Protocol::AnyTls: return any != nullptr;
         case Protocol::Mieru: return n.pattern.empty() ? basic != nullptr : shaped != nullptr;
         case Protocol::Shadowsocks: return ssV2 || ss && legacy_ss(n);
+        case Protocol::Vless: case Protocol::Vmess: return v2rayWebsite!=nullptr;
         default: return false;
         }
     }
@@ -496,6 +540,9 @@ struct Adapters {
                 result = shaped(ip, port, n.username.c_str(), password, n.pattern.c_str(), n.multiplexing.c_str(), n.handshake.c_str(),
                     t.host, t.path, t.headers, remaining, cancelEvent, &status);
             break;
+        case Protocol::Vless: case Protocol::Vmess: {
+            auto config=n.v2ray.native();result=v2rayWebsite(ip,port,&config,t.host,t.path,t.headers,remaining,cancelEvent,&status);break;
+        }
         case Protocol::Shadowsocks:
             result = ssV2?ssV2(ip,port,password,static_cast<unsigned>(n.password.size()),n.cipher.c_str(),n.obfs.c_str(),t.host,t.path,t.headers,remaining,cancelEvent,&status) :
                 ss(ip,port,password,n.obfs.c_str(),t.host,t.path,t.headers,remaining,cancelEvent,&status);
@@ -746,7 +793,7 @@ int wmain(int argc, wchar_t** argv) {
         for (const auto& group : host.groups)
             write_event({{"event","group"},{"name",group.name},{"type",group.type},{"selected",group.selected}});
     }
-    std::array<Budget, 3> budgets{Budget(options->timeout), Budget(options->timeout), Budget(options->timeout)};
+    std::array<Budget, 5> budgets{Budget(options->timeout), Budget(options->timeout), Budget(options->timeout), Budget(options->timeout), Budget(options->timeout)};
     std::vector<const Node*> queue;
     for (const auto& node : profile->nodes) {
         if (!options->node.empty() && options->node != node.name) continue;
