@@ -54,3 +54,16 @@ Reuse is from this repository at `af29444` under its existing license. The Win32
 virtual list, card layout, colors, native icon loading, DPI handling and preference
 behavior follow `src/ProxyPartnerLite/Desktop/`. The existing
 `experiments/cpp-probe/desktop.cpp` is a transport DLL and provides no window code.
+
+The restored settings match the actual `af29444` scope. Component weights default
+to 50/35/15 and target weights to 60/30/10. Each group must total 100. They update
+the fixed sample example only. Custom HTTP(S) targets can be added, edited and
+removed, remain untested, and make no network requests. The same source JSON
+boundary reads legacy C# names and native preferences, preserving the original
+legacy file. Native preferences take precedence once saved. Missing or invalid
+preferences fall back to defaults without overwriting either file.
+
+The baseline has `--tray` and in-process history windows. It does not include
+automatic logon installation or a SQLite-backed desktop history path. These are
+not prerequisites for preserving that baseline. Current-route and exit/history
+fields will be connected once the backend's actual JSONL contract is frozen.

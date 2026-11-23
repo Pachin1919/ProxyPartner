@@ -255,6 +255,54 @@ int wmain(int argc,wchar_t** argv) {
         Check(realCliInspect,"Real native CLI inspect integration");
         if(app.Running())app.Finish(true);
     }
+    Check(!ValidTarget({L"file:///C:/test",L"EX",L"+"}),"Reject non HTTP registration");
+    Check(!ValidTarget({L"https://user:password@example.invalid",L"EX",L"+"}),"Reject target credentials");
+    fs::path legacy=root/L"legacy-settings.json",native=root/L"migrated-preferences.json";
+    Json legacyValue={{"English",true},{"Light",true},
+        {"Components",{{"First",50},{"Second",35},{"Third",15}}},
+        {"Targets",{{"First",60},{"Second",30},{"Third",10}}},
+        {"CustomTargets",Json::array({{{"Url","https://example.invalid/old"},{"ShortName","EX"},{"Symbol",Utf8(L"◆")}}})},
+        {"ProbeProfilePath",Utf8(app.prefs.profile)}};
+    std::string legacyBytes=legacyValue.dump();
+    {std::ofstream old(legacy,std::ios::binary);old<<legacyBytes;}
+    app.Load(native,legacy);
+    Check(app.prefs.english && app.prefs.light && app.prefs.components[0]==50 && app.prefs.customTargets.size()==1,"Legacy preferences imported");
+    Check(!fs::exists(native),"Legacy import does not write a new file on startup");
+    app.Theme();
+    app.ShowPreferences(false);
+    Check(app.preferencesWindow!=nullptr,"Hidden native preferences window created");
+    Check(Field(app.preferencesWindow,DemoExample).find(L"82.0")!=std::wstring::npos,"Default weight example");
+    SetDlgItemTextW(app.preferencesWindow,WeightFirst,L"51");
+    SendMessageW(app.preferencesWindow,WM_COMMAND,SaveTargets,0);
+    Check(app.preferencesWindow && !fs::exists(native),"Invalid demo weights do not save");
+    int weightValues[]={70,20,10,50,40,10};
+    for(int i=0;i<6;++i)SetDlgItemTextW(app.preferencesWindow,WeightFirst+i,std::to_wstring(weightValues[i]).c_str());
+    Check(Field(app.preferencesWindow,DemoExample).find(L"81.8")!=std::wstring::npos,"Edited weight example recalculates");
+    SetDlgItemTextW(app.preferencesWindow,TargetUrl,L"https://example.invalid/new");
+    SetDlgItemTextW(app.preferencesWindow,TargetShort,L"NEW");
+    SetDlgItemTextW(app.preferencesWindow,TargetSymbol,L"+");
+    SendMessageW(app.preferencesWindow,WM_COMMAND,AddTarget,0);
+    Check(app.draftTargets.size()==2,"Custom registration added to draft");
+    SetDlgItemTextW(app.preferencesWindow,TargetShort,L"EDITED");
+    SendMessageW(app.preferencesWindow,WM_COMMAND,EditTarget,0);
+    Check(app.draftTargets.back().shortName==L"EDITED","Custom registration edited");
+    RECT bounds{};GetWindowRect(app.preferencesWindow,&bounds);
+    MoveWindow(app.preferencesWindow,bounds.left,bounds.top,bounds.right-bounds.left,487,TRUE);
+    app.SizePreferences(INT_MAX);
+    RECT saveRect{},client{};GetWindowRect(GetDlgItem(app.preferencesWindow,SaveTargets),&saveRect);
+    MapWindowPoints(nullptr,app.preferencesWindow,reinterpret_cast<POINT*>(&saveRect),2);
+    GetClientRect(app.preferencesWindow,&client);
+    Check(saveRect.top>=0 && saveRect.bottom<=client.bottom,"Save reachable in 487px native viewport");
+    SendMessageW(app.preferencesWindow,WM_COMMAND,SaveTargets,0);
+    Check(!app.preferencesWindow && fs::exists(native),"Valid preferences saved");
+    Preferences reloaded;
+    Check(LoadPreferenceFile(native,reloaded,false) && reloaded.customTargets.size()==2 && reloaded.components[0]==70,"Native preferences roundtrip");
+    {std::ifstream original(legacy,std::ios::binary);std::string contents((std::istreambuf_iterator<char>(original)),{});Check(contents==legacyBytes,"Legacy preference file preserved");}
+    app.ShowPreferences(false);
+    app.RefreshRegistered(1);
+    SendMessageW(app.preferencesWindow,WM_COMMAND,RemoveTarget,0);
+    SendMessageW(app.preferencesWindow,WM_COMMAND,SaveTargets,0);
+    Check(LoadPreferenceFile(native,reloaded,false) && reloaded.customTargets.size()==1,"Registered removal persisted");
     if(app.font)DeleteObject(app.font);
     if(app.bold)DeleteObject(app.bold);
     if(app.scoreFont)DeleteObject(app.scoreFont);

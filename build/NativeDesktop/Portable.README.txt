@@ -23,8 +23,12 @@ initial score do not verify login or model access. Details preserve HTTP status.
 
 This candidate implements a C++ native Win32 desktop over the CLI JSONL contract.
 The full application migration still needs independent integration and acceptance.
-Host identity discovery, current-route verification, exit-IP history, SQLite history,
-custom target/weight execution, and automatic logon installation are not implemented
-by this desktop candidate. Its CLI parameters include rounds, adaptive concurrency
+Settings includes the legacy fixed sample weight example and custom target registry.
+Registered targets remain untested. Live scores continue to come from the CLI.
+When native preferences do not exist, the desktop reads the legacy current-user
+LocalAppData\ProxyPartner\Desktop\settings.json. Saving writes only the new native
+preferences file, preserving the legacy file. The baseline history was held in memory.
+The baseline startup entry --tray is preserved. Current-route and exit/history
+events await the backend contract. Its CLI parameters include rounds, adaptive concurrency
 limits, fixed concurrency/deadline overrides, and read-only existing core samples.
 Real resource and host non-interference gates remain required.
