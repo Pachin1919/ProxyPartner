@@ -1,6 +1,9 @@
 #define UNICODE
 #define _UNICODE
 #define NOMINMAX
+#define WIN32_LEAN_AND_MEAN
+#include <winsock2.h>
+#include <ws2tcpip.h>
 #include <windows.h>
 #include <windowsx.h>
 #include <commctrl.h>
@@ -16,6 +19,7 @@
 #include <fstream>
 #include <string>
 #include <vector>
+#include <memory>
 #include <nlohmann/json.hpp>
 
 using Json = nlohmann::json;
@@ -23,7 +27,7 @@ namespace fs = std::filesystem;
 constexpr UINT Poll = 1, Spinner = 2, TrayMessage = WM_APP + 1;
 constexpr int MaxNodes = 1000;
 enum Control { Search = 101, View, Refresh, TestAll, Cancel, Settings, Details, List, Cards,
-    TestSelected = 150, VerifyCurrent, Groups,
+    TestSelected = 150, VerifyCurrent, Groups, RetestExit,
     Profile = 201, BrowseProfile, Identity, BrowseIdentity, Rounds, Parallel, Deadline, English, Light, Save, CloseSettings,
     MinParallel = 230, MaxParallel, Kernel, PreferencesButton, ProxyPort,
     WeightFirst = 400, RegisteredList = 410, TargetUrl, TargetShort, TargetSymbol, AddTarget, EditTarget, RemoveTarget,
@@ -77,12 +81,14 @@ struct Site {
     int http = -1, latency = -1;
     bool attempted = false, timeout = false, active = false;
 };
+#include "exit_model.hpp"
 struct Node {
     std::wstring name, protocol, state;
     std::array<Site, 5> sites;
     int score = -1, stable = 0, round = 0, elapsed = -1, kernel = -1;
     bool probing = false;
     std::wstring observed, kernelObserved;
+    std::shared_ptr<ExitFacts> exit;
 };
 struct CurrentPathResult {
     Site site;
@@ -124,6 +130,11 @@ struct App {
     bool currentDirect = false;
     HWND currentWindow{}, currentText{};
     HWND groupsWindow{}, groupsText{};
+    bool exitMode = false, sawExitSummary = false, exitCancelled = false;
+    std::wstring exitNode;
+    HANDLE exitStateFile{};
+    fs::path exitStatePath;
+    std::shared_ptr<ExitFacts> activeExitFacts;
     int completed = 0, total = 0, scored = 0, attempts = 0;
     HANDLE process{}, pipe{}, job{};
     ULONGLONG started = 0, lastOutput = 0;
@@ -155,7 +166,7 @@ struct App {
     void Filter();
     void Update();
     void Finish(bool stop);
-    void Start(bool catalog, const std::wstring& node = {}, bool current = false);
+    void Start(bool catalog, const std::wstring& node = {}, bool current = false, bool exit = false);
     bool Event(const Json& event);
     void Drain();
     void PaintCards(HDC dc);
@@ -165,7 +176,7 @@ struct App {
     void SyncAnimation();
     void AnimateCards();
     void ShowSettings();
-    void ShowDetails();
+    void ShowDetails(bool show=true);
     void Load(fs::path native = {},fs::path legacy = {});
     bool SavePreferences(const Preferences& value);
     void ShowPreferences(bool visible = true);
@@ -176,6 +187,10 @@ struct App {
     bool ReadDemoWeights(Preferences& value);
     std::wstring CurrentPathReport() const;
     void ShowCurrentPath(bool show = true);
+    bool ApplyExitEvent(const Json& value);
+    bool PrepareExitTransfer();
+    bool ClearExitTransfer();
+    std::wstring ExitReport(const Node& node) const;
 } app;
 std::wstring SiteText(const Site& site, bool english, bool full = false) {
     if (site.active) return english ? L"Testing" : L"测试中";
@@ -259,10 +274,10 @@ void App::Theme() {
     BOOL dark = !prefs.light;
     DwmSetWindowAttribute(window, 20, &dark, sizeof dark);
     SetWindowTextW(window, L(L"ProxyPartner · 节点质量面板", L"ProxyPartner · Node quality"));
-    const wchar_t* labels[] = {L(L"表格 / 卡片",L"Table / Cards"),L(L"刷新",L"Refresh"),L(L"全部测速",L"Test all"),
+    const wchar_t* labels[] = {L(tableMode?L"切换卡片":L"切换表格",tableMode?L"Cards":L"Table"),L(L"刷新",L"Refresh"),L(L"全部测速",L"Test all"),
         L(L"取消",L"Cancel"),L(L"设置",L"Settings"),L(L"详情",L"Details")};
     for (int i = 0; i < 6; ++i) SetWindowTextW(GetDlgItem(window, View + i), labels[i]);
-    SetWindowTextW(GetDlgItem(window,TestSelected),L(L"测所选",L"Test selected"));
+    SetWindowTextW(GetDlgItem(window,TestSelected),L(L"测所选",L"Test node"));
     SetWindowTextW(GetDlgItem(window,VerifyCurrent),L(L"验证线路",L"Verify route"));
     SetWindowTextW(GetDlgItem(window,Groups),L(L"策略组",L"Groups"));
     const wchar_t* headings[] = {L(L"节点",L"Node"),L(L"协议",L"Protocol"),L(L"评分",L"Score"),L"GO",L"YT",L"OPENAI",L"GPT",L"ANT",L(L"状态",L"State"),L(L"轮次",L"Round"),L(L"内核历史延迟",L"Core history latency")};
@@ -280,6 +295,7 @@ void App::Theme() {
     if(groupsWindow)ShowGroups(false);
 }
 void App::Layout() {
+    SetWindowTextW(GetDlgItem(window,View),L(tableMode?L"切换卡片":L"切换表格",tableMode?L"Cards":L"Table"));
     RECT client{};
     GetClientRect(window,&client);
     int pad = Px(14), width = client.right - 2 * pad;
@@ -336,14 +352,18 @@ void App::Filter() {
     Layout();
 }
 void App::Update() {
-    std::wstring line = Running() ? currentMode ? L(L"核对当前线路中",L"Verifying current route") : inspect ? L(L"读取节点中",L"Reading nodes") : L(L"测速中",L"Testing") : message;
+    std::wstring line = Running() ? exitMode ? L(L"出口观察中",L"Observing exit IP") : currentMode ? L(L"核对当前线路中",L"Verifying current route") : inspect ? L(L"读取节点中",L"Reading nodes") : L(L"测速中",L"Testing") : message;
     line += L"  |  " + std::to_wstring(visible.size()) + L(L" 个节点",L" nodes");
-    if (!inspect && !currentMode && total) line += L"  |  " + std::to_wstring(completed) + L"/" + std::to_wstring(total) +
+    if (!inspect && !currentMode && !exitMode && total) line += L"  |  " + std::to_wstring(completed) + L"/" + std::to_wstring(total) +
     L"  |  " + L(L"已评分 ",L"Scored ") + std::to_wstring(scored);
     if(verifiedCurrent)line+=std::wstring(L"  |  ")+L(L"上次核对 ",L"Last verified ")+(currentDirect?L"DIRECT":currentNode);
     SetWindowTextW(status,line.c_str());
     for (int id : {Refresh,TestAll,TestSelected,VerifyCurrent,Settings}) EnableWindow(GetDlgItem(window,id),!Running());
     EnableWindow(GetDlgItem(window,Cancel),Running());
+    if(details){
+        EnableWindow(GetDlgItem(details,RetestExit),!Running());
+        SetWindowTextW(GetDlgItem(details,RetestExit),L(L"复测出口 IP",L"Retest exit IP"));
+    }
     InvalidateRect(cards,nullptr,FALSE);
     InvalidateRect(table,nullptr,FALSE);
     SyncAnimation();
@@ -395,6 +415,7 @@ bool App::Event(const Json& value) {
         return field!=object.end() && field->is_boolean() && field->get<bool>();
     };
     std::wstring kind=string(value,"event");
+    if(exitMode)return ApplyExitEvent(value);
     if(kind==L"current_path_error"){
         if(!currentMode)return false;
         std::wstring reason=string(value,"reason");
@@ -526,6 +547,9 @@ void App::Finish(bool stop) {
     if (pipe) CloseHandle(pipe);
     process=pipe=job=nullptr;
     pending.clear();
+    if(exitMode && activeExitFacts && stop)activeExitFacts->notice=L(L"观察已停止，保留最近有效观察。",L"Observation stopped. Last valid observations retained.");
+    if(!ClearExitTransfer())message=L(L"临时出口状态文件未能删除，请保留错误回执。",L"Temporary exit state could not be deleted. Keep the error receipt.");
+    activeExitFacts.reset();
     if(currentMode){
         for(auto& result:currentResults)result.site.active=false;
         if(currentWindow)ShowCurrentPath(false);
@@ -534,13 +558,27 @@ void App::Finish(bool stop) {
         for(auto& site:node.sites) site.active=false;
     }
     Update();
+    if(details)ShowDetails(false);
 }
-void App::Start(bool catalog,const std::wstring& node,bool current) {
+void App::Start(bool catalog,const std::wstring& node,bool current,bool exit) {
     if (Running()) return;
     if (!current && (!LocalFile(prefs.profile) || !prefs.identity.empty() && !LocalFile(prefs.identity))) { ShowSettings();
         return;
     }
     currentMode=current;
+    exitMode=exit;
+    activeExitFacts.reset();
+    if(exit){
+        auto found=std::find_if(nodes.begin(),nodes.end(),[&](const Node& entry){return entry.name==node;});
+        if(found==nodes.end())return;
+        if(!found->exit)found->exit=std::make_shared<ExitFacts>();
+        activeExitFacts=found->exit;
+        exitNode=node;
+        activeExitFacts->sources={};
+        activeExitFacts->notice.clear();
+        sawExitSummary=false;
+        exitCancelled=false;
+    }
     if(current){
         currentResults={};currentSeen={};currentSummary=false;verifiedCurrent=false;
         currentNode.clear();currentAnchor.clear();currentCheckedAt.clear();currentNotice.clear();currentDirect=false;
@@ -556,7 +594,7 @@ void App::Start(bool catalog,const std::wstring& node,bool current) {
         args+=L" current-path";
         if(prefs.proxyPort)args+=L" --proxy-port "+std::to_wstring(prefs.proxyPort);
     } else {
-        args+=(catalog?L" inspect --profile ":L" probe --profile ")+Quote(prefs.profile);
+        args+=(exit?L" exit-ip --profile ":catalog?L" inspect --profile ":L" probe --profile ")+Quote(prefs.profile);
         std::wstring identity=prefs.identity;
         if(identity.empty() && !standardProfile.empty()){
             auto profile=fs::path(prefs.profile).lexically_normal().make_preferred();
@@ -566,7 +604,15 @@ void App::Start(bool catalog,const std::wstring& node,bool current) {
         }
         if (!identity.empty()) args+=L" --age-identity "+Quote(identity);
     }
-    if (!catalog && !current) {
+    if(exit){
+        if(!PrepareExitTransfer()){
+            message=L(L"无法准备本次临时出口状态，保留最近有效观察。",L"Could not prepare temporary exit state. Last valid observations retained.");
+            Update();return;
+        }
+        args+=L" --node "+Quote(node)+L" --rounds 1";
+        if(!exitStatePath.empty())args+=L" --exit-state "+Quote(exitStatePath.wstring());
+    }
+    if (!catalog && !current && !exit) {
         args+=(node.empty()?L" --all":L" --node "+Quote(node))+L" --rounds "+std::to_wstring(prefs.rounds);
         args+=prefs.parallel?L" --parallel "+std::to_wstring(prefs.parallel):
         L" --min-parallel "+std::to_wstring(prefs.minimum)+L" --max-parallel "+std::to_wstring(prefs.maximum);
@@ -576,6 +622,7 @@ void App::Start(bool catalog,const std::wstring& node,bool current) {
     SECURITY_ATTRIBUTES security{sizeof security,nullptr,TRUE};
     HANDLE write=nullptr;
     if (!CreatePipe(&pipe,&write,&security,0)) { message=L(L"无法创建结果管道",L"Cannot create result pipe");
+        ClearExitTransfer();
         Update();
         return;
     }
@@ -617,16 +664,16 @@ void App::Start(bool catalog,const std::wstring& node,bool current) {
         return;
     }
     inspect=catalog;
-    if(!current)sawSummary=false;
-    if(!current)completed=scored=attempts=0;
+    if(!current && !exit)sawSummary=false;
+    if(!current && !exit)completed=scored=attempts=0;
     pending.clear();
     message.clear();
-    if (catalog && !current) { nodes.clear();
+    if (catalog && !current && !exit) { nodes.clear();
         visible.clear();
         selected=-1;
         total=0;
     }
-    else if(!current)for(auto& entry:nodes) if(node.empty() || node==entry.name) entry.state=L"queued";
+    else if(!current && !exit)for(auto& entry:nodes) if(node.empty() || node==entry.name) entry.state=L"queued";
     started=lastOutput=GetTickCount64();
     ResumeThread(child.hThread);
     CloseHandle(child.hThread);
@@ -663,7 +710,7 @@ void App::Drain() {
         Update();
         if(currentWindow)ShowCurrentPath(false);
         if(groupsWindow)ShowGroups(false);
-        if(details) ShowDetails();
+        if(details) ShowDetails(false);
     }
     if (WaitForSingleObject(process,0)==WAIT_OBJECT_0) {
         // Drain on the next tick if bytes are still buffered after process exit.
@@ -671,12 +718,14 @@ void App::Drain() {
         DWORD code=0;
         GetExitCodeProcess(process,&code);
         if (!pending.empty()) message=L(L"测速结果不完整",L"Incomplete CLI output");
+        else if(exitMode)message=sawExitSummary && !exitCancelled && code==0?L(L"出口观察完成",L"Exit observation completed"):
+            L(L"出口观察未取得新有效结果，保留最近有效观察。",L"No new valid exit result. Last valid observations retained.");
         else if (currentMode)message=currentSummary && verifiedCurrent && code==0?
             L(L"当前线路核对完成",L"Current route verified"):L(L"当前线路未核实，请查看核对结果",L"Current route unverified. Review the results");
         else if (inspect && code==0) message=L(L"节点已读取",L"Nodes loaded");
         else if (!inspect && sawSummary) message=code==0?L(L"测速完成",L"Test completed"):L(L"测速结束，含失败或不可用节点",L"Test ended with failed or unavailable nodes");
         else if (message.empty()) message=L(L"测速程序异常结束",L"CLI ended without a summary");
-        bool startSweep=!currentMode && inspect && code==0 && autoTest && !nodes.empty();
+        bool startSweep=!currentMode && !exitMode && inspect && code==0 && autoTest && !nodes.empty();
         Finish(false);
         if(startSweep)Start(false);
     } else if (GetTickCount64()-lastOutput>120000) {
@@ -768,6 +817,7 @@ HWND Child(HWND parent,const wchar_t* type,const wchar_t* text,int id,DWORD styl
     return result;
 }
 #include "settings.hpp"
+#include "exit_ui.hpp"
 std::wstring App::CurrentPathReport() const {
     std::wstring report=L(L"当前线路核对 · 独立于节点评分",L"Current route check · separate from node scores");
     report+=L"\r\n"+std::wstring(prefs.proxyPort?L(L"显式本机 HTTP 代理端口 ",L"Explicit local HTTP proxy port "):L(L"使用系统代理规则",L"Using system proxy rules"));
@@ -823,15 +873,19 @@ void App::ShowGroups(bool show) {
     SetWindowTextW(groupsText,report.c_str());
     if(show)ShowWindow(groupsWindow,SW_SHOW);
 }
-void App::ShowDetails() {
+void App::ShowDetails(bool show) {
     if(selected<0 || selected>=static_cast<int>(nodes.size())) return;
     if(!details) {
         details=CreateWindowExW(0,L"ProxyPartner.NativeAux",L(L"节点详情",L"Node details"),WS_OVERLAPPEDWINDOW,
         CW_USEDEFAULT,CW_USEDEFAULT,Px(740),Px(560),window,nullptr,instance,nullptr);
         detailText=Child(details,L"EDIT",L"",1,ES_MULTILINE|ES_READONLY|ES_AUTOVSCROLL|WS_VSCROLL);
+        Child(details,L"BUTTON",L(L"复测出口 IP",L"Retest exit IP"),RetestExit,WS_TABSTOP|BS_OWNERDRAW);
+        Child(details,L"STATIC",L(L"两个 HTTPS 来源，仅显式请求。",L"Two HTTPS sources, explicit requests only."),2);
         RECT rect{};
         GetClientRect(details,&rect);
-        MoveWindow(detailText,10,10,rect.right-20,rect.bottom-20,TRUE);
+        MoveWindow(detailText,10,10,rect.right-20,std::max(0,static_cast<int>(rect.bottom)-Px(65)),TRUE);
+        MoveWindow(GetDlgItem(details,RetestExit),10,rect.bottom-Px(43),Px(205),Px(30),TRUE);
+        MoveWindow(GetDlgItem(details,2),Px(230),rect.bottom-Px(41),rect.right-Px(240),Px(30),TRUE);
     }
     auto& node=nodes[selected];
     std::wstring report=node.name+L"\r\n"+node.protocol+L"\r\n"+L(L"来源：独立节点 CLI 测速",L"Source: independent node CLI probe")+
@@ -839,14 +893,21 @@ void App::ShowDetails() {
     for(int i=0;i<5;++i) report+=std::wstring(SiteNames[i])+L" · "+SiteText(node.sites[i],prefs.english,true)+L"\r\n";
     for(const auto& target:prefs.customTargets)report+=target.symbol+L" "+target.shortName+L" · "+L(L"登记目标，待测",L"Registered target, untested")+L" · "+target.url+L"\r\n";
     report+=std::wstring(L(L"内核 ",L"Core "))+CoreText(node,true)+L"\r\n";
+    report+=ExitReport(node);
     report+=std::wstring(L"\r\n")+L(L"结果接收时间 ",L"Result received ")+node.observed+L"\r\n"+L(L"401 表示已到达鉴权，403 表示服务受限。耗时与评分不能证明登录或模型业务可用。\r\n首轮即时评分尚无跨轮稳定性依据。",L"401 reached authentication. 403 indicates restriction. Timing and score do not verify login or model access.\r\nThe first round has no cross-round stability evidence.");
     SetWindowTextW(detailText,report.c_str());
-    ShowWindow(details,SW_SHOW);
+    EnableWindow(GetDlgItem(details,RetestExit),!Running());
+    if(show)ShowWindow(details,SW_SHOW);
 }
 LRESULT CALLBACK AuxProc(HWND hwnd,UINT msg,WPARAM w,LPARAM l) {
     if(msg==WM_SIZE && (hwnd==app.details || hwnd==app.currentWindow || hwnd==app.groupsWindow)) { RECT r{};
         GetClientRect(hwnd,&r);
-        MoveWindow(GetDlgItem(hwnd,1),10,10,r.right-20,r.bottom-20,TRUE);
+        int reserve=hwnd==app.details?app.Px(65):20;
+        MoveWindow(GetDlgItem(hwnd,1),10,10,r.right-20,std::max(0,static_cast<int>(r.bottom)-reserve),TRUE);
+        if(hwnd==app.details){
+            MoveWindow(GetDlgItem(hwnd,RetestExit),10,r.bottom-app.Px(43),app.Px(205),app.Px(30),TRUE);
+            MoveWindow(GetDlgItem(hwnd,2),app.Px(230),r.bottom-app.Px(41),r.right-app.Px(240),app.Px(30),TRUE);
+        }
         return 0;
     }
     if(msg==WM_CLOSE){DestroyWindow(hwnd);
@@ -857,6 +918,10 @@ LRESULT CALLBACK AuxProc(HWND hwnd,UINT msg,WPARAM w,LPARAM l) {
         else if(hwnd==app.groupsWindow)app.groupsWindow=app.groupsText=nullptr;
         else app.details=app.detailText=nullptr;
         return 0;
+    }
+    if(msg==WM_COMMAND && hwnd==app.details && LOWORD(w)==RetestExit){
+        if(app.selected>=0 && app.selected<static_cast<int>(app.nodes.size()))app.Start(false,app.nodes[app.selected].name,false,true);
+        app.ShowDetails(false);return 0;
     }
     if(msg==WM_COMMAND && hwnd==app.settings) {
         int id=LOWORD(w);

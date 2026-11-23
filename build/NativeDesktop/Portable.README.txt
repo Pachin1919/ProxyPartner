@@ -34,7 +34,13 @@ current path in a separate result window. Only a verified unique node or DIRECT
 matching the summary anchor is labelled as the last verified route. Settings can
 specify an existing local HTTP proxy port from 1 to 65535; empty uses system rules.
 Unknown, rejected and bypassed results remain unverified. Independent scores and
-samples remain separate. Exit/history events await the backend contract.
+samples remain separate. Node details has Retest exit IP: one explicit round through
+two HTTPS sources for the selected node and current profile/AGE identity. IPv4/IPv6,
+agreement/conflict, last confirmed address and trends are shown separately. Errors
+preserve previous valid observations. These observations stay in the GUI session;
+refreshing the catalog discards them. Repeated requests pass backend state through
+a unique temporary file deleted on normal completion or cancellation. No permanent
+history or automatic exit requests are added. Cancel stops the owned CLI tree.
 Its CLI parameters include rounds, adaptive concurrency
 limits, fixed concurrency/deadline overrides, and read-only existing core samples.
 Real resource and host non-interference gates remain required.
