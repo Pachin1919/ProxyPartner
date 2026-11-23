@@ -1,0 +1,27 @@
+ProxyPartner · Native Windows x64 candidate
+
+Extract the entire ZIP and double-click ProxyPartner.exe. Keep ProxyPartner.Cli.exe,
+the DLLs, certificate bundle and TargetIcons beside the desktop executable.
+
+The desktop reads the known Clash Verge runtime profile path if it exists, or accepts
+an existing local profile in Settings. A profile elsewhere can also be specified with
+ProxyPartner.exe --profile "D:\profiles\nodes.yaml". For AGE profiles, select the
+identity file in Settings. Paths and display/probe preferences stay in the current
+user's LocalAppData\ProxyPartner\NativeDesktop\preferences.json.
+
+Startup inspects the profile, then runs the first independent node sweep. Refresh
+reloads the catalog and starts a new sweep. Use Test all / Test selected to retest.
+Cancel stops the owned CLI process tree and retains already received results.
+Closing the window hides it in the tray. The tray menu opens the window or exits.
+Use --tray to start hidden. The CLI performs the actual network requests and scoring.
+
+401 is an authentication response. 403 is a service restriction. A response and an
+initial score do not verify login or model access. Details preserve HTTP status.
+
+This candidate implements a C++ native Win32 desktop over the CLI JSONL contract.
+The full application migration still needs independent integration and acceptance.
+Host identity discovery, current-route verification, exit-IP history, SQLite history,
+custom target/weight execution, and automatic logon installation are not implemented
+by this desktop candidate. Its CLI parameters include rounds, adaptive concurrency
+limits, fixed concurrency/deadline overrides, and read-only existing core samples.
+Real resource and host non-interference gates remain required.
