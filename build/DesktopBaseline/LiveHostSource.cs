@@ -5,7 +5,7 @@ using System.Diagnostics.CodeAnalysis;
 using System.Net;
 using System.Net.Sockets;
 
-internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTestSource, IDisposable
+internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTestSource, IDesktopProbeProfileSource, IDisposable
 {
     private sealed class WebsiteRound(string name, ProbeProfile profile, bool counted, int targetCount,
         CancellationToken stop) : IDisposable
@@ -13,6 +13,8 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
         internal readonly string Name = name;
         internal readonly string Revision = profile.Revision;
         internal readonly bool Counted = counted;
+        internal readonly int RequestLimit = !profile.RequiresWorker ? PerNodeRequestLimit : 1;
+        internal readonly bool UsesWorker = profile.RequiresWorker;
         internal readonly int TargetCount = targetCount;
         internal readonly IndependentNodeProbe.Session Session = new(profile, stop);
         internal int NextTarget, InFlight;
@@ -26,20 +28,25 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
     private const int ParallelServerLimit = 5;
     private const int PerNodeRequestLimit = 2;
     private const int SiteCount = ReadOnlyHostClient.CurrentProbeTargetCount;
-    private const string NativeProbeSource = "Shadowsocks · C++ HTTPS";
+    private static string NativeProbeSource(string type) => $"{type} · C++ HTTPS";
     private readonly CancellationTokenSource stop = new();
     private readonly SemaphoreSlim requested = new(0, 1);
-    private readonly Task poll;
+    private Task? poll;
     private readonly object wakeGate = new();
     private int queuedOrRunning;
-    private int sweepRequested;
+    private string[]? sweepRequested;
     private string? nodeRequested;
+    private string? selectedProfilePath;
     private DesktopSnapshot snapshot = new("Clash Verge", CollectionState.Connecting, null, null, []);
-
-    internal LiveHostSource() => poll = Task.Run(PollAsync);
 
     public DesktopSnapshot GetSnapshot() => Volatile.Read(ref snapshot);
     public event Action? SnapshotChanged;
+
+    public void SetProbeProfilePath(string? path)
+    {
+        if (Interlocked.Exchange(ref selectedProfilePath, path) != path) Wake();
+        poll ??= Task.Run(PollAsync);
+    }
 
     public void RequestCurrentTest()
     {
@@ -47,9 +54,11 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
             Wake();
     }
 
-    public void RequestSweep()
+    public void RequestSweep() => RequestSweep([]);
+
+    public void RequestSweep(IReadOnlyList<string> preferredNodes)
     {
-        Interlocked.Exchange(ref sweepRequested, 1);
+        Interlocked.Exchange(ref sweepRequested, preferredNodes.ToArray());
         Interlocked.CompareExchange(ref queuedOrRunning, 1, 0);
         Wake();
     }
@@ -84,13 +93,16 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
     private async Task PollAsync()
     {
         // Five slots are reserved for the simultaneous current-route requests.
-        int webLimit = (Environment.GetEnvironmentVariable("PROXYPARTNER_SWEEP_CONCURRENCY") switch
+        int? configuredLimit = Environment.GetEnvironmentVariable("PROXYPARTNER_SWEEP_CONCURRENCY") switch
         {
             "8" => 8,
             "12" => 12,
-            _ => 16
-        }) - SiteCount;
+            "16" => 16,
+            _ => null
+        };
+        const int MaxIndependentRequests = 16 - SiteCount;
         var client = new ReadOnlyHostClient();
+        var readOptions = new HostReadOptions { IncludeVergeRuntimePath = true };
         var samples = new List<WebsiteProbe>(ReadOnlyHostClient.CurrentProbeTargetCount);
         var history = new Dictionary<(string Node, string Target), WebsiteWindow>();
         var serverResults = new Dictionary<string, DesktopResult>(StringComparer.Ordinal);
@@ -101,14 +113,15 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
         HashSet<(string Name, string Type)>? roster = null;
         (string? Path, DateTime LastWrite, long Length) profileStamp = default;
         bool autoSweepPending = false;
+        string[]? manualSweepPending = null;
         var exitV4 = new Dictionary<string, DesktopExitIp>(StringComparer.Ordinal);
         var exitV6 = new Dictionary<string, DesktopExitIp>(StringComparer.Ordinal);
         var batch = new Queue<string>();
-        var websiteBatch = new Queue<string>();
+        var websiteBatch = new LinkedList<string>();
         var serverActive = new Dictionary<Task<DesktopResult>, (string Name, string Host, bool Counted)>(ParallelServerLimit);
-        var websiteActive = new List<WebsiteRound>(webLimit);
-        var websiteRequests = new Dictionary<Task<IndependentResult>, (WebsiteRound Round, int Target)>(webLimit);
-        var pending = new List<Task>(ParallelServerLimit + webLimit + 3);
+        var websiteActive = new List<WebsiteRound>(MaxIndependentRequests);
+        var websiteRequests = new Dictionary<Task<IndependentResult>, (WebsiteRound Round, int Target)>(MaxIndependentRequests);
+        var pending = new List<Task>(ParallelServerLimit + MaxIndependentRequests + 3);
         string? serverPriority = null, websitePriority = null;
         int batchTotal = 0, batchDone = 0;
         int websiteTotal = 0, websiteDone = 0;
@@ -121,6 +134,7 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
         IReadOnlyList<HostGroup>? testedGroups = null;
         int? previousPid = null;
         Task<bool>? wake = null;
+        string? profileSelection = null;
         bool SweepIdle() => batch.Count == 0 && websiteBatch.Count == 0 &&
             serverActive.Count == 0 && websiteActive.Count == 0;
         void ClearWebsiteRounds()
@@ -128,14 +142,16 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
             foreach (var round in websiteActive) round.Dispose();
             websiteActive.Clear();
         }
-        bool HasPendingRequest() => autoSweepPending && SweepIdle() ||
+        bool HasPendingRequest() => SweepIdle() && (manualSweepPending is not null || autoSweepPending && currentTask is null) ||
+            Volatile.Read(ref selectedProfilePath) != profileSelection ||
             Volatile.Read(ref nodeRequested) is not null ||
-            Volatile.Read(ref sweepRequested) != 0 || currentTask is null && Volatile.Read(ref queuedOrRunning) != 0;
+            Volatile.Read(ref sweepRequested) is not null || currentTask is null && Volatile.Read(ref queuedOrRunning) != 0;
         try
         {
             do
             {
-                var read = await client.ReadAsync(cancellationToken: stop.Token).ConfigureAwait(false);
+                profileSelection = Volatile.Read(ref selectedProfilePath);
+                var read = await client.ReadAsync(readOptions, cancellationToken: stop.Token).ConfigureAwait(false);
                 if (stop.IsCancellationRequested) return;
                 if (read.Facts is { } facts && read.CoreProcessId is int corePid)
                 {
@@ -169,12 +185,14 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                         roster = null;
                         profileStamp = default;
                         previousPid = corePid;
+                        Interlocked.Exchange(ref queuedOrRunning, 1);
                     }
                     var identity = facts.Nodes.Select(n => (n.Name, n.Type));
                     bool rosterChanged = roster is null || !roster.SetEquals(identity);
                     if (rosterChanged) roster = identity.ToHashSet();
                     string? profilePath = IndependentNodeProbe.ConfiguredPath(
-                        read.Status == HostStatus.ConnectedPipe && read.VerifiedPeerProcessId == corePid);
+                        read.Status == HostStatus.ConnectedPipe && read.VerifiedPeerProcessId == corePid,
+                        profileSelection, read.VergeRuntimePath);
                     var profileFile = profilePath is null ? null : new FileInfo(profilePath);
                     var stamp = profileFile is { Exists: true }
                         ? (profilePath, profileFile.LastWriteTimeUtc, profileFile.Length) : default;
@@ -196,8 +214,9 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                         testedGroups = null;
                         current = null;
                     }
-                    bool manualSweep = Interlocked.Exchange(ref sweepRequested, 0) == 1;
-                    bool startSweep = (manualSweep || autoSweepPending) && SweepIdle();
+                    manualSweepPending = Interlocked.Exchange(ref sweepRequested, null) ?? manualSweepPending;
+                    bool startSweep = SweepIdle() && (manualSweepPending is not null || autoSweepPending &&
+                        currentTask is null && Volatile.Read(ref queuedOrRunning) == 0);
                     string? priority = Interlocked.Exchange(ref nodeRequested, null);
                     if (startSweep || priority is not null || rosterChanged || configChanged)
                     {
@@ -207,9 +226,10 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                                 serverResults.Remove(name);
                         serverMap = updatedMap;
                     }
-                    if (rosterChanged || configChanged || (manualSweep && startSweep))
+                    if (rosterChanged || configChanged || (manualSweepPending is not null && startSweep))
                     {
-                        var updated = IndependentNodeProbe.Load(profilePath);
+                        bool automatic = profilePath is not null && profilePath == read.VergeRuntimePath;
+                        var updated = IndependentNodeProbe.Load(profilePath, automatic ? facts.Nodes : null);
                         foreach (var (name, old) in catalog.Profiles)
                         {
                             if (updated.Profiles.TryGetValue(name, out var replacement) && replacement.Revision == old.Revision)
@@ -229,8 +249,10 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                     var eligible = facts.Nodes.Select(n => n.Name).Where(serverMap.ContainsKey)
                         .Order(StringComparer.Ordinal).ToArray();
                     var websiteEligible = facts.Nodes.Where(n =>
-                        profiles.TryGetValue(n.Name, out var profile) && profile.Type == n.Type)
+                        profiles.TryGetValue(n.Name, out var profile) && profile.Type == n.Type &&
+                        (!profile.RequiresWorker || GoWebsiteProbe.IsInstalled))
                         .Select(n => n.Name).ToHashSet(StringComparer.Ordinal);
+                    int webLimit = (configuredLimit ?? (websiteEligible.Count >= 100 ? 12 : 16)) - SiteCount;
                     if (priority is not null)
                     {
                         bool currentRequested = priority == current?.Node;
@@ -255,20 +277,46 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                         SelectedMember: group.Selected)).ToArray();
                     void Emit()
                     {
-                        var testingNodes = serverActive.Values.Select(job => job.Name)
-                            .Concat(websiteActive.Select(job => job.Name)).ToArray();
+                        var testingNodes = serverActive.Where(entry => !entry.Key.IsCompleted).Select(entry => entry.Value.Name)
+                            .ToHashSet(StringComparer.Ordinal);
+                        var activeSites = new Dictionary<string, uint>(StringComparer.Ordinal);
+                        foreach (var (request, job) in websiteRequests)
+                        {
+                            if (request.IsCompleted) continue;
+                            testingNodes.Add(job.Round.Name);
+                            if (job.Target >= SiteCount) continue;
+                            // Bits follow the visible card order, independently of scheduler order.
+                            uint bit = ReadOnlyHostClient.WebsiteTargets[job.Target].Id switch
+                            {
+                                "google" => 1u,
+                                "youtube" => 2u,
+                                "openai_api" => 4u,
+                                "chatgpt_web" => 8u,
+                                "anthropic_api" => 16u,
+                                _ => 0u
+                            };
+                            activeSites[job.Round.Name] = activeSites.GetValueOrDefault(job.Round.Name) | bit;
+                        }
+                        var queuedNodes = batch.Concat(websiteBatch).Concat(websiteActive.Select(round => round.Name))
+                            .ToHashSet(StringComparer.Ordinal);
+                        if (serverPriority is not null) queuedNodes.Add(serverPriority);
+                        if (websitePriority is not null) queuedNodes.Add(websitePriority);
                         var sweep = new DesktopServerSweep(batchDone, batchTotal, sweepStarted, unavailableNode,
-                            websiteDone, websiteTotal, websiteEligible.Count, facts.Nodes.Count);
+                            websiteDone, websiteTotal, websiteEligible.Count, facts.Nodes.Count(node => node.Type != "PassRule"));
                         PublishFacts(facts, samples, history, cachedRows, groupRows, serverResults, exitV4, exitV6, catalog, current,
                             sweep, running: currentTask is not null,
-                            pathChanged: samples.Count != 0 && testedGroups is null, testingNodes);
+                            pathChanged: samples.Count != 0 && testedGroups is null, testingNodes, queuedNodes, activeSites);
                     }
                     void RecordSite(WebsiteProbe sample)
                     {
-                        if (sample.Node is not { } node) return;
-                        cachedRows.Remove(node);
+                        if (sample.Node is not { } node || !sample.Attempted) return;
                         var key = (node, sample.TargetId);
-                        if (history.TryGetValue(key, out var window) && window.Latest.Independent == sample.Independent)
+                        history.TryGetValue(key, out var window);
+                        // A current-route retest cannot replace fresh results produced by this node's explicit dialer.
+                        if (!sample.Independent && window?.Latest is { Independent: true } independent &&
+                            sample.ObservedUtc - independent.ObservedUtc <= WebsiteWindow.Freshness) return;
+                        cachedRows.Remove(node);
+                        if (window is not null && window.Latest.Independent == sample.Independent)
                             window.Add(sample);
                         else history[key] = new(sample);
                     }
@@ -305,13 +353,17 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                     }
                     if (startSweep)
                     {
+                        string[] preferred = manualSweepPending ?? [];
+                        bool manual = manualSweepPending is not null;
                         autoSweepPending = false;
+                        manualSweepPending = null;
                         string? first = current?.Node;
-                        batch = new Queue<string>(eligible.OrderBy(name => name != first));
+                        batch = new Queue<string>(Prioritize(eligible.OrderBy(name => name != first), preferred));
                         batchTotal = batch.Count;
                         batchDone = 0;
-                        websiteBatch = new Queue<string>(websiteEligible.Order(StringComparer.Ordinal)
-                            .OrderBy(name => name != first));
+                        websiteBatch = new LinkedList<string>(Prioritize(websiteEligible
+                            .Where(name => manual || !profiles[name].RequiresWorker)
+                            .Order(StringComparer.Ordinal).OrderBy(name => name != first), preferred));
                         websiteTotal = websiteBatch.Count;
                         websiteDone = 0;
                         releaseSweepMemory = websiteTotal > 0;
@@ -336,28 +388,36 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                         while (!autoSweepPending && websiteRequests.Count < webLimit)
                         {
                             WebsiteRound? round = null;
-                            if (websiteActive.Count < webLimit && websitePriority is not null &&
-                                TryTakeNode(ref websitePriority, ref websiteBatch, out var priorityName, out bool counted))
+                            bool CanStart(string name) => !profiles[name].RequiresWorker ||
+                                !websiteActive.Any(job => job.UsesWorker);
+                            if (websiteActive.Count < webLimit && websitePriority is { } priorityName)
                             {
-                                if (websiteEligible.Contains(priorityName))
+                                if (!websiteEligible.Contains(priorityName))
                                 {
-                                    round = StartWebsiteRound(priorityName, counted);
+                                    websitePriority = null;
+                                    if (websiteBatch.Remove(priorityName)) websiteTotal--;
+                                }
+                                else if (CanStart(priorityName))
+                                {
+                                    websitePriority = null;
+                                    round = StartWebsiteRound(priorityName, websiteBatch.Remove(priorityName));
                                     websiteActive.Insert(0, round);
                                 }
-                                else if (counted) websiteTotal--;
+                            }
+                            // Fill free node slots before starting a second request on any node.
+                            if (round is null && websiteActive.Count < webLimit)
+                            {
+                                for (var candidate = websiteBatch.First; candidate is not null; candidate = candidate.Next)
+                                {
+                                    if (!websiteEligible.Contains(candidate.Value) || !CanStart(candidate.Value)) continue;
+                                    round = StartWebsiteRound(candidate.Value, counted: true);
+                                    websiteBatch.Remove(candidate);
+                                    websiteActive.Add(round);
+                                    break;
+                                }
                             }
                             round ??= websiteActive.Find(static job => job.NextTarget < SiteCount &&
-                                job.InFlight < PerNodeRequestLimit);
-                            if (round is null && websiteActive.Count < webLimit && websiteBatch.TryDequeue(out string? name))
-                            {
-                                if (!websiteEligible.Contains(name))
-                                {
-                                    websiteTotal--;
-                                    continue;
-                                }
-                                round = StartWebsiteRound(name, counted: true);
-                                websiteActive.Add(round);
-                            }
+                                job.InFlight < job.RequestLimit);
                             // Start exit observations after this node's five website requests have settled.
                             round ??= websiteActive.Find(static job => job.NextTarget >= SiteCount && job.NextTarget < job.TargetCount &&
                                 job.InFlight == 0);
@@ -428,7 +488,9 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                             if (valid)
                             {
                                 if (job.Target < SiteCount)
-                                    RecordSite(result.Site!);
+                                {
+                                    if (result.Site is { } site) RecordSite(site);
+                                }
                                 else if (job.Target == SiteCount)
                                     round.FirstExit = result.Exit;
                                 else
@@ -473,16 +535,31 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                 }
                 else
                 {
-                    if (GetSnapshot() is { Collection: not CollectionState.Disconnected } previous)
+                    var issue = read.Status switch
                     {
+                        HostStatus.HostUnavailable when read.CoreProcessId is null => HostConnectionIssue.NotDetected,
+                        HostStatus.HostUnavailable or HostStatus.FallbackAuthorizationRequired => HostConnectionIssue.PipeUnavailable,
+                        HostStatus.Ambiguous => HostConnectionIssue.Ambiguous,
+                        HostStatus.IdentityRejected => HostConnectionIssue.IdentityRejected,
+                        HostStatus.AccessDenied => HostConnectionIssue.AccessDenied,
+                        HostStatus.TimedOut => HostConnectionIssue.TimedOut,
+                        HostStatus.InvalidResponse => HostConnectionIssue.InvalidResponse,
+                        _ => HostConnectionIssue.TransportError
+                    };
+                    var previous = GetSnapshot();
+                    if (previous.Collection != CollectionState.Disconnected || previous.ConnectionIssue != issue)
                         Publish(previous with
                         {
                             Collection = CollectionState.Disconnected,
+                            ConnectionIssue = issue,
                             VerifiedCurrentPath = null,
-                            Rows = previous.Rows.Select(row => row.IsCurrent
-                                ? row with { IsCurrent = false, CurrentTarget = null } : row).ToArray()
+                            CurrentTest = null,
+                            ServerSweep = null,
+                            Rows = previous.Collection == CollectionState.Observing
+                                ? previous.Rows.Select(row => row.IsCurrent
+                                    ? row with { IsCurrent = false, CurrentTarget = null } : row).ToArray()
+                                : previous.Rows
                         });
-                    }
                 }
                 wake ??= requested.WaitAsync(TimeSpan.FromSeconds(30), stop.Token);
                 await wake.ConfigureAwait(false);
@@ -515,12 +592,20 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
         return new(value, now, changes, Observers: 2, LastVerifiedAddress: value, ConsistentSince: now, ConfirmedSamples: 1);
     }
 
-    private void PublishFacts(HostFacts facts, List<WebsiteProbe> samples,
+    private static IEnumerable<string> Prioritize(IEnumerable<string> names, IReadOnlyList<string> preferred)
+    {
+        if (preferred.Count == 0) return names;
+        var included = names.ToHashSet(StringComparer.Ordinal);
+        return preferred.Where(included.Contains).Concat(names).Distinct(StringComparer.Ordinal);
+    }
+
+    internal void PublishFacts(HostFacts facts, List<WebsiteProbe> samples,
         Dictionary<(string Node, string Target), WebsiteWindow> history,
         Dictionary<string, (DesktopRow Row, DateTimeOffset Expires)> cachedRows, DesktopRow[] groupRows,
         Dictionary<string, DesktopResult> serverResults, Dictionary<string, DesktopExitIp> exitV4,
         Dictionary<string, DesktopExitIp> exitV6, ProbeCatalog catalog, WebsiteProbe? current, DesktopServerSweep sweep,
-        bool running, bool pathChanged, IReadOnlyCollection<string>? testingNodes)
+        bool running, bool pathChanged, IReadOnlySet<string> testingNodes, IReadOnlySet<string> queuedNodes,
+        IReadOnlyDictionary<string, uint> activeSites)
     {
         DateTimeOffset now = DateTimeOffset.UtcNow;
         var rows = new DesktopRow[facts.Nodes.Count + groupRows.Length];
@@ -529,13 +614,16 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
         {
             bool isCurrent = current?.Node == node.Name;
             string? target = isCurrent ? current?.TargetId : null;
-            bool testing = testingNodes?.Contains(node.Name) == true || isCurrent && running;
+            bool testing = testingNodes.Contains(node.Name) || isCurrent && running;
+            bool queued = !testing && queuedNodes.Contains(node.Name);
+            uint siteActivity = activeSites.GetValueOrDefault(node.Name);
             var server = serverResults.GetValueOrDefault(node.Name);
             var v4 = exitV4.GetValueOrDefault(node.Name);
             var v6 = exitV6.GetValueOrDefault(node.Name);
             if (cachedRows.TryGetValue(node.Name, out var cached) && now <= cached.Expires &&
                 cached.Row.IsCurrent == isCurrent &&
-                cached.Row.Testing == testing && cached.Row.CurrentTarget == target &&
+                cached.Row.Testing == testing && cached.Row.Queued == queued && cached.Row.ActiveSites == siteActivity &&
+                cached.Row.CurrentTarget == target &&
                 cached.Row.ServerPing == server && cached.Row.ExitV4 == v4 && cached.Row.ExitV6 == v6)
             {
                 rows[index++] = cached.Row;
@@ -565,7 +653,7 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                 if (!history.TryGetValue((node.Name, site.Id), out var window)) continue;
                 var sample = window.Latest;
                 var result = new DesktopResult(sample.TargetId, sample.ElapsedMs, sample.HttpStatus, sample.ObservedUtc,
-                    sample.NativeTransport ? NativeProbeSource : sample.Independent ? independentMethod ?? "HTTPS" : "HTTPS",
+                    sample.NativeTransport ? NativeProbeSource(node.Type) : sample.Independent ? independentMethod ?? "HTTPS" : "HTTPS",
                     sample.HttpStatus switch
                     {
                         401 => ResultState.AuthenticationRequired,
@@ -612,20 +700,21 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
                     ? Math.Min((int)Math.Round(points / siteCount), cap ?? 100) : null;
                 QualityState state = score is >= 80 ? QualityState.Good : score is < 60 || cap.HasValue
                     ? QualityState.Poor : score.HasValue ? QualityState.Restricted : QualityState.Insufficient;
-                quality = new(score, state, allNative ? NativeProbeSource :
+                quality = new(score, state, allNative ? NativeProbeSource(node.Type) :
                     independentSource == true ? independentMethod ?? "HTTPS" : "HTTPS",
                     cap, capTarget, siteCount, stableCount);
             }
             var support = independentMethod is null ? IndependentProbeState.UnsupportedProtocol
                 : catalog.Profiles.TryGetValue(node.Name, out var profile) && profile.Type == node.Type
-                    ? IndependentProbeState.Available
+                    ? profile.RequiresWorker && !GoWebsiteProbe.IsInstalled
+                        ? IndependentProbeState.WorkerMissing : IndependentProbeState.Available
                     : catalog.Configured.Contains(node.Name) ? IndependentProbeState.UnsupportedOptions
                     : IndependentProbeState.MissingConfiguration;
             var row = new DesktopRow("node:" + node.Name, node.Name, NodeKind.Leaf, isCurrent,
                 native, openAi, chatGpt, Untested, lastObserved, Quality: quality,
                 Google: google, YouTube: youtube, Anthropic: anthropic, CurrentTarget: target,
                 ServerPing: server, Testing: testing, ExitV4: v4, ExitV6: v6,
-                IndependentProbe: support, Protocol: node.Type);
+                IndependentProbe: support, Protocol: node.Type, Queued: queued, ActiveSites: siteActivity);
             cachedRows[node.Name] = (row, expires);
             rows[index++] = row;
         }
@@ -649,7 +738,7 @@ internal sealed class LiveHostSource : IDesktopSnapshotSource, IDesktopCurrentTe
     public void Dispose()
     {
         stop.Cancel();
-        try { poll.GetAwaiter().GetResult(); }
+        try { poll?.GetAwaiter().GetResult(); }
         catch (OperationCanceledException) when (stop.IsCancellationRequested) { }
         finally
         {

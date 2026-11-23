@@ -25,6 +25,8 @@ C#用NamedPipeClientStream + SocketsHttpHandler.ConnectCallback，HTTP/1.1，Use
 ## 节点列表和完整拨号配置不是一回事
 `/proxies`和`/providers/proxies`主要提供公开元数据与有限历史。被动模式不需要密码。
 隔离Go补测需要宿主已解析的当前运行配置/订阅缓存。只读**最终配置**优先于原订阅，因为合并、覆写、脚本可能改变配置。执行脚本由宿主负责，本软件绝不执行订阅脚本。依据宿主版本核实运行文件路径；`clash-verge.yaml`仅为候选，不凭名字就确认它已生效。
+
+桌面版在验证 Verge 的命名管道和 Mihomo 进程身份后，按 Verge v2.4.7 的目录规则定位生成的运行配置。便携宿主以安装目录下的 `.config/PORTABLE` 标志为准。自动读取同时核对生成标记以及节点名称和受支持协议与宿主列表的一致性。 [目录规则](https://github.com/clash-verge-rev/clash-verge-rev/blob/v2.4.7/src-tauri/src/utils/dirs.rs) · [生成运行配置](https://github.com/clash-verge-rev/clash-verge-rev/blob/v2.4.7/src-tauri/src/config/config.rs#L158)
 只把所测节点和必要依赖通过stdin传给worker；不保留全量敏感配置，不自动访问订阅URL。完整配置不可得或链式依赖无法复现时返回unsupported/unverified，保留被动结果。
 节点身份：source_instance+provider+native_id映射为内部ID；拿到配置后用本机盐HMAC生成revision。不能只按server:port去重，也不能仅以显示名合并。
 

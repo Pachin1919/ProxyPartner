@@ -24,11 +24,16 @@ internal sealed record WeightSet(int First, int Second, int Third)
 }
 
 internal sealed record DesktopPreferences(bool English, bool Light, WeightSet Components,
-    WeightSet Targets, CustomTarget[] CustomTargets)
+    WeightSet Targets, CustomTarget[] CustomTargets, string? ProbeProfilePath = null)
 {
     internal const int MaxTargets = 16;
     private const int MaxBytes = 64 * 1024;
     public static DesktopPreferences Defaults { get; } = new(false, false, new(50, 35, 15), new(60, 30, 10), []);
+
+    internal static bool IsLocalYaml(string? path) => path is { Length: >= 3 and <= 4096 } &&
+        char.IsAsciiLetter(path[0]) && path[1] == ':' && Path.IsPathFullyQualified(path) &&
+        !path.Any(char.IsControl) && (path.EndsWith(".yaml", StringComparison.OrdinalIgnoreCase) ||
+            path.EndsWith(".yml", StringComparison.OrdinalIgnoreCase));
 
     public static DesktopPreferences Load(string path)
     {
@@ -40,7 +45,8 @@ internal sealed record DesktopPreferences(bool English, bool Light, WeightSet Co
             file.ReadExactly(bytes);
             var value = JsonSerializer.Deserialize(bytes, PreferenceJson.Default.DesktopPreferences);
             if (value is { Components.IsValid: true, Targets.IsValid: true, CustomTargets.Length: <= MaxTargets } &&
-                value.CustomTargets.All(CustomTarget.IsValid)) return value;
+                value.CustomTargets.All(CustomTarget.IsValid))
+                return IsLocalYaml(value.ProbeProfilePath) ? value : value with { ProbeProfilePath = null };
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or JsonException) { }
         return Defaults;

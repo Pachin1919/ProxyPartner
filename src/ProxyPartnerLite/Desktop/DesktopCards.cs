@@ -69,6 +69,7 @@ public sealed unsafe partial class DesktopApp
         IndependentProbeState.UnsupportedProtocol => L("协议不支持", "Unsupported protocol"),
         IndependentProbeState.UnsupportedOptions => L("配置组合不支持", "Unsupported options"),
         IndependentProbeState.MissingConfiguration => L("缺少拨号配置", "Missing dial config"),
+        IndependentProbeState.WorkerMissing => L("缺少协议测速组件", "Missing protocol probe"),
         _ => null
     };
 
@@ -226,16 +227,44 @@ public sealed unsafe partial class DesktopApp
         if (refresh || Math.Abs(delta) >= viewportHeight || GetUpdateRect(cards, null, 0) != 0 ||
             ScrollWindowEx(cards, 0, delta, null, null, 0, null, 2) == 0) // SW_INVALIDATE
             InvalidateRect(cards, 0, 0);
+        UpdateCardAnimation();
     }
 
     private int IndexOfSelection() => Array.FindIndex(rows, row => row.Id == selectedId);
 
-    private void InvalidateCard(int index)
+    private (int Start, int End) VisibleCardRange()
+    {
+        int pitch = Math.Max(1, cardHeight + cardGap);
+        int first = scrollY / pitch;
+        if (scrollY % pitch >= cardHeight) first++;
+        int end = (scrollY + viewportHeight + pitch - 1) / pitch;
+        return (Math.Min(rows.Length, first * columns), Math.Min(rows.Length, end * columns));
+    }
+
+    private void UpdateCardAnimation()
+    {
+        bool active = false;
+        if (!tableMode && viewportHeight > 0)
+        {
+            var (first, end) = VisibleCardRange();
+            for (int i = first; i < end && !active; i++) active = rows[i].Testing;
+        }
+        if (active == animatingCards) return;
+        if (active) animatingCards = SetTimer(panel, CardAnimationTimer, 150, 0) != 0;
+        else
+        {
+            KillTimer(panel, CardAnimationTimer);
+            animatingCards = false;
+        }
+    }
+
+    private void InvalidateCard(int index, bool probeIconOnly = false)
     {
         int x = index % columns * (cardWidth + cardGap);
         int y = index / columns * (cardHeight + cardGap) - scrollY;
         if (y >= viewportHeight || y + cardHeight <= 0) return;
-        var dirty = Box(x, Math.Max(0, y), cardWidth, Math.Min(viewportHeight, y + cardHeight) - Math.Max(0, y));
+        var dirty = probeIconOnly ? CardCheckBounds(x, y) :
+            Box(x, Math.Max(0, y), cardWidth, Math.Min(viewportHeight, y + cardHeight) - Math.Max(0, y));
         InvalidateRect(cards, (nint)(&dirty), 0);
     }
 
@@ -317,7 +346,8 @@ public sealed unsafe partial class DesktopApp
                 if (source is IDesktopCurrentTestSource)
                 {
                     Rounded(dc, check, Scale(5), row.Testing ? Active : Control);
-                    DrawSpeedometer(dc, check, row.Testing ? ActiveText : Text, all: false);
+                    if (row.Testing) DrawProbeSpinner(dc, check);
+                    else DrawSpeedometer(dc, check, Text, all: false);
                 }
                 else
                 {
@@ -338,10 +368,13 @@ public sealed unsafe partial class DesktopApp
                     latency.IsProbeFailure ? latency.Format(preferences.English) : null;
                 string? grade = row.Quality?.Score is int score ? $"S={score}" :
                     row.Quality?.Cap is int cap ? $"S≤{cap}" : null;
+                string state = row.Testing ? L("测速中", "Testing") : row.Queued ? L("排队中", "Queued") : "";
                 string headline = delay is not null && grade is not null ? $"{delay} ({grade})" :
-                    delay ?? grade ?? (row.Testing ? L("测速中", "Testing") : L("待测速", "Untested"));
+                    delay ?? grade ?? (state.Length != 0 ? state : L("待测速", "Untested"));
                 uint ink = latency.IsProbeFailure ? FailureInk : ScoreInk(row.Quality?.Score ?? row.Quality?.Cap) ??
                     (delay is not null ? Text : Muted);
+                if (state.Length != 0 && (delay is not null || grade is not null))
+                    Label(dc, state, left, at(19), right, Scale(16), Muted, smallFont);
                 Label(dc, headline, left, at(25), right, Scale(35), ink, combinedFont);
             }
             else if (row.Quality?.Score is null && row.Native.ElapsedMs is > 0 and int nativeMs)
@@ -442,8 +475,11 @@ public sealed unsafe partial class DesktopApp
 
     private string FormatSiteLatency(DesktopResult? result, bool compact = false) => result switch
     {
+        { State: ResultState.AuthenticationRequired } when !compact =>
+            (result.HttpStatus is int authStatus ? $"{authStatus} " : "") + L("需要认证", "Authentication required") +
+            (result.ElapsedMs is >= 0 and int authMs ? $" · {authMs} ms" : ""),
         { ElapsedMs: >= 0 and int ms, State: ResultState.Measured or ResultState.AuthenticationRequired
-            or ResultState.Restricted or ResultState.HttpError or ResultState.Stale } => compact ? $"{ms}ms" : $"{ms} ms",
+            or ResultState.Stale } => compact ? $"{ms}ms" : $"{ms} ms",
         _ => result?.Format(preferences.English, compact) ?? L("待测", compact ? "N/T" : "Untested")
     };
 
@@ -469,8 +505,10 @@ public sealed unsafe partial class DesktopApp
                 Label(dc, Sites[index].Short, start, iconY, end, Scale(23), Text, siteStatusFont, 1);
             }
             var result = SiteResult(row, index);
-            string state = FormatSiteLatency(result, compact: true);
-            uint ink = result?.IsProbeFailure == true ? FailureInk : result is null ? Muted : Text;
+            bool active = (row.ActiveSites & (1u << index)) != 0;
+            string state = active && (result is null || result.State == ResultState.Missing)
+                ? L("测试中", "Testing") : FormatSiteLatency(result, compact: true);
+            uint ink = result?.IsProbeFailure == true ? FailureInk : active ? CurrentInk : result is null ? Muted : Text;
             Label(dc, state, start, statusY, end, Scale(16), ink, siteStatusFont, 1);
         }
     }
@@ -532,8 +570,14 @@ public sealed unsafe partial class DesktopApp
         var row = rows[hoverIndex];
         if (hoverSite == -2)
             return ProbeSupportText(row.IndependentProbe) ?? L("优先测速此节点", "Test this node first");
-        return hoverSite < 0 ? row.Name :
-            $"{Sites[hoverSite].Name} · {FormatSiteLatency(SiteResult(row, hoverSite))}";
+        if (hoverSite < 0) return row.Name;
+        var result = SiteResult(row, hoverSite);
+        bool active = (row.ActiveSites & (1u << hoverSite)) != 0;
+        string detail = active && (result is null || result.State == ResultState.Missing)
+            ? L("测试中", "Testing") : FormatSiteLatency(result);
+        if (active && result is not null && result.State != ResultState.Missing)
+            detail += L(" · 更新中", " · Refreshing");
+        return $"{Sites[hoverSite].Name} · {detail}";
     }
 
     private void GetTooltipText(TooltipInfo* info)
@@ -577,6 +621,25 @@ public sealed unsafe partial class DesktopApp
         DrawPanelButton(item, label, font, activeButton);
         if (item->Id == TestServers)
             DrawSpeedometer(item->Dc, item->Bounds, (item->State & 1) != 0 ? ActiveText : Text, all: true);
+    }
+
+    private void DrawProbeSpinner(nint dc, Rect bounds)
+    {
+        int x = (bounds.Left + bounds.Right) / 2, y = (bounds.Top + bounds.Bottom) / 2;
+        int radius = Scale(6);
+        Point* points = stackalloc Point[4]
+        {
+            new() { X = x + radius, Y = y }, new() { X = x, Y = y - radius },
+            new() { X = x - radius, Y = y }, new() { X = x, Y = y + radius }
+        };
+        var from = points[spinnerFrame];
+        var to = points[(spinnerFrame + 3) & 3];
+        nint pen = CreatePen(0, Scale(2), ActiveText);
+        if (pen == 0) return;
+        nint previous = SelectObject(dc, pen);
+        Arc(dc, x - radius, y - radius, x + radius + 1, y + radius + 1, from.X, from.Y, to.X, to.Y);
+        SelectObject(dc, previous);
+        DeleteObject(pen);
     }
 
     private void DrawSpeedometer(nint dc, Rect bounds, uint ink, bool all)

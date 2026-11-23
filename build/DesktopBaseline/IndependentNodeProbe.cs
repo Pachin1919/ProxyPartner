@@ -10,13 +10,19 @@ using YamlDotNet.Core;
 using YamlDotNet.RepresentationModel;
 
 internal sealed record ProbeProfile(string Type, string Revision,
-    Func<EndPoint, CancellationToken, ValueTask<Stream>> Connect, NativeShadowsocksProfile? NativeProfile = null);
-internal sealed record ProbeCatalog(Dictionary<string, ProbeProfile> Profiles, HashSet<string> Configured);
+    Func<EndPoint, CancellationToken, ValueTask<Stream>>? Connect,
+    NativeShadowsocksProfile? NativeProfile = null, GoProbeRequest? WorkerProfile = null,
+    NativeNodeWebsiteProbe? NativeNode = null)
+{
+    internal bool RequiresWorker => WorkerProfile is not null && NativeNode is null;
+}
+internal sealed record ProbeCatalog(Dictionary<string, ProbeProfile> Profiles, HashSet<string> Configured,
+    YamlMappingNode? DnsPolicy = null, string? Container = null);
 internal readonly record struct IndependentResult(WebsiteProbe? Site = null, IPAddress? Exit = null);
 
 internal static class IndependentNodeProbe
 {
-    private const int MaxProfileBytes = 1024 * 1024;
+    internal const int MaxProfileBytes = 1024 * 1024;
     internal static readonly Uri EchoUrl = new("https://ipv4.icanhazip.com/");
     internal static readonly Uri CorroboratingEchoUrl = new("https://api.ipify.org/");
     private static readonly string[] ClashFields =
@@ -46,17 +52,21 @@ internal static class IndependentNodeProbe
         "Shadowsocks" => "Shadowsocks · HTTPS",
         "Trojan" => "Trojan · HTTPS",
         "Vmess" => "VMess · HTTPS",
+        "AnyTLS" => "AnyTLS · HTTPS",
+        "Mieru" => "Mieru · HTTPS",
         _ => null
     };
 
-    internal static string? ConfiguredPath(bool verifiedPipe)
+    internal static string? ConfiguredPath(bool verifiedPipe, string? selectedProfile, string? vergeRuntimePath)
     {
         if (Environment.GetEnvironmentVariable("PROXYPARTNER_NODE_PROBES") is { Length: > 0 } configured)
             return configured;
 
+        string links = Path.Combine(AppContext.BaseDirectory, "ProbeNodes.json");
+        if (!verifiedPipe) return links;
+        if (selectedProfile is not null) return selectedProfile;
         var pointer = new FileInfo(Path.Combine(AppContext.BaseDirectory, "ProbeProfilePath.txt"));
-        if (!verifiedPipe || !pointer.Exists)
-            return Path.Combine(AppContext.BaseDirectory, "ProbeNodes.json");
+        if (!pointer.Exists) return File.Exists(links) ? links : vergeRuntimePath;
         try
         {
             if (pointer.Length is > 0 and <= 4096)
@@ -69,37 +79,70 @@ internal static class IndependentNodeProbe
         return null;
     }
 
-    internal static ProbeCatalog Load(string? path)
+    internal static ProbeCatalog Load(string? path, IReadOnlyList<HostNode>? automaticRoster = null, bool includeDns = false)
     {
-        var profiles = new Dictionary<string, ProbeProfile>(StringComparer.Ordinal);
-        var configured = new HashSet<string>(StringComparer.Ordinal);
-        if (path is null) return new(profiles, configured);
+        if (path is null) return new([], []);
         try
         {
             using var file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
-            if (file.Length is <= 0 or > MaxProfileBytes) return new(profiles, configured);
+            if (includeDns)
+            {
+                Span<byte> prefix = stackalloc byte[64];
+                var header = prefix[..file.ReadAtLeast(prefix, prefix.Length, false)];
+                if (header.StartsWith("\uFEFF"u8)) header = header[3..];
+                if (header.StartsWith("age-encryption.org/v1"u8) || header.StartsWith("-----BEGIN AGE ENCRYPTED FILE-----"u8))
+                    return new([], [], Container: "age");
+                if (header.StartsWith("#KJXENC1"u8)) return new([], [], Container: "kjxenc1");
+                file.Position = 0;
+                CryptographicOperations.ZeroMemory(prefix);
+            }
+            if (file.Length is <= 0 or > MaxProfileBytes) return new([], []);
             byte[] bytes = new byte[(int)file.Length];
             try
             {
                 file.ReadExactly(bytes);
-                bool yaml = Path.GetExtension(path).ToLowerInvariant() is ".yaml" or ".yml";
-                foreach (var (name, profile) in yaml ? ReadClashProfiles(bytes) : ReadLinks(bytes))
-                {
-                    if (configured.Count == 1000) break;
-                    if (name.Length is 0 or > 1024) continue;
-                    if (!configured.Add(name)) profiles.Remove(name);
-                    else if (profile is not null) profiles.Add(name, profile);
-                }
+                bool yaml = includeDns || Path.GetExtension(path).ToLowerInvariant() is ".yaml" or ".yml";
+                return Parse(bytes, bytes.Length, yaml, automaticRoster, includeDns);
             }
             finally { CryptographicOperations.ZeroMemory(bytes); }
         }
-        catch (Exception error) when (error is IOException or UnauthorizedAccessException or JsonException
-            or YamlException or ArgumentException)
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or ArgumentException)
         {
-            profiles.Clear();
-            configured.Clear();
+            return new([], []);
         }
-        return new(profiles, configured);
+    }
+
+    internal static ProbeCatalog LoadDecryptedYaml(byte[] bytes, int count) => Parse(bytes, count, true, null, true);
+
+    private static ProbeCatalog Parse(byte[] bytes, int count, bool yaml, IReadOnlyList<HostNode>? automaticRoster, bool includeDns)
+    {
+        if (automaticRoster is not null && !bytes.AsSpan(0, count).StartsWith("# Generated by Clash Verge"u8))
+            return new([], []);
+
+        var profiles = new Dictionary<string, ProbeProfile>(StringComparer.Ordinal);
+        var configured = new HashSet<string>(StringComparer.Ordinal);
+        YamlMappingNode? dnsPolicy = null;
+        try
+        {
+            var root = yaml ? ReadYamlRoot(bytes, count) : null;
+            if (includeDns)
+                dnsPolicy = Field(Field(root, "dns") as YamlMappingNode, "nameserver-policy") as YamlMappingNode;
+            foreach (var (name, profile) in yaml ? ReadClashProfiles(root) : ReadLinks(bytes))
+            {
+                if (configured.Count == 1000) break;
+                if (name.Length is 0 or > 1024) continue;
+                if (!configured.Add(name)) profiles.Remove(name);
+                else if (profile is not null) profiles.Add(name, profile);
+            }
+        }
+        catch (Exception error) when (error is IOException or JsonException or YamlException or ArgumentException)
+        {
+            return new([], []);
+        }
+        if (automaticRoster is not null && (configured.Any(name => !automaticRoster.Any(node => node.Name == name)) ||
+            profiles.Any(entry => !automaticRoster.Any(node => node.Name == entry.Key && node.Type == entry.Value.Type))))
+            return new([], []);
+        return new(profiles, configured, dnsPolicy);
     }
 
     private static ProbeProfile? FromLink(string link)
@@ -170,32 +213,110 @@ internal static class IndependentNodeProbe
                 entry.Value.GetString() is { } link ? FromLink(link) : null);
     }
 
-    private static IEnumerable<(string Name, ProbeProfile? Profile)> ReadClashProfiles(byte[] bytes)
+    private static YamlMappingNode? ReadYamlRoot(byte[] bytes, int count)
     {
-        using var reader = new StreamReader(new MemoryStream(bytes, writable: false), new UTF8Encoding(false, true));
+        using var reader = new StreamReader(new MemoryStream(bytes, 0, count, writable: false), new UTF8Encoding(false, true));
         var yaml = new YamlStream();
         yaml.Load(reader);
-        if (yaml.Documents.Count != 1 || yaml.Documents[0].RootNode is not YamlMappingNode root ||
-            Field(root, "proxies") is not YamlSequenceNode proxies)
-            yield break;
+        return yaml.Documents.Count == 1 ? yaml.Documents[0].RootNode as YamlMappingNode : null;
+    }
+
+    private static IEnumerable<(string Name, ProbeProfile? Profile)> ReadClashProfiles(YamlMappingNode? root)
+    {
+        if (Field(root, "proxies") is not YamlSequenceNode proxies) yield break;
 
         foreach (var entry in proxies.Children.OfType<YamlMappingNode>())
         {
             if (Text(entry, "name") is not { } name) continue;
             ProbeProfile? profile = null;
+            bool rangeOnly = Text(entry, "type") == "mieru" &&
+                Text(entry, "port") is null or "0" && Text(entry, "port-range") is { Length: > 0 and <= 11 };
+            int port = 0;
             if (Text(entry, "server") is { } server && Uri.CheckHostName(server) != UriHostNameType.Unknown &&
-                int.TryParse(Text(entry, "port"), out int port) && port is >= 1 and <= 65535)
+                (rangeOnly || int.TryParse(Text(entry, "port"), out port) && port is >= 1 and <= 65535))
             {
                 profile = Text(entry, "type") switch
                 {
                     "vless" => ReadVless(entry, server, port),
                     "ss" => ReadShadowsocks(entry, server, port),
                     "trojan" or "vmess" => ReadTrojanOrVmess(entry, server, port),
+                    "anytls" or "mieru" => ReadWorkerProfile(entry, server, port),
                     _ => null
                 };
             }
             yield return (name, profile);
         }
+    }
+
+    private static ProbeProfile? ReadWorkerProfile(YamlMappingNode entry, string server, int port)
+    {
+        if (Text(entry, "password") is not { Length: > 0 and <= 4096 } password) return null;
+        GoProbeRequest settings;
+        string protocol;
+        if (Text(entry, "type") == "anytls")
+        {
+            if (!HasOnly(entry, ["name", "type", "server", "port", "password", "udp", "sni", "alpn",
+                "client-fingerprint", "fingerprint", "skip-cert-verify", "ech-opts"]) ||
+                Field(entry, "skip-cert-verify") is not (null or YamlScalarNode { Value: "false" }))
+                return null;
+            string? sni = Text(entry, "sni");
+            if (Field(entry, "sni") is not null && (sni is null ||
+                sni.Length != 0 && Uri.CheckHostName(sni) == UriHostNameType.Unknown)) return null;
+            string? echConfig = null;
+            if (Field(entry, "ech-opts") is { } ech)
+            {
+                if (ech is not YamlMappingNode options || !HasOnly(options, ["enable", "config"])) return null;
+                switch (Text(options, "enable"))
+                {
+                    case "true" when Text(options, "config") is { Length: > 0 and <= 4096 } config:
+                        echConfig = config;
+                        break;
+                    case "false" or null when Field(options, "config") is null:
+                        break;
+                    default:
+                        return null;
+                }
+            }
+            List<string>? alpn = null;
+            if (Field(entry, "alpn") is { } alpnField)
+            {
+                if (alpnField is not YamlSequenceNode { Children.Count: <= 8 } sequence) return null;
+                alpn = [];
+                foreach (var item in sequence.Children)
+                {
+                    if (item is not YamlScalarNode { Value: { Length: > 0 and <= 32 } value }) return null;
+                    alpn.Add(value);
+                }
+            }
+            protocol = "AnyTLS";
+            settings = new("anytls", server, port, password, Sni: sni, Alpn: alpn,
+                ClientFingerprint: Text(entry, "client-fingerprint"), Fingerprint: Text(entry, "fingerprint"),
+                EchConfig: echConfig);
+        }
+        else
+        {
+            if (!HasOnly(entry, ["name", "type", "server", "port", "port-range", "password", "udp", "username", "transport",
+                "multiplexing", "handshake-mode", "traffic-pattern"]) ||
+                Text(entry, "username") is not { Length: > 0 and <= 256 } username ||
+                Text(entry, "transport") is not ("TCP" or "UDP") ||
+                Text(entry, "traffic-pattern") is { Length: > 4096 }) return null;
+            string? portRange = Text(entry, "port-range");
+            if (Field(entry, "port-range") is not null)
+            {
+                if (port != 0 || portRange is not { Length: > 0 and <= 11 }) return null;
+                string[] bounds = portRange.Split('-');
+                if (bounds.Length != 2 || !int.TryParse(bounds[0], out int first) ||
+                    !int.TryParse(bounds[1], out int last) || first is < 1 or > 65535 ||
+                    last < first || last > 65535) return null;
+                portRange = $"{first}-{last}";
+            }
+            protocol = "Mieru";
+            settings = new("mieru", server, port, password, Username: username, Transport: Text(entry, "transport"),
+                Multiplexing: Text(entry, "multiplexing"), HandshakeMode: Text(entry, "handshake-mode"),
+                TrafficPattern: Text(entry, "traffic-pattern"), PortRange: portRange);
+        }
+        string revision = Revision(JsonSerializer.Serialize(settings, GoProbeJson.Default.GoProbeRequest));
+        return new(protocol, revision, null, WorkerProfile: settings, NativeNode: NativeNodeWebsiteProbe.For(settings));
     }
 
     private static ProbeProfile? ReadTrojanOrVmess(YamlMappingNode entry, string server, int port)
@@ -338,16 +459,19 @@ internal static class IndependentNodeProbe
     {
         private static readonly HttpRequestOptionsKey<DialAttempt> AttemptKey = new("ProbeDialAttempt");
         private sealed class DialAttempt { internal int Count; }
+        private const int TimeoutMs = 7000;
         private readonly Lazy<HttpClient> client;
-        private readonly CancellationTokenSource deadline;
         private readonly CancellationToken stop;
         private readonly NativeShadowsocksProfile? nativeProfile;
         private readonly NativeWebsiteProbe? native;
-        private readonly long deadlineTick;
+        private readonly GoProbeRequest? workerProfile;
+        private readonly NativeNodeWebsiteProbe? nativeNode;
 
         internal Session(ProbeProfile profile, CancellationToken stop)
         {
             this.stop = stop;
+            workerProfile = profile.WorkerProfile;
+            nativeNode = profile.NativeNode;
             nativeProfile = profile.NativeProfile;
             native = nativeProfile is null ? null : NativeWebsiteProbe.Get();
             client = new(() => new HttpClient(new SocketsHttpHandler
@@ -359,12 +483,9 @@ internal static class IndependentNodeProbe
                     if (!context.InitialRequestMessage.Options.TryGetValue(AttemptKey, out var attempt) ||
                         Interlocked.Increment(ref attempt.Count) != 1)
                         throw new HttpRequestException("Independent probe already dialed.");
-                    return profile.Connect(context.DnsEndPoint, token);
+                    return profile.Connect!(context.DnsEndPoint, token);
                 }
             }));
-            deadline = CancellationTokenSource.CreateLinkedTokenSource(stop);
-            deadline.CancelAfter(TimeSpan.FromSeconds(7));
-            deadlineTick = Environment.TickCount64 + 7000;
         }
 
         internal async Task<IndependentResult> MeasureAsync(string node, int index)
@@ -372,8 +493,13 @@ internal static class IndependentNodeProbe
             var targets = ReadOnlyHostClient.WebsiteTargets;
             var (id, uri) = index < targets.Count
                 ? targets[index] : (null, index == targets.Count ? EchoUrl : CorroboratingEchoUrl);
+            if (workerProfile is { } worker && (nativeNode is null || id is null))
+                return await GoWebsiteProbe.MeasureAsync(worker, node, id, uri, stop).ConfigureAwait(false);
+            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(stop);
+            long deadlineTick = Environment.TickCount64 + TimeoutMs;
+            deadline.CancelAfter(TimeoutMs);
             bool attempted = false, timedOut = false;
-            bool useNative = id is not null && native is not null;
+            bool useNative = id is not null && (native is not null || nativeNode is not null);
             try
             {
                 deadline.Token.ThrowIfCancellationRequested();
@@ -381,9 +507,10 @@ internal static class IndependentNodeProbe
                 if (useNative)
                 {
                     attempted = true;
-                    int status = await native!.MeasureAsync(nativeProfile!, uri,
-                        id == "anthropic_api" ? "anthropic-version: 2026-10-21\r\n" : "",
-                        deadlineTick, deadline.Token).ConfigureAwait(false);
+                    string headers = id == "anthropic_api" ? "anthropic-version: 2026-10-21\r\n" : "";
+                    int status = nativeNode is { } backend
+                        ? await backend.MeasureAsync(workerProfile!, uri, headers, deadlineTick, deadline.Token).ConfigureAwait(false)
+                        : await native!.MeasureAsync(nativeProfile!, uri, headers, deadlineTick, deadline.Token).ConfigureAwait(false);
                     if (status == 0) deadline.Token.ThrowIfCancellationRequested();
                     return new(new(id!, node, false, true, status == 0 ? null : status,
                         status == 0 ? null : (int)Stopwatch.GetElapsedTime(start).TotalMilliseconds,
@@ -413,7 +540,6 @@ internal static class IndependentNodeProbe
 
         public void Dispose()
         {
-            deadline.Dispose();
             if (client.IsValueCreated) client.Value.Dispose();
         }
     }
@@ -424,9 +550,12 @@ internal static class IndependentNodeProbe
         await using var stream = await response.Content.ReadAsStreamAsync(token).ConfigureAwait(false);
         var buffer = new byte[65];
         int count = await stream.ReadAtLeastAsync(buffer, buffer.Length, false, token).ConfigureAwait(false);
-        if (count == buffer.Length ||
-            !IPAddress.TryParse(Encoding.ASCII.GetString(buffer, 0, count).Trim(), out var address))
-            return null;
+        return count == buffer.Length ? null : ParseExitAddress(Encoding.ASCII.GetString(buffer, 0, count).Trim());
+    }
+
+    internal static IPAddress? ParseExitAddress(string? value)
+    {
+        if (!IPAddress.TryParse(value, out var address)) return null;
         if (address.IsIPv4MappedToIPv6) address = address.MapToIPv4();
         byte[] octets = address.GetAddressBytes();
         bool publicAddress = octets.Length == 4

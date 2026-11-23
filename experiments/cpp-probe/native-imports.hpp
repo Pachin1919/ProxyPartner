@@ -51,6 +51,9 @@ CryptoContext* EVP_CIPHER_CTX_new();
 void EVP_CIPHER_CTX_free(CryptoContext*);
 int EVP_CIPHER_CTX_reset(CryptoContext*);
 const Cipher* EVP_chacha20_poly1305();
+const Cipher* EVP_aes_128_gcm();
+const Cipher* EVP_aes_192_gcm();
+const Cipher* EVP_aes_256_gcm();
 const Digest* EVP_sha1();
 const Digest* EVP_md5();
 int EVP_BytesToKey(const Cipher*, const Digest*, const unsigned char*, const unsigned char*, int, int,

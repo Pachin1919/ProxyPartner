@@ -1,0 +1,51 @@
+ProxyPartner · Native Windows x64 candidate
+
+Extract the entire ZIP and double-click ProxyPartner.exe. Keep ProxyPartner.Cli.exe,
+the DLLs, certificate bundle and TargetIcons beside the desktop executable.
+
+The desktop reads the known Clash Verge runtime profile path if it exists, or accepts
+an existing local profile in Settings. Only the known standard Clash Verge runtime
+path can automatically pair with an existing sibling .runtime_key, and only when no
+identity was explicitly selected. This inferred path is not written to preferences.
+A profile elsewhere can also be specified with
+ProxyPartner.exe --profile "D:\profiles\nodes.yaml". For AGE profiles, select the
+identity file in Settings. Paths and display/probe preferences stay in the current
+user's LocalAppData\ProxyPartner\NativeDesktop\preferences.json.
+Settings also accepts a legacy JSON object mapping node names to share links.
+PROXYPARTNER_NODE_PROBES can select a local file for this session. An adjacent
+ProbeNodes.json can supply the default when no profile has been selected.
+
+Startup inspects the profile, then runs the first independent node sweep. Refresh
+reloads the catalog and starts a new sweep. Use Test all / Test selected to retest.
+Groups lists the selections from the latest read-only Mihomo snapshot.
+Cancel stops the owned CLI process tree and retains already received results.
+Closing the window hides it in the tray. The tray menu opens the window or exits.
+Use --tray to start hidden. The CLI performs the actual network requests and scoring.
+
+401 is an authentication response. 403 is a service restriction. A response and an
+initial score do not verify login or model access. Details preserve HTTP status.
+
+The native CLI probes AnyTLS, Mieru, Shadowsocks, Trojan, standard VLESS and
+VMess AEAD. The legacy JSON index supports share links for the last four
+protocols. VLESS REALITY, XTLS Vision and client fingerprint options are
+pending migration from the previous version.
+Settings includes the legacy fixed sample weight example and custom target registry.
+Registered targets remain untested. Live scores continue to come from the CLI.
+When native preferences do not exist, the desktop reads the legacy current-user
+LocalAppData\ProxyPartner\Desktop\settings.json. Saving writes only the new native
+preferences file, preserving the legacy file. The baseline history was held in memory.
+The baseline startup entry --tray is preserved. Verify route explicitly checks the
+current path in a separate result window. Only a verified unique node or DIRECT
+matching the summary anchor is labelled as the last verified route. Settings can
+specify an existing local HTTP proxy port from 1 to 65535; empty uses system rules.
+Unknown, rejected and bypassed results remain unverified. Independent scores and
+samples remain separate. Node details has Retest exit IP: one explicit round through
+two HTTPS sources for the selected node and current profile/AGE identity. IPv4/IPv6,
+agreement/conflict, last confirmed address and trends are shown separately. Errors
+preserve previous valid observations. These observations stay in the GUI session;
+refreshing the catalog discards them. Repeated requests pass backend state through
+a unique temporary file deleted on normal completion or cancellation. No permanent
+history or automatic exit requests are added. Cancel stops the owned CLI tree.
+Its CLI parameters include rounds, adaptive concurrency
+limits, fixed concurrency/deadline overrides, and read-only existing core samples.
+Real resource and host non-interference gates remain required.

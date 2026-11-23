@@ -1,0 +1,17 @@
+# Isolated C++ Mieru TCP experiment
+
+Base `ab113a49046bfa0699517450606cb6810f4300dd`, branch `codex/cpp-mieru`. This is a protocol test candidate, not a published or integrated proxy client.
+
+The Mieru framing and key-derivation semantics in `mieru.cpp` are adapted from the official Mieru v3.29.0 source, commit `b03779da1bc7f52042306e1f4665ec562997ebab`: `pkg/cipher/api.go`, `keygen.go`, `cache.go`, `cipher.go`, `pkg/protocol/metadata.go`, `underlay_stream.go`, `session.go`, and `apis/internal/handshake.go` / `apis/model/socks.go`. See the upstream [GPL-3.0-or-later license](Mieru.LICENSE.txt).
+
+The adapter reuses the existing native probe's numeric-address dial, deadline/cancellation, BIO control and HTTPS request functions from `shadowsocks.cpp`. It opens one outbound TCP connection and one session, sends an encrypted SOCKS5 destination request, verifies the SOCKS response, then verifies CA/hostname on the inner HTTPS connection. It has no listener, host-controller request, subscription parser, routing or system configuration action. Cipher keys and credential buffers are wiped. Metadata/payload buffers are bounded.
+
+XChaCha20-Poly1305 is provided by unmodified Monocypher 4.0.3, using its one-shot `crypto_aead_lock`/`crypto_aead_unlock` API, not its ratcheting incremental API. Official release archive SHA256 `8cc9bc341a66249016db9bd70e9142d8d0aef9945973744b1ac05dbc55d8ee66`, matched official release metadata. Monocypher's BSD-2-Clause license option is used and retained. SHA256/PBKDF2, random generation and HTTPS reuse the existing OpenSSL3.5.6 dependency and Apache-2.0 notice. No cryptographic primitive was rewritten.
+
+Supported by the explicit experimental ABI: TCP numeric endpoint, scalar port or inclusive numeric `start-end`, username/raw password, one FQDN HTTPS443 target, deadline and cancellation handle. Range selection picks one endpoint per probe; it has no hidden retry/fallback. No UDP, connection pooling/multiplexing setting, hashed-password input or generalized target-port API is claimed.
+
+The known traffic-pattern `GgQIARAK` decodes in the locked official implementation to TCP fragmentation enabled/maxSleepMs10. Controlled tests enable it on the official server and verify reception across fragmented writes on both ports. This proves receiving/server-side compatibility for that exact pattern. The C++ ABI has no traffic-pattern input and does not implement client-side nonce shaping, TCP fragmentation or arbitrary protobuf/base64 traffic-pattern parsing. Product integration must not report those options implemented or silently claim they were applied.
+
+The synthetic server uses official `apis/server.NewServer`, configuration and authentication/session code without modification. Its listener factory allocates only ephemeral loopback ports. It verifies authenticated `UserContext.UserName`, destination and HTTP request, and never dials a remote address. It is test infrastructure outside the measured AOT/native caller. No real KJX parameter or documentation is involved.
+
+Evidence, dependencies, licenses and source/binary SHA256 are under `runs/coordination/standalone-kjx/backend/next/cpp-mieru` at the coordination root. These controlled checks do not establish real70-node support, full-product40MiB acceptance, independent candidate-commit verification or UI integration. AnyTLS and the separate Mieru import/port-range patch remain untouched.

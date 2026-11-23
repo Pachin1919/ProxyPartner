@@ -6,17 +6,42 @@ param(
     [ValidateSet('Win32','Avalonia')][string]$Variant = 'Win32',
     [string]$TargetIcons,
     [string]$OpenSslBin,
-    [string]$ProbeCaBundle
+    [string]$ProbeCaBundle,
+    [string]$GoProbeExe,
+    [string]$AgeBin,
+    [string]$AnyTlsProbeBin,
+    [string]$MieruProbeBin
 )
 $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $false
 $repo = Split-Path -Parent $PSScriptRoot
+if ($AgeBin) {
+    if ($Variant -ne 'Win32') { throw 'AGE profile support requires the Win32 CLI.' }
+    $AgeBin = (Resolve-Path -LiteralPath $AgeBin).Path
+    foreach ($file in @{
+        'age.exe' = '2821A4ED191DA07372ACD302E5F6FEAE7A7985E285E1417765EBE74025AF45F0'
+        'LICENSE' = 'AFBDB4E07A359499DB587AE632815809B1FC1670A92D5449AF112CE9A67833A2'
+    }.GetEnumerator()) {
+        if ((Get-FileHash -LiteralPath (Join-Path $AgeBin $file.Key)).Hash -ne $file.Value) {
+            throw "Expected verified age v1.3.2 Windows x64 file: $($file.Key)"
+        }
+    }
+}
+if (($AnyTlsProbeBin -or $MieruProbeBin) -and (!$OpenSslBin -or $Variant -ne 'Win32')) {
+    throw 'Additional native adapters require the existing Win32 native probe and CA bundle.'
+}
+if ($AnyTlsProbeBin) { $AnyTlsProbeBin = (Resolve-Path -LiteralPath $AnyTlsProbeBin).Path }
+if ($MieruProbeBin) { $MieruProbeBin = (Resolve-Path -LiteralPath $MieruProbeBin).Path }
 if ([bool]$OpenSslBin -ne [bool]$ProbeCaBundle -or ($OpenSslBin -and $Variant -ne 'Win32')) {
     throw 'Native probes require both OpenSslBin and ProbeCaBundle with the Win32 build.'
 }
 if ($OpenSslBin) {
     $OpenSslBin = (Resolve-Path -LiteralPath $OpenSslBin).Path
     $ProbeCaBundle = (Resolve-Path -LiteralPath $ProbeCaBundle).Path
+}
+if ($GoProbeExe) {
+    if ($Variant -ne 'Win32') { throw 'The node probe requires the Win32 build.' }
+    $GoProbeExe = (Resolve-Path -LiteralPath $GoProbeExe).Path
 }
 $lock = Get-Content -Raw -LiteralPath (Join-Path $repo 'contracts/windows-toolchain.json') | ConvertFrom-Json
 $sdk = Join-Path $ToolchainRoot "dotnet-$($lock.dotnet.sdk)-$($lock.rid)"
@@ -80,13 +105,18 @@ $sources = '<add key="t00" value="' + [Security.SecurityElement]::Escape($feed) 
 if ($Variant -eq 'Avalonia') { $sources += '<add key="nuget" value="https://api.nuget.org/v3/index.json" protocolVersion="3"/>' }
 "<configuration><packageSources><clear/>$sources</packageSources></configuration>" |
     Set-Content -LiteralPath $nuget -Encoding utf8NoBOM
-$restoreArgs = @('restore',$project,'-r','win-x64','--disable-build-servers','--configfile',$nuget,'-p:NuGetAudit=false')
+$restoreArgs = @('restore',$project,'-r','win-x64','--disable-build-servers','--configfile',$nuget,'-p:NuGetAudit=false','-m:1')
 if ($Variant -eq 'Avalonia') { $restoreArgs += '--locked-mode' }
 Invoke-Recorded restore $restoreArgs
 Invoke-Recorded publish @('publish',$project,'-c','Release','-r','win-x64','--self-contained','--no-restore',
-    '--disable-build-servers','-p:DebugType=none','-p:IlcUseEnvironmentalTools=true',"-p:CppLinker=$linker",'-o',$publish)
+    '--disable-build-servers','-m:1','-p:DebugType=none','-p:IlcUseEnvironmentalTools=true',"-p:CppLinker=$linker",'-o',$publish)
 $exe = Join-Path $publish 'ProxyPartner.exe'
 if ($Variant -eq 'Win32') {
+    $cli = Join-Path $repo 'build/ProbeCli/ProbeCli.csproj'
+    Invoke-Recorded cli-restore @('restore',$cli,'-r','win-x64','--disable-build-servers','--configfile',$nuget,'-p:NuGetAudit=false','-m:1')
+    Invoke-Recorded cli-publish @('publish',$cli,'-c','Release','-r','win-x64','--self-contained','--no-restore',
+        '--disable-build-servers','-m:1','-p:DebugType=none','-p:IlcUseEnvironmentalTools=true',"-p:CppLinker=$linker",'-o',(Join-Path $out 'cli-publish'))
+    Copy-Item -LiteralPath (Join-Path $out 'cli-publish/ProxyPartner.Cli.exe') -Destination $publish
     Copy-Item -LiteralPath (Join-Path $repo 'build/DesktopBaseline/QuickProxyNet.LICENSE.txt') -Destination $publish
     Copy-Item -LiteralPath (Join-Path $repo 'build/DesktopBaseline/YamlDotNet.LICENSE.txt') -Destination $publish
     Copy-Item -LiteralPath (Join-Path $repo 'build/DesktopBaseline/Gost.LICENSE.txt') -Destination $publish
@@ -113,7 +143,7 @@ if ($Variant -eq 'Win32' -and $TargetIcons) {
         throw 'TargetIcons must point to an existing absolute directory of local preview resources.'
     }
     $destination = Join-Path $publish 'TargetIcons'
-    $null = New-Item -ItemType Directory -Path $destination
+    $null = New-Item -ItemType Directory -Path $destination -Force
     $sourcesFile = Join-Path $TargetIcons 'sources.json'
     $iconSources = if (Test-Path -LiteralPath $sourcesFile -PathType Leaf) {
         Get-Content -Raw -LiteralPath $sourcesFile | ConvertFrom-Json
@@ -131,6 +161,39 @@ if ($Variant -eq 'Win32' -and $TargetIcons) {
         }
     }
     if ($iconSources) { Copy-Item -LiteralPath $sourcesFile -Destination (Join-Path $destination 'sources.json') }
+}
+if ($GoProbeExe) {
+    Copy-Item -LiteralPath $GoProbeExe -Destination (Join-Path $publish 'ProxyPartner.NodeProbe.exe')
+    Copy-Item -LiteralPath (Join-Path $repo 'tools/NodeProbe/NOTICE.md') -Destination (Join-Path $publish 'NodeProbe.NOTICE.md')
+    Copy-Item -LiteralPath (Join-Path $repo 'tools/NodeProbe/LICENSE.mihomo') -Destination (Join-Path $publish 'NodeProbe.LICENSE.mihomo.txt')
+}
+if ($AgeBin) {
+    Copy-Item -LiteralPath (Join-Path $AgeBin 'age.exe') -Destination $publish
+    Copy-Item -LiteralPath (Join-Path $AgeBin 'LICENSE') -Destination (Join-Path $publish 'age.LICENSE.txt')
+}
+foreach ($adapter in @(
+    @{ Name='AnyTls'; Source=$AnyTlsProbeBin; Crypto='4'; License='Mihomo-LICENSE'; Notice='ANYTLS_PROVENANCE.md' },
+    @{ Name='Mieru'; Source=$MieruProbeBin; Crypto='3'; License='Mieru-LICENSE'; Notice='MIERU_PROVENANCE.md' }
+)) {
+    if (!$adapter.Source) { continue }
+    Copy-Item -LiteralPath (Join-Path $adapter.Source 'ProxyPartner.NativeProbe.dll') -Destination (Join-Path $publish "ProxyPartner.$($adapter.Name)Probe.dll")
+    foreach ($name in @("libcrypto-$($adapter.Crypto)-x64.dll", "libssl-$($adapter.Crypto)-x64.dll")) {
+        $source = Join-Path $adapter.Source $name
+        $destination = Join-Path $publish $name
+        if (Test-Path -LiteralPath $destination) {
+            if ((Get-FileHash -LiteralPath $source).Hash -ne (Get-FileHash -LiteralPath $destination).Hash) {
+                throw "Native adapters disagree on shared dependency $name"
+            }
+        } else { Copy-Item -LiteralPath $source -Destination $destination }
+    }
+    Copy-Item -LiteralPath (Join-Path $adapter.Source $adapter.License) -Destination (Join-Path $publish "$($adapter.Name).LICENSE.txt")
+    Copy-Item -LiteralPath (Join-Path $repo "experiments/cpp-probe/$($adapter.Notice)") -Destination (Join-Path $publish "$($adapter.Name).NOTICE.md")
+}
+if ($AnyTlsProbeBin) { Copy-Item -LiteralPath (Join-Path $AnyTlsProbeBin 'OpenSSL-LICENSE.txt') -Destination (Join-Path $publish 'OpenSSL4.LICENSE.txt') }
+if ($MieruProbeBin) { Copy-Item -LiteralPath (Join-Path $MieruProbeBin 'Monocypher-LICENCE.md') -Destination (Join-Path $publish 'Monocypher.LICENSE.md') }
+if ($AnyTlsProbeBin -or $MieruProbeBin) {
+    'Local experimental integration containing GPL-derived native adapters. Not an MIT-only formal release. See adapter notices, licenses and matching source/worktree evidence before redistribution.' |
+        Set-Content -LiteralPath (Join-Path $publish 'EXPERIMENTAL-NATIVE-NOTICE.txt')
 }
 $head = git -C $repo rev-parse HEAD
 if ($LASTEXITCODE -ne 0) { throw 'Cannot resolve build HEAD.' }

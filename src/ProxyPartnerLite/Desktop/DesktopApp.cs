@@ -9,6 +9,9 @@ public sealed unsafe partial class DesktopApp
     private const string TrayClass = "ProxyPartner.Tray", PanelClass = "ProxyPartner.Panel";
     private const uint TrayMessage = 0x8001, SnapshotMessage = 0x8002;
     private const int CurrentProbeTimer = 1;
+    private const int CardAnimationTimer = 2;
+    private int spinnerFrame;
+    private bool animatingCards;
     private const uint CurrentProbeIntervalMs = 10_000;
     private const int Open = 101, Exit = 102, Search = 103, Groups = 104, Toggle = 107, SortMenu = 108, SortFirst = 110;
     private const int TestServers = 131;
@@ -42,6 +45,7 @@ public sealed unsafe partial class DesktopApp
         this.settingsPath = Path.GetFullPath(settingsPath ?? Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ProxyPartner", "Desktop", "settings.json"));
         preferences = DesktopPreferences.Load(this.settingsPath);
+        if (source is IDesktopProbeProfileSource profiles) profiles.SetProbeProfilePath(preferences.ProbeProfilePath);
     }
 
     private string L(string zh, string en) => preferences.English ? en : zh;
@@ -189,6 +193,12 @@ public sealed unsafe partial class DesktopApp
         {
             switch (msg)
             {
+                case WmTimer when wParam == CardAnimationTimer:
+                    spinnerFrame = (spinnerFrame + 1) & 3;
+                    var (first, end) = VisibleCardRange();
+                    for (int i = first; i < end; i++)
+                        if (rows[i].Testing) InvalidateCard(i, probeIconOnly: true);
+                    return 0;
                 case WmSize: Layout(); return 0;
                 case WmClose: DestroyWindow(panel); return 0;
                 case WmTimer when wParam == CurrentProbeTimer && source is IDesktopCurrentTestSource timerSource:
@@ -196,6 +206,8 @@ public sealed unsafe partial class DesktopApp
                     return 0;
                 case WmDestroy:
                     if (source is IDesktopCurrentTestSource) KillTimer(window, CurrentProbeTimer);
+                    KillTimer(window, CardAnimationTimer);
+                    animatingCards = false;
                     source.SnapshotChanged -= OnSnapshotChanged;
                     rows = [];
                     if (settingsWindow != 0) DestroyWindow(settingsWindow);
@@ -250,7 +262,17 @@ public sealed unsafe partial class DesktopApp
                     if (id == SortMenu) ShowSortMenu();
                     if (id == OpenSettings) ShowSettings();
                     if (id == OpenDetails) ShowDetails();
-                    if (id == TestServers && source is IDesktopCurrentTestSource servers) servers.RequestSweep();
+                    if (id == TestServers && source is IDesktopCurrentTestSource servers)
+                    {
+                        var (start, lastVisible) = VisibleCardRange();
+                        if (tableMode)
+                        {
+                            start = (int)Send(list, LvmFirst + 39, 0, 0); // LVM_GETTOPINDEX
+                            lastVisible = start + (int)Send(list, LvmFirst + 40, 0, 0) + 1; // LVM_GETCOUNTPERPAGE
+                        }
+                        servers.RequestSweep(rows.Skip(start).Take(lastVisible - start)
+                            .Where(static row => row.Kind == NodeKind.Leaf).Select(static row => row.Name).ToArray());
+                    }
                     if (id >= SortFirst && id < SortFirst + Columns.Length) Sort(id - SortFirst);
                     return 0;
                 case WmNotify:
@@ -371,11 +393,8 @@ public sealed unsafe partial class DesktopApp
         }
         else ApplyDpi(initialDpi, null);
         source.SnapshotChanged += OnSnapshotChanged;
-        if (source is IDesktopCurrentTestSource test)
-        {
-            test.RequestSweep();
+        if (source is IDesktopCurrentTestSource)
             SetTimer(panel, CurrentProbeTimer, CurrentProbeIntervalMs, 0);
-        }
         Refresh();
         ShowWindow(panel, 5);
         UpdateWindow(panel);
@@ -577,6 +596,7 @@ public sealed unsafe partial class DesktopApp
     private void UpdateStatus(DesktopSnapshot? snapshot = null)
     {
         snapshot ??= source.GetSnapshot();
+        UpdateCardAnimation();
         string progress = snapshot.Collection == CollectionState.Observing &&
             snapshot.ServerSweep is { WebsiteTotal: > 0 } website
             ? L($"独立五站 {website.WebsiteCompleted}/{website.WebsiteTotal}",
@@ -593,7 +613,18 @@ public sealed unsafe partial class DesktopApp
             {
                 CollectionState.Connecting => L("正在连接", "Connecting"),
                 CollectionState.Observing => L("已连接", "Connected"),
-                _ => L("未连接", "Disconnected")
+                _ => snapshot.ConnectionIssue switch
+                {
+                    HostConnectionIssue.NotDetected => L("未检测到本机 Mihomo，请启动 Clash Verge Rev", "Local Mihomo not found. Start Clash Verge Rev."),
+                    HostConnectionIssue.Ambiguous => L("检测到多个宿主实例，请保留一个", "Multiple host instances detected. Keep one running."),
+                    HostConnectionIssue.IdentityRejected => L("无法确认本机 Mihomo 的身份", "Could not verify the local Mihomo instance."),
+                    HostConnectionIssue.AccessDenied => L("本机 Mihomo 拒绝读取，请检查 Clash Verge Rev 的运行状态", "Mihomo denied read access. Check Clash Verge Rev."),
+                    HostConnectionIssue.PipeUnavailable => L("已检测到 Mihomo，本机接口暂不可用", "Mihomo detected. Its local interface is unavailable."),
+                    HostConnectionIssue.TimedOut => L("读取本机 Mihomo 超时", "Reading from local Mihomo timed out."),
+                    HostConnectionIssue.InvalidResponse => L("本机 Mihomo 返回的数据无法读取", "Local Mihomo returned unreadable data."),
+                    HostConnectionIssue.TransportError => L("读取本机 Mihomo 失败", "Could not read from local Mihomo."),
+                    _ => L("未连接", "Disconnected")
+                }
             };
             string count = snapshot.Collection == CollectionState.Observing
                 ? (showGroups ? L($" · 显示 {rows.Length} 项", $" · {rows.Length} items shown")
@@ -613,7 +644,10 @@ public sealed unsafe partial class DesktopApp
             {
                 if (sweep.UnavailableNode is not null)
                     probe += L(" · 该节点暂无独立测速入口", " · This node has no independent probe route");
-                if (sweep.ProbeEligible < sweep.NodeCount)
+                if (sweep.ProbeEligible == 0 && sweep.NodeCount > 0)
+                    probe += L(" · 暂无可独立测速节点，请检查设置中的 Clash 运行配置",
+                        " · No nodes available for independent tests. Check the Clash runtime profile in Settings.");
+                else if (sweep.ProbeEligible < sweep.NodeCount)
                     probe += L($" · 可独立测速 {sweep.ProbeEligible}/{sweep.NodeCount}",
                         $" · Independent probe coverage {sweep.ProbeEligible}/{sweep.NodeCount}");
                 if (sweep.BatchTotal > 0)
@@ -665,6 +699,7 @@ public sealed unsafe partial class DesktopApp
             ShowWindow(incoming, 5);
         RedrawWindow(incoming, null, 0, 0x181); // RDW_INVALIDATE | RDW_ALLCHILDREN | RDW_UPDATENOW
         ShowWindow(outgoing, 0);
+        UpdateCardAnimation();
         SetFocus(incoming);
     }
 

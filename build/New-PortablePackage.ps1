@@ -2,6 +2,7 @@
 [CmdletBinding()]
 param(
     [string]$ToolchainRoot = (Join-Path $PSScriptRoot '../runs/toolchain'),
+    [string]$AgeBin,
     [string]$OutputDirectory
 )
 
@@ -19,17 +20,20 @@ $output = (New-Item -ItemType Directory -Path $OutputDirectory).FullName
 $gitRoot = Split-Path -Parent (Split-Path -Parent (git --exec-path))
 $sslBin = Join-Path $gitRoot 'bin'
 $caBundle = Join-Path $gitRoot 'etc/ssl/certs/ca-bundle.crt'
+$ageArgs = if ($AgeBin) { @('-AgeBin', (Resolve-Path -LiteralPath $AgeBin).Path) } else { @() }
 & pwsh -NoProfile -NonInteractive -File (Join-Path $PSScriptRoot 'Publish-DesktopBaseline.ps1') `
-    -ToolchainRoot $ToolchainRoot -EvidenceDirectory $output -OpenSslBin $sslBin -ProbeCaBundle $caBundle
+    -ToolchainRoot $ToolchainRoot -EvidenceDirectory $output -OpenSslBin $sslBin -ProbeCaBundle $caBundle @ageArgs
 
 $build = Get-Content -Raw -LiteralPath (Join-Path $output 'win32/artifact.json') | ConvertFrom-Json
 if ($build.head_sha -cne $sha) { throw 'The source revision changed during the build.' }
 $publish = Split-Path -Parent $build.exe
 $files = [ordered]@{}
-foreach ($name in 'ProxyPartner.exe','ProxyPartner.NativeProbe.dll','libcrypto-3-x64.dll','libssl-3-x64.dll',
+$names = 'ProxyPartner.exe','ProxyPartner.Cli.exe','ProxyPartner.NativeProbe.dll','libcrypto-3-x64.dll','libssl-3-x64.dll',
     'probe-ca-bundle.crt','NativeProbe.NOTICE.txt','OpenSSL.LICENSE.txt','Gost.LICENSE.txt',
     'QuickProxyNet.LICENSE.txt','YamlDotNet.LICENSE.txt','TargetIcons/google.ico','TargetIcons/youtube.ico',
-    'TargetIcons/openai_api.ico','TargetIcons/chatgpt_web.ico','TargetIcons/anthropic_api.ico','TargetIcons/sources.json') {
+    'TargetIcons/openai_api.ico','TargetIcons/chatgpt_web.ico','TargetIcons/anthropic_api.ico','TargetIcons/sources.json'
+if ($AgeBin) { $names += 'age.exe','age.LICENSE.txt' }
+foreach ($name in $names) {
     $path = Join-Path $publish $name
     $expected = $build.files | Where-Object name -ceq $name
     if (!$expected -or (Get-FileHash -LiteralPath $path).Hash -ne $expected.sha256) {
