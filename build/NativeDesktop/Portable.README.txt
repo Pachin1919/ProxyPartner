@@ -25,9 +25,10 @@ Use --tray to start hidden. The CLI performs the actual network requests and sco
 401 is an authentication response. 403 is a service restriction. A response and an
 initial score do not verify login or model access. Details preserve HTTP status.
 
-The C++ Windows desktop uses the native CLI for AnyTLS, Mieru and Shadowsocks
-website probes. Shadowsocks supports standard AEAD and TLS-obfs. VLESS, VMess,
-Trojan and JSON node-link import are pending migration from the previous version.
+The native CLI probes AnyTLS, Mieru, Shadowsocks, Trojan, standard VLESS and
+VMess AEAD. The legacy JSON index supports share links for the last four
+protocols. VLESS REALITY, XTLS Vision and client fingerprint options are
+pending migration from the previous version.
 Settings includes the legacy fixed sample weight example and custom target registry.
 Registered targets remain untested. Live scores continue to come from the CLI.
 When native preferences do not exist, the desktop reads the legacy current-user
