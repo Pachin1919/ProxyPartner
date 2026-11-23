@@ -2,6 +2,7 @@
 #include "shadowsocks.cpp"
 extern "C" {
 Byte* SHA256(const Byte*, unsigned __int64, Byte*);
+int strcmp(const char*, const char*);
 const Digest* EVP_sha256();
 int PKCS5_PBKDF2_HMAC(const char*, int, const Byte*, int, int, const Digest*, int, Byte*);
 int BIO_free(Bio*);
@@ -28,6 +29,8 @@ struct MieruChannel {
     Byte key[32]{}, sendNonce[24]{}, recvNonce[24]{};
     unsigned session = 0, sequence = 0, receiveSequence = 0;
     bool firstSend = true, firstReceive = true;
+    bool shaped = false;
+    const char* username = nullptr;
     Byte plain[65535];
     int available = 0, offset = 0;
     ~MieruChannel() {
@@ -56,7 +59,18 @@ struct MieruChannel {
         Byte encrypted[16384 + 16];
         if (length > 16384) return false;
         if (firstSend) {
-            if (RAND_bytes(sendNonce, 24) != 1 || !transfer(sendNonce, 24, true)) return false;
+            if (RAND_bytes(sendNonce, 24) != 1) return false;
+            if (shaped) {
+                constexpr char subset[] = "CCOzB3KKr9NDAgVnJcCn9ib37T1JH6vRSVx8YaNnXbfo6yFU1EHPy2r3D5LM1Qi4";
+                for (int i = 0; i < 9; ++i) sendNonce[i] = subset[sendNonce[i] & 63];
+                Byte hintInput[271], hint[32];
+                auto userLength = strlen(username);
+                memcpy(hintInput, username, userLength);
+                memcpy(hintInput + userLength, sendNonce, 16);
+                SHA256(hintInput, userLength + 16, hint);
+                memcpy(sendNonce + 20, hint, 4);
+            }
+            if (!transfer(sendNonce, 24, true)) return false;
             firstSend = false;
         } else increase(sendNonce);
         crypto_aead_lock(encrypted, encrypted + length, key, sendNonce, nullptr, 0, data, length);
@@ -74,17 +88,29 @@ struct MieruChannel {
     }
     bool frame(Byte protocol, const Byte* data, int length) {
         Byte meta[32]{};
+        Byte suffix[255];
+        int suffixLength = 0;
+        if (shaped) {
+            if (RAND_bytes(suffix, sizeof(suffix)) != 1) return false;
+            suffixLength = suffix[0];
+            for (int i = 0; i < suffixLength; ++i) suffix[i] = static_cast<Byte>(32 + suffix[i] % 95);
+        }
         meta[0] = protocol;
         put32(meta + 2, static_cast<unsigned>(_time64(nullptr) / 60));
         put32(meta + 6, session);
         put32(meta + 10, sequence++);
-        if (protocol == 2) put16(meta + 15, length);
+        if (protocol == 2) {
+            put16(meta + 15, length);
+            meta[17] = static_cast<Byte>(suffixLength);
+        }
         else {
             put32(meta + 14, receiveSequence);
             put16(meta + 18, 256);
             put16(meta + 22, length);
+            meta[24] = static_cast<Byte>(suffixLength);
         }
-        return encrypt(meta, 32) && (!length || encrypt(data, length));
+        return encrypt(meta, 32) && (!length || encrypt(data, length)) &&
+            (!suffixLength || transfer(suffix, suffixLength, true));
     }
     bool padding(int count) const {
         Byte discard[255];
@@ -164,9 +190,9 @@ extern "C" __declspec(dllexport) void ProbeShutdown() {
     mieruContext = nullptr;
     mieruMethod = nullptr;
 }
-extern "C" __declspec(dllexport) int ProbeMieruWebsite(const char* address, const char* port,
+static int measureMieru(const char* address, const char* port,
     const char* username, const char* password, const char* host, const char* path, const char* headers,
-    unsigned remaining, Handle stop, int* status) {
+    unsigned remaining, Handle stop, int* status, bool shaped) {
     *status = 0;
     Tick deadline = GetTickCount64() + remaining;
     int userLen = static_cast<int>(strlen(username)), passLen = static_cast<int>(strlen(password)),
@@ -207,6 +233,8 @@ extern "C" __declspec(dllexport) int ProbeMieruWebsite(const char* address, cons
     selectedPort[digits] = 0;
     Profile profile{address, selectedPort, nullptr, {}, true};
     MieruChannel channel{dial(profile, deadline, stop), deadline, stop};
+    channel.shaped = shaped;
+    channel.username = username;
     if (channel.connection == invalidSocket) return 0;
     Byte credentials[1280], passwordHash[32], salt[32], timeBytes[8]{};
     memcpy(credentials, password, passLen);
@@ -257,4 +285,20 @@ extern "C" __declspec(dllexport) int ProbeMieruWebsite(const char* address, cons
     }
     SSL_free(ssl);
     return ok;
+}
+extern "C" __declspec(dllexport) int ProbeMieruWebsite(const char* address, const char* port,
+    const char* username, const char* password, const char* host, const char* path, const char* headers,
+    unsigned remaining, Handle stop, int* status) {
+    return measureMieru(address, port, username, password, host, path, headers, remaining, stop, status, false);
+}
+extern "C" __declspec(dllexport) int ProbeMieruWebsiteV2(const char* address, const char* port,
+    const char* username, const char* password, const char* trafficPattern, const char* multiplexing,
+    const char* handshakeMode, const char* host, const char* path, const char* headers,
+    unsigned remaining, Handle stop, int* status) {
+    *status = 0;
+    constexpr char supported[] = "CKPfirUDEAAaBAgAEAAiCAgCEAEYCSAJKgUIABD/ATICCAA=";
+    if (strcmp(trafficPattern, supported) != 0 ||
+        (*multiplexing && strcmp(multiplexing, "MULTIPLEXING_HIGH") != 0 && strcmp(multiplexing, "MULTIPLEXING_LOW") != 0) ||
+        *handshakeMode) return 0;
+    return measureMieru(address, port, username, password, host, path, headers, remaining, stop, status, true);
 }
