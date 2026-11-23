@@ -33,7 +33,7 @@ static int probeShadowsocks(const char* address,const char* port,const char* pas
     Handle stop,int* status,bool legacyObfs,char* body=nullptr,unsigned capacity=0,unsigned* used=nullptr) {
     *status=0;
     if(body) { *used=0;if(capacity<65 || *headers)return 0; }
-    if(passwordBytes<1 || passwordBytes>4096)return 0;
+    if(passwordBytes<1 || passwordBytes>12288)return 0;
     if(strlen(host)<1 || strlen(host)>255 || strlen(obfsHost)>253 || strlen(host)+strlen(path)+strlen(headers)>=400)return 0;
     Profile profile{address,port,obfsHost,{},true};
     profile.tlsObfs=legacyObfs || *obfsHost;

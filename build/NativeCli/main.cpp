@@ -165,7 +165,7 @@ std::optional<Profile> parse_profile(std::string_view text) {
         node.password = value("password");
         const auto type = value("type");
         if (!node.server.empty() && node.server.size() <= 253 && !node.password.empty() &&
-            node.password.size() <= 4096 && (type=="ss" || node.password.find('\0') == std::string::npos)) {
+            node.password.size() <= (type=="ss"?12288u:4096u) && (type=="ss" || node.password.find('\0') == std::string::npos)) {
             if (type == "anytls" && port_ok(node.port) &&
                 fields(document, entry, {"name","type","server","port","password","udp","sni","alpn",
                     "client-fingerprint","fingerprint","skip-cert-verify","ech-opts"}) &&
@@ -209,8 +209,9 @@ std::optional<Profile> parse_profile(std::string_view text) {
             if (type == "ss" && port_ok(node.port) &&
                 fields(document, entry, {"name","type","server","port","cipher","password","plugin","plugin-opts","udp","client-fingerprint"})) {
                 node.cipher=value("cipher");
-                const bool supported=node.cipher=="aes-128-gcm" || node.cipher=="aes-192-gcm" ||
-                    node.cipher=="aes-256-gcm" || node.cipher=="chacha20-ietf-poly1305";
+                const auto passwordUnits=MultiByteToWideChar(CP_UTF8,MB_ERR_INVALID_CHARS,node.password.data(),static_cast<int>(node.password.size()),nullptr,0);
+                const bool supported=passwordUnits>0 && passwordUnits<=4096 && (node.cipher=="aes-128-gcm" || node.cipher=="aes-192-gcm" ||
+                    node.cipher=="aes-256-gcm" || node.cipher=="chacha20-ietf-poly1305");
                 const auto plugin=field(document,entry,"plugin");
                 const auto opts=field(document,entry,"plugin-opts");
                 if(supported && !plugin && !opts) node.protocol=Protocol::Shadowsocks;
