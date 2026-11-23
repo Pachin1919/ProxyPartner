@@ -8,7 +8,91 @@ void Check(bool condition,const char* name) {
         std::cerr<<name<<"\n";
     }
 }
+void InitializeHiddenApp() {
+    app.instance=GetModuleHandleW(nullptr);
+    INITCOMMONCONTROLSEX controls{sizeof controls,ICC_LISTVIEW_CLASSES};
+    InitCommonControlsEx(&controls);
+    WNDCLASSW cls{};
+    cls.hInstance=app.instance;
+    cls.lpfnWndProc=DefWindowProcW;
+    cls.lpszClassName=L"NativeDesktop.Test.Hidden";
+    RegisterClassW(&cls);
+    app.window=CreateWindowExW(0,cls.lpszClassName,L"",WS_OVERLAPPEDWINDOW,0,0,1000,650,nullptr,nullptr,app.instance,nullptr);
+    cls.lpfnWndProc=CardsProc;
+    cls.lpszClassName=L"NativeDesktop.Test.Cards";
+    RegisterClassW(&cls);
+    app.table=Child(app.window,WC_LISTVIEWW,L"",List,LVS_REPORT|LVS_OWNERDATA);
+    app.cards=Child(app.window,cls.lpszClassName,L"",Cards);
+    app.status=Child(app.window,L"STATIC",L"",100);
+    app.search=Child(app.window,L"EDIT",L"",Search);
+    for(int id=View;id<=Details;++id)Child(app.window,L"BUTTON",L"",id);
+    app.Theme();
+    if(!app.directory.empty())for(int i=0;i<5;++i){
+        auto path=app.directory/L"TargetIcons"/(std::wstring(SiteIds[i])+L".ico");
+        app.icons[i]=static_cast<HICON>(LoadImageW(nullptr,path.c_str(),IMAGE_ICON,0,0,LR_LOADFROMFILE));
+    }
+}
+int Acceptance(int argc,wchar_t** argv) {
+    fs::path output;
+    for(int i=2;i<argc;++i){
+        if(i+1>=argc)return 2;
+        std::wstring option=argv[i],value=argv[++i];
+        if(option==L"--profile")app.prefs.profile=value;
+        else if(option==L"--age-identity")app.prefs.identity=value;
+        else if(option==L"--cli-dir")app.directory=value;
+        else if(option==L"--output")output=value;
+        else return 2;
+    }
+    if(!LocalFile(app.prefs.profile) || (!app.prefs.identity.empty() && !LocalFile(app.prefs.identity)) ||
+        app.directory.empty() || output.empty() || !output.is_absolute() || fs::exists(output))return 2;
+    HANDLE job=CreateJobObjectW(nullptr,nullptr);
+    if(!job || !AssignProcessToJobObject(job,GetCurrentProcess())){
+        if(job)CloseHandle(job);
+        return 2;
+    }
+    InitializeHiddenApp();
+    app.prefs.deadline=6000;
+    ULONGLONG started=GetTickCount64();
+    auto run=[&](bool inspect){
+        app.Start(inspect);
+        while(app.Running() && GetTickCount64()-started<600000){app.Drain();Sleep(10);}
+        if(app.Running())app.Finish(true);
+    };
+    run(true);
+    bool catalog=!app.nodes.empty();
+    if(catalog)run(false);
+    Json counts=Json::object();
+    int scored=0,received=0;
+    for(const auto& node:app.nodes){
+        if(node.round)++received;
+        if(node.score>=0)++scored;
+        for(const auto& site:node.sites){
+            std::string state=site.timeout?"timeout":!site.attempted?"unattempted":std::to_string(site.http);
+            if(!counts.contains(state))counts[state]=0;
+            counts[state]=counts[state].get<int>()+1;
+        }
+    }
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION memory{};
+    JOBOBJECT_BASIC_ACCOUNTING_INFORMATION processes{};
+    bool accounting=QueryInformationJobObject(job,JobObjectExtendedLimitInformation,&memory,sizeof memory,nullptr) &&
+        QueryInformationJobObject(job,JobObjectBasicAccountingInformation,&processes,sizeof processes,nullptr);
+    bool finished=catalog && app.sawSummary && !app.Running();
+    Json result={{"status",finished && accounting?"COMPLETE":"INCOMPLETE"},{"nodes",app.nodes.size()},
+        {"received_nodes",received},{"scored_nodes",scored},{"cli_completed",app.completed},{"attempts",app.attempts},
+        {"http_counts",counts},{"wall_ms",GetTickCount64()-started},{"deadline_ms",6000},
+        {"peak_job_commit_bytes",memory.PeakJobMemoryUsed},{"total_job_processes",processes.TotalProcesses},
+        {"active_job_processes_at_report",processes.ActiveProcesses},{"accounting",accounting},
+        {"measurement_scope","acceptance executable including actual App::Start, CLI and descendants through report"},
+        {"gui_visual","NOT_RUN"}};
+    std::ofstream file(output,std::ios::binary);
+    file<<result.dump(2);
+    file.close();
+    DestroyWindow(app.window);
+    CloseHandle(job);
+    return finished && accounting && file.good()?0:1;
+}
 int wmain(int argc,wchar_t** argv) {
+    if(argc>1 && wcscmp(argv[1],L"--acceptance")==0)return Acceptance(argc,argv);
     if(argc>1 && wcscmp(argv[1],L"--fixture-grandchild")==0){Sleep(60000);
         return 0;
     }
@@ -30,26 +114,21 @@ int wmain(int argc,wchar_t** argv) {
             Sleep(60000);
             return 0;
         }
+        std::wstring profile,identity;
+        for(int i=2;i+1<argc;++i){
+            if(wcscmp(argv[i],L"--profile")==0)profile=argv[i+1];
+            if(wcscmp(argv[i],L"--age-identity")==0)identity=argv[i+1];
+        }
+        if(!profile.empty()){
+            std::ofstream observed(fs::path(profile).parent_path()/L"observed-identity.txt");
+            observed<<Utf8(identity);
+        }
         std::cout<<"{\"event\":\"catalog\",\"nodes\":1}\n"
         <<"{\"event\":\"node\",\"node\":\"test-node\",\"protocol\":\"test\",\"state\":\"ready\"}\n";
         return 0;
     }
     if(argc!=2 && argc!=3)return 2;
-    app.instance=GetModuleHandleW(nullptr);
-    INITCOMMONCONTROLSEX controls{sizeof controls,ICC_LISTVIEW_CLASSES};
-    InitCommonControlsEx(&controls);
-    WNDCLASSW cls{};
-    cls.hInstance=app.instance;
-    cls.lpfnWndProc=DefWindowProcW;
-    cls.lpszClassName=L"NativeDesktop.Test.Hidden";
-    RegisterClassW(&cls);
-    app.window=CreateWindowExW(0,cls.lpszClassName,L"",WS_OVERLAPPEDWINDOW,0,0,1000,650,nullptr,nullptr,app.instance,nullptr);
-    app.table=Child(app.window,WC_LISTVIEWW,L"",List,LVS_REPORT|LVS_OWNERDATA);
-    app.cards=Child(app.window,L"STATIC",L"",Cards);
-    app.status=Child(app.window,L"STATIC",L"",100);
-    app.search=Child(app.window,L"EDIT",L"",Search);
-    for(int id=View;id<=Details;++id)Child(app.window,L"BUTTON",L"",id);
-    app.Theme();
+    InitializeHiddenApp();
     Check(Wide(Utf8(L"香港节点 🟢"))==L"香港节点 🟢","UTF8 node roundtrip");
     std::wstring quoted=Quote(L"C:\\a path\\\"quoted\\");
     int count=0;
@@ -89,6 +168,8 @@ int wmain(int argc,wchar_t** argv) {
     {std::ofstream fixture(app.prefs.profile);
         fixture<<"fixture-only, never passed to a live CLI";
     }
+    app.standardProfile=app.prefs.profile;
+    {std::ofstream key(root/L".runtime_key");key<<"fixture-only";}
     SetWindowTextW(app.search,L"");
     app.Start(true);
     ULONGLONG deadline=GetTickCount64()+10000;
@@ -96,6 +177,22 @@ int wmain(int argc,wchar_t** argv) {
         Sleep(10);
     }
     Check(!app.Running() && app.nodes.size()==1 && app.nodes[0].name==L"test-node","Child inspect JSONL lifecycle");
+    {
+        std::ifstream observed(root/L"observed-identity.txt");
+        std::string identity;
+        std::getline(observed,identity);
+        Check(Wide(identity)==(root/L".runtime_key").wstring() && app.prefs.identity.empty(),"Standard runtime key passed without changing preferences");
+    }
+    app.standardProfile=root/L"different-runtime.yaml";
+    app.Start(true);
+    deadline=GetTickCount64()+10000;
+    while(app.Running() && GetTickCount64()<deadline){app.Drain();Sleep(10);}
+    {
+        std::ifstream observed(root/L"observed-identity.txt");
+        std::string identity;
+        std::getline(observed,identity);
+        Check(!app.Running() && identity.empty(),"Imported profile does not borrow a runtime key");
+    }
     app.Start(false);
     Check(app.Running(),"Child probe started");
     fs::path pidFile=root/L"grandchild.pid";
@@ -130,7 +227,7 @@ int wmain(int argc,wchar_t** argv) {
         app.prefs.profile=(root/L"inspect-only.yaml").wstring();
         {
             std::ofstream profile(app.prefs.profile);
-            profile<<"proxies:\n  - name: '"<<Utf8(L"contract-only · 香港")<<"'\n    type: ss\n    server: 127.0.0.1\n    port: 9\n    cipher: chacha20-ietf-poly1305\n    password: fixture-only\n";
+            profile<<"proxies:\n  - name: '"<<Utf8(L"contract-only · 香港")<<"'\n    type: ss\n    server: 127.0.0.1\n    port: 9\n    cipher: chacha20-ietf-poly1305\n    password: fixture-only\n    plugin: obfs\n    plugin-opts:\n      mode: tls\n      host: example.invalid\n";
         }
         app.Start(true);
         deadline=GetTickCount64()+15000;
@@ -142,6 +239,7 @@ int wmain(int argc,wchar_t** argv) {
     if(app.font)DeleteObject(app.font);
     if(app.bold)DeleteObject(app.bold);
     if(app.scoreFont)DeleteObject(app.scoreFont);
+    if(app.siteFont)DeleteObject(app.siteFont);
     if(app.controlBrush)DeleteObject(app.controlBrush);
     if(app.backgroundBrush)DeleteObject(app.backgroundBrush);
     DestroyWindow(app.window);

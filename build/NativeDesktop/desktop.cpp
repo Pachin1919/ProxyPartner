@@ -89,7 +89,7 @@ struct Preferences {
 struct App {
     HINSTANCE instance{};
     HWND window{}, status{}, search{}, table{}, cards{}, settings{}, details{}, detailText{}, tooltip{};
-    HFONT font{}, bold{}, scoreFont{};
+    HFONT font{}, bold{}, scoreFont{}, siteFont{};
     HBRUSH controlBrush{}, backgroundBrush{};
     HICON appIcon{}, icons[5]{};
     Preferences prefs;
@@ -103,7 +103,7 @@ struct App {
     ULONGLONG started = 0, lastOutput = 0;
     std::string pending;
     std::wstring message, tipText;
-    fs::path directory, preferencePath;
+    fs::path directory, preferencePath, standardProfile;
     const wchar_t* L(const wchar_t* zh, const wchar_t* en) const { return prefs.english ? en : zh;
     }
     int Px(int value) const { return MulDiv(value, static_cast<int>(dpi), 96);
@@ -175,9 +175,11 @@ void App::Theme() {
     if (font) DeleteObject(font);
     if (bold) DeleteObject(bold);
     if (scoreFont) DeleteObject(scoreFont);
+    if (siteFont) DeleteObject(siteFont);
     font = CreateFontW(-Px(15),0,0,0,400,0,0,0,DEFAULT_CHARSET,0,0,CLEARTYPE_QUALITY,0,L"Segoe UI");
     bold = CreateFontW(-Px(16),0,0,0,600,0,0,0,DEFAULT_CHARSET,0,0,CLEARTYPE_QUALITY,0,L"Segoe UI");
     scoreFont = CreateFontW(-Px(29),0,0,0,600,0,0,0,DEFAULT_CHARSET,0,0,CLEARTYPE_QUALITY,0,L"Segoe UI");
+    siteFont = CreateFontW(-Px(12),0,0,0,400,0,0,0,DEFAULT_CHARSET,0,0,CLEARTYPE_QUALITY,0,L"Segoe UI");
     if (controlBrush) DeleteObject(controlBrush);
     if (backgroundBrush) DeleteObject(backgroundBrush);
     controlBrush = CreateSolidBrush(Surface());
@@ -298,12 +300,10 @@ void App::Load() {
             if(value.contains("kernel") && value["kernel"].is_boolean())prefs.kernel=value["kernel"];
         }
     }
-    if (prefs.profile.empty()) {
-        wchar_t data[32768]{};
-        if (GetEnvironmentVariableW(L"APPDATA",data,32768)) {
-            fs::path candidate = fs::path(data)/L"io.github.clash-verge-rev.clash-verge-rev"/L"clash-verge.yaml";
-            if (GetFileAttributesW(candidate.c_str()) != INVALID_FILE_ATTRIBUTES) prefs.profile=candidate.wstring();
-        }
+    wchar_t data[32768]{};
+    if (GetEnvironmentVariableW(L"APPDATA",data,32768)) {
+        standardProfile=fs::path(data)/L"io.github.clash-verge-rev.clash-verge-rev"/L"clash-verge.yaml";
+        if(prefs.profile.empty() && LocalFile(standardProfile.wstring()))prefs.profile=standardProfile.wstring();
     }
 }
 bool App::SavePreferences(const Preferences& value) {
@@ -424,7 +424,14 @@ void App::Start(bool catalog,const std::wstring& node) {
         return;
     }
     std::wstring args=Quote(executable.wstring())+(catalog?L" inspect --profile ":L" probe --profile ")+Quote(prefs.profile);
-    if (!prefs.identity.empty()) args+=L" --age-identity "+Quote(prefs.identity);
+    std::wstring identity=prefs.identity;
+    if(identity.empty() && !standardProfile.empty()){
+        auto profile=fs::path(prefs.profile).lexically_normal().make_preferred();
+        auto standard=standardProfile.lexically_normal().make_preferred();
+        auto key=standard.parent_path()/L".runtime_key";
+        if(_wcsicmp(profile.c_str(),standard.c_str())==0 && LocalFile(key.wstring()))identity=key.wstring();
+    }
+    if (!identity.empty()) args+=L" --age-identity "+Quote(identity);
     if (!catalog) {
         args+=(node.empty()?L" --all":L" --node "+Quote(node))+L" --rounds "+std::to_wstring(prefs.rounds);
         args+=prefs.parallel?L" --parallel "+std::to_wstring(prefs.parallel):
@@ -570,10 +577,10 @@ void App::PaintCards(HDC dc) {
             int first=left+(right-left)*site/5,last=left+(right-left)*(site+1)/5;
             int size=Px(19),ix=(first+last-size)/2;
             if(icons[site]) DrawIconEx(dc,ix,at(54),icons[site],size,size,0,nullptr,DI_NORMAL);
-            Label(dc,SiteShort[site],{first,at(65),last,at(65)+Px(17)},font,Muted(),DT_CENTER|DT_SINGLELINE|DT_END_ELLIPSIS|DT_VCENTER);
+            Label(dc,SiteShort[site],{first,at(65),last,at(65)+Px(17)},siteFont,Muted(),DT_CENTER|DT_SINGLELINE|DT_END_ELLIPSIS|DT_VCENTER);
             auto& result=node.sites[site];
             COLORREF ink=result.http==403?RGB(210,165,90):result.timeout || result.attempted && result.http<100?ScoreColor(0):Text();
-            Label(dc,SiteText(result,prefs.english),{first,at(75),last,at(75)+Px(19)},font,ink,DT_CENTER|DT_SINGLELINE|DT_END_ELLIPSIS|DT_VCENTER);
+            Label(dc,SiteText(result,prefs.english),{first,at(75),last,at(75)+Px(19)},siteFont,ink,DT_CENTER|DT_SINGLELINE|DT_END_ELLIPSIS|DT_VCENTER);
         }
         Label(dc,node.protocol,{left,at(90),right,at(90)+Px(17)},font,Muted());
     }
@@ -1008,6 +1015,7 @@ int WINAPI wWinMain(HINSTANCE instance,HINSTANCE,PWSTR,int) {
     if(app.font)DeleteObject(app.font);
     if(app.bold)DeleteObject(app.bold);
     if(app.scoreFont)DeleteObject(app.scoreFont);
+    if(app.siteFont)DeleteObject(app.siteFont);
     if(app.controlBrush)DeleteObject(app.controlBrush);
     if(app.backgroundBrush)DeleteObject(app.backgroundBrush);
     return 0;

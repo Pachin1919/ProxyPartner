@@ -4,7 +4,10 @@ Extract the entire ZIP and double-click ProxyPartner.exe. Keep ProxyPartner.Cli.
 the DLLs, certificate bundle and TargetIcons beside the desktop executable.
 
 The desktop reads the known Clash Verge runtime profile path if it exists, or accepts
-an existing local profile in Settings. A profile elsewhere can also be specified with
+an existing local profile in Settings. Only the known standard Clash Verge runtime
+path can automatically pair with an existing sibling .runtime_key, and only when no
+identity was explicitly selected. This inferred path is not written to preferences.
+A profile elsewhere can also be specified with
 ProxyPartner.exe --profile "D:\profiles\nodes.yaml". For AGE profiles, select the
 identity file in Settings. Paths and display/probe preferences stay in the current
 user's LocalAppData\ProxyPartner\NativeDesktop\preferences.json.

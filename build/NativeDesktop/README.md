@@ -29,6 +29,23 @@ fixture. It verifies protocol handling and cancellation without accessing a user
 profile or making requests. These tests do not establish visual acceptance or
 resource compliance. `Portable.README.txt` lists the remaining application scope.
 
+For the coordinator's real-network acceptance, the test executable also has an
+explicit mode which calls the actual `App::Start` and JSONL receive path. It uses
+hidden native controls and no desktop input. It inspects and then probes once
+with a fixed 6000 ms deadline and adaptive concurrency 4–8. Supply an output file
+which does not exist. The report contains aggregate counts, scores and Job Object
+peak through report time, including the acceptance process and all CLI descendants.
+No node names, addresses, configuration contents or identity material are written.
+
+```powershell
+NativeDesktop.Tests.exe --acceptance --cli-dir F:/path/to/publish --profile F:/approved/profile.age --age-identity F:/approved/identity.txt --output F:/new-run/acceptance.json
+```
+
+The identity option is optional for plaintext profiles. This explicit mode makes
+real network requests. It does not establish visual acceptance or whole-lifetime
+peak after the report has been written. An external owning Job can measure the
+process through exit for that final gate.
+
 Reuse is from this repository at `af29444` under its existing license. The Win32
 virtual list, card layout, colors, native icon loading, DPI handling and preference
 behavior follow `src/ProxyPartnerLite/Desktop/`. The existing
