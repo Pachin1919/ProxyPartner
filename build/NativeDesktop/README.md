@@ -65,8 +65,7 @@ preferences fall back to defaults without overwriting either file.
 
 The baseline has `--tray` and in-process history windows. It does not include
 automatic logon installation or a SQLite-backed desktop history path. These are
-not prerequisites for preserving that baseline. Exit/history fields will be
-connected once the backend's actual JSONL contract is frozen.
+not prerequisites for preserving that baseline. Exit observation state is described below.
 
 Website cells show actual response timing when HTTP status and timing are present,
 including 401 and 403. Details and native hover hints retain the status semantics.
@@ -95,3 +94,25 @@ retains received observations without manufacturing a terminal route summary.
 The acceptance report also provides `score_min`, `score_max`, `score_average` and
 `kernel_samples`. Missing score/kernel data is null. These are aggregates only,
 without node names or additional logs.
+
+Node details has an explicit Retest exit IP action (button control ID 153;
+read-only multiline result EDIT ID 1). It invokes `exit-ip` for the selected node
+and the current profile/AGE identity, with exactly one round. Two fixed HTTPS
+sources return typed source, observation, state and summary events. The report
+separates IPv4 and IPv6, corroboration/conflict, last confirmed address, confirmed
+change count, consecutive confirmed samples and sample times. Missing families
+remain missing. The CLI owns public-address classification. Failed requests keep
+the last valid observations and display their existing timestamps.
+
+Exit requests share the existing owned process/job lifecycle and cannot overlap
+a sweep or current-route check. Cancel preserves received observations and reaps
+the child. Independent scores and five-site samples are never replaced. There are
+no exit requests in the default sweep. Observed nodes retain only typed facts and
+the backend state projection in GUI-session memory. A subsequent request transfers
+that state through a unique temporary JSON file (exclusive writer, backend read
+access); normal finish, failure and cancellation close/delete it. Catalog refresh
+discards these node observations. No preference/history storage or schedule is
+added. Unsupported backend transports display an error without discarding valid
+observations. Offline tests exercise the real detail command, JSONL pipe, temporary
+handoff, failure and cancellation; the supplied real CLI is checked through an
+absent-node rejection before DNS/HTTPS. Live exits and visual acceptance are separate.

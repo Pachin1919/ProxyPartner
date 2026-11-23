@@ -21,12 +21,16 @@ void InitializeHiddenApp() {
     cls.lpfnWndProc=CardsProc;
     cls.lpszClassName=L"NativeDesktop.Test.Cards";
     RegisterClassW(&cls);
+    cls.lpfnWndProc=AuxProc;
+    cls.lpszClassName=L"ProxyPartner.NativeAux";
+    RegisterClassW(&cls);
     app.table=Child(app.window,WC_LISTVIEWW,L"",List,LVS_REPORT|LVS_OWNERDATA);
     app.cards=Child(app.window,cls.lpszClassName,L"",Cards);
     app.status=Child(app.window,L"STATIC",L"",100);
     app.search=Child(app.window,L"EDIT",L"",Search);
     for(int id=View;id<=Details;++id)Child(app.window,L"BUTTON",L"",id);
     Child(app.window,L"BUTTON",L"",VerifyCurrent);
+    Child(app.window,L"BUTTON",L"",TestSelected);
     app.Theme();
     if(!app.directory.empty())for(int i=0;i<5;++i){
         auto path=app.directory/L"TargetIcons"/(std::wstring(SiteIds[i])+L".ico");
@@ -110,11 +114,13 @@ int Acceptance(int argc,wchar_t** argv) {
     CloseHandle(job);
     return finished && accounting && file.good()?0:1;
 }
+#include "exit_tests.hpp"
 int wmain(int argc,wchar_t** argv) {
     if(argc>1 && wcscmp(argv[1],L"--acceptance")==0)return Acceptance(argc,argv);
     if(argc>1 && wcscmp(argv[1],L"--fixture-grandchild")==0){Sleep(60000);
         return 0;
     }
+    if(argc>1 && wcscmp(argv[1],L"exit-ip")==0)return ExitFixture(argc,argv);
     if(argc>1 && wcscmp(argv[1],L"current-path")==0){
         std::cout<<Json{{"event","current_path_begin"},{"targets",5}}.dump()<<'\n';
         for(int i=0;i<5;++i){
@@ -281,6 +287,7 @@ int wmain(int argc,wchar_t** argv) {
     }
     app.nodes[0].score=74;
     app.nodes[0].sites[2]={401,122,true,false,false};
+    TestExit(root);
     app.prefs.proxyPort=12345;
     std::wstring independentProfile=app.prefs.profile;
     app.prefs.profile.clear();
@@ -368,6 +375,14 @@ int wmain(int argc,wchar_t** argv) {
         realCliInspect=!app.Running() && app.nodes.size()==1 && app.nodes[0].name==L"contract-only · 香港" && app.nodes[0].state==L"ready";
         Check(realCliInspect,"Real native CLI inspect integration");
         if(app.Running())app.Finish(true);
+        Node absent;absent.name=L"fixture-node-absent-from-profile";absent.protocol=L"anytls";
+        app.nodes.push_back(absent);
+        app.Start(false,absent.name,false,true);
+        deadline=GetTickCount64()+15000;
+        while(app.Running() && GetTickCount64()<deadline){app.Drain();Sleep(10);}
+        Check(!app.Running() && !app.sawExitSummary && app.nodes.back().exit && !app.nodes.back().exit->notice.empty() &&
+            !app.nodes.back().exit->observations[0].valid,"Real CLI exit-ip rejects absent node before DNS or HTTPS");
+        if(app.Running())app.Finish(true);
     }
     Check(!ValidTarget({L"file:///C:/test",L"EX",L"+"}),"Reject non HTTP registration");
     Check(!ValidTarget({L"https://user:password@example.invalid",L"EX",L"+"}),"Reject target credentials");
@@ -425,7 +440,7 @@ int wmain(int argc,wchar_t** argv) {
     if(app.backgroundBrush)DeleteObject(app.backgroundBrush);
     DestroyWindow(app.window);
     Json result={{"status",failures?"FAIL":"PASS"},{"failures",failures},{"network","NOT_RUN"},{"fixture_only",true},{"native_cli_inspect",realCliInspect},
-        {"checks",{"UTF8","argv quoting","invalid JSON boundary","five target activity and round mapping","401 and 403 detail","Chinese filter","score colors","1000 virtual rows and overflow bound","inspect child","probe cancel and descendant cleanup","preferences"}}};
+        {"checks",{"UTF8","argv quoting","invalid JSON boundary","five target activity and round mapping","401 and 403 detail","Chinese filter","score colors","1000 virtual rows and overflow bound","inspect child","probe cancel and descendant cleanup","exit detail action and JSONL","exit state transfer and deletion","exit failure and cancellation retain observations","real CLI absent-node exit rejection","preferences"}}};
     std::ofstream output(argv[1]);
     output<<result.dump(2);
     return failures?1:0;

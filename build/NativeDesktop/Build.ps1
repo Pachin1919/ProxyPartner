@@ -61,7 +61,7 @@ $source = Join-Path $PSScriptRoot 'desktop.cpp'
 $arguments = @('/nologo','/std:c++17','/W4','/WX','/O2','/MT','/utf-8','/EHsc','/GS') +
     @($includes | ForEach-Object { "/I$_" }) + @("/Fe:$exe","/Fo:$out/desktop.obj",$source,'/link',
     '/INCREMENTAL:NO','/SUBSYSTEM:WINDOWS','/MANIFEST:NO',$resource,
-    'user32.lib','comctl32.lib','gdi32.lib','shell32.lib','ole32.lib','uuid.lib','comdlg32.lib','dwmapi.lib','uxtheme.lib','winhttp.lib')
+    'user32.lib','comctl32.lib','gdi32.lib','shell32.lib','ole32.lib','uuid.lib','comdlg32.lib','dwmapi.lib','uxtheme.lib','winhttp.lib','ws2_32.lib')
 $started = [DateTime]::UtcNow.ToString('o')
 & (Join-Path $native 'bin/cl.exe') @arguments *> (Join-Path $out 'build.log')
 $code = $LASTEXITCODE
@@ -84,7 +84,7 @@ if ($Tests) {
     $testExe = Join-Path $out 'NativeDesktop.Tests.exe'
     $testArguments = @('/nologo','/std:c++17','/W4','/WX','/O2','/MT','/utf-8','/EHsc','/GS') +
         @($includes | ForEach-Object { "/I$_" }) + @("/Fe:$testExe","/Fo:$out/tests.obj",(Join-Path $PSScriptRoot 'tests.cpp'),
-        '/link','/INCREMENTAL:NO','/SUBSYSTEM:CONSOLE','user32.lib','comctl32.lib','gdi32.lib','shell32.lib','ole32.lib','uuid.lib','comdlg32.lib','dwmapi.lib','uxtheme.lib','winhttp.lib')
+        '/link','/INCREMENTAL:NO','/SUBSYSTEM:CONSOLE','user32.lib','comctl32.lib','gdi32.lib','shell32.lib','ole32.lib','uuid.lib','comdlg32.lib','dwmapi.lib','uxtheme.lib','winhttp.lib','ws2_32.lib')
     & (Join-Path $native 'bin/cl.exe') @testArguments *> (Join-Path $out 'tests-build.log')
     if ($LASTEXITCODE) { Get-Content (Join-Path $out 'tests-build.log'); exit $LASTEXITCODE }
     $testStarted = [DateTime]::UtcNow.ToString('o')
