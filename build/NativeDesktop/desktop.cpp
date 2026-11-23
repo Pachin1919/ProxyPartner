@@ -261,7 +261,7 @@ void App::Theme() {
     font = CreateFontW(-Px(15),0,0,0,400,0,0,0,DEFAULT_CHARSET,0,0,CLEARTYPE_QUALITY,0,L"Segoe UI");
     bold = CreateFontW(-Px(16),0,0,0,600,0,0,0,DEFAULT_CHARSET,0,0,CLEARTYPE_QUALITY,0,L"Segoe UI");
     scoreFont = CreateFontW(-Px(29),0,0,0,600,0,0,0,DEFAULT_CHARSET,0,0,CLEARTYPE_QUALITY,0,L"Segoe UI");
-    siteFont = CreateFontW(-Px(12),0,0,0,400,0,0,0,DEFAULT_CHARSET,0,0,CLEARTYPE_QUALITY,0,L"Segoe UI");
+    siteFont = CreateFontW(-Px(11),0,0,0,400,0,0,0,DEFAULT_CHARSET,0,0,CLEARTYPE_QUALITY,0,L"Segoe UI");
     if (controlBrush) DeleteObject(controlBrush);
     if (backgroundBrush) DeleteObject(backgroundBrush);
     controlBrush = CreateSolidBrush(Surface());
