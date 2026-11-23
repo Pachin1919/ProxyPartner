@@ -932,7 +932,7 @@ LRESULT CALLBACK AuxProc(HWND hwnd,UINT msg,WPARAM w,LPARAM l) {
             dialog.lpstrFile=file;
             dialog.nMaxFile=32768;
             dialog.Flags=OFN_FILEMUSTEXIST|OFN_PATHMUSTEXIST|OFN_NOCHANGEDIR;
-            dialog.lpstrFilter=id==BrowseProfile?L"Profiles\0*.yaml;*.yml;*.age\0All files\0*.*\0":L"Identity files\0*.*\0";
+            dialog.lpstrFilter=id==BrowseProfile?L"Profiles\0*.yaml;*.yml;*.age;*.json\0All files\0*.*\0":L"Identity files\0*.*\0";
             if(GetOpenFileNameW(&dialog))SetDlgItemTextW(hwnd,id==BrowseProfile?Profile:Identity,file);
         }
         if(id==CloseSettings){DestroyWindow(hwnd);
