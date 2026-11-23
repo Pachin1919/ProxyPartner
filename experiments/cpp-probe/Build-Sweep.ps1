@@ -13,7 +13,7 @@ $env:LIB = @('msvc','um','ucrt' | ForEach-Object { Join-Path $native "lib/$_" })
 $out = (New-Item -ItemType Directory -Force -Path $OutputDirectory).FullName
 $imports = [ordered]@{
     'libcrypto-3-x64' = @('EVP_CIPHER_CTX_new','EVP_CIPHER_CTX_free','EVP_CIPHER_CTX_reset','EVP_chacha20_poly1305',
-        'EVP_sha1','EVP_md5','EVP_BytesToKey','HMAC','EVP_CipherInit_ex','EVP_CIPHER_CTX_ctrl',
+        'EVP_aes_128_gcm','EVP_aes_192_gcm','EVP_aes_256_gcm','EVP_sha1','EVP_md5','EVP_BytesToKey','HMAC','EVP_CipherInit_ex','EVP_CIPHER_CTX_ctrl',
         'EVP_CipherUpdate','EVP_CipherFinal_ex','RAND_bytes','OPENSSL_cleanse','BIO_meth_new','BIO_meth_free',
         'BIO_meth_set_read','BIO_meth_set_write','BIO_meth_set_ctrl','BIO_new','BIO_set_data','BIO_get_data','BIO_set_init')
     'libssl-3-x64' = @('TLS_client_method','SSL_CTX_new','SSL_CTX_free','SSL_CTX_load_verify_locations','SSL_CTX_set_verify',

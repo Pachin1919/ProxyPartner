@@ -94,7 +94,7 @@ std::optional<unsigned> integer(std::string_view value) {
 
 enum class Protocol { AnyTls, Mieru, Shadowsocks, Unsupported };
 struct Node {
-    std::string name, server, port, username, password, sni, ech, pattern, multiplexing, handshake, obfs;
+    std::string name, server, port, username, password, sni, ech, pattern, multiplexing, handshake, obfs, cipher;
     Protocol protocol = Protocol::Unsupported;
     Node() = default;
     Node(Node&&) noexcept = default;
@@ -165,7 +165,7 @@ std::optional<Profile> parse_profile(std::string_view text) {
         node.password = value("password");
         const auto type = value("type");
         if (!node.server.empty() && node.server.size() <= 253 && !node.password.empty() &&
-            node.password.size() <= 4096 && node.password.find('\0') == std::string::npos) {
+            node.password.size() <= (type=="ss"?12288u:4096u) && (type=="ss" || node.password.find('\0') == std::string::npos)) {
             if (type == "anytls" && port_ok(node.port) &&
                 fields(document, entry, {"name","type","server","port","password","udp","sni","alpn",
                     "client-fingerprint","fingerprint","skip-cert-verify","ech-opts"}) &&
@@ -206,15 +206,23 @@ std::optional<Profile> parse_profile(std::string_view text) {
                         node.multiplexing == "MULTIPLEXING_HIGH" || node.multiplexing == "MULTIPLEXING_LOW"))))
                     node.protocol = Protocol::Mieru;
             }
-            if (type == "ss" && port_ok(node.port) && value("cipher") == "chacha20-ietf-poly1305" &&
-                value("plugin") == "obfs" &&
+            if (type == "ss" && port_ok(node.port) &&
                 fields(document, entry, {"name","type","server","port","cipher","password","plugin","plugin-opts","udp","client-fingerprint"})) {
-                auto opts = field(document, entry, "plugin-opts");
-                node.obfs = scalar(field(document, opts, "host"));
-                if (node.obfs.empty()) node.obfs = "bing.com";
-                if (fields(document, opts, {"mode","host"}) && scalar(field(document, opts, "mode")) == "tls" &&
-                    node.obfs.size() <= 253 && std::all_of(node.obfs.begin(), node.obfs.end(), [](char ch) { return ch >= '!' && ch <= '~'; }))
-                    node.protocol = Protocol::Shadowsocks;
+                node.cipher=value("cipher");
+                const auto passwordUnits=MultiByteToWideChar(CP_UTF8,MB_ERR_INVALID_CHARS,node.password.data(),static_cast<int>(node.password.size()),nullptr,0);
+                const bool supported=passwordUnits>0 && passwordUnits<=4096 && (node.cipher=="aes-128-gcm" || node.cipher=="aes-192-gcm" ||
+                    node.cipher=="aes-256-gcm" || node.cipher=="chacha20-ietf-poly1305");
+                const auto plugin=field(document,entry,"plugin");
+                const auto opts=field(document,entry,"plugin-opts");
+                if(supported && !plugin && !opts) node.protocol=Protocol::Shadowsocks;
+                else if(supported && scalar(plugin)=="obfs" && fields(document,opts,{"mode","host"}) &&
+                    scalar(field(document,opts,"mode"))=="tls") {
+                    const auto host=field(document,opts,"host");
+                    node.obfs=host?scalar(host):"bing.com";
+                    if(!node.obfs.empty() && node.obfs.size()<=253 &&
+                        std::all_of(node.obfs.begin(),node.obfs.end(),[](char ch){return ch>='!' && ch<='~';}))
+                        node.protocol=Protocol::Shadowsocks;
+                }
             }
         }
         profile.nodes.push_back(std::move(node));
@@ -425,6 +433,10 @@ struct Adapters {
     using AnyEcho = int (*)(const char*,const char*,const char*,const char*,const char*,const char*,const char*,const char*,unsigned,HANDLE,int*,int*,char*,unsigned,unsigned*);
     using MieruEcho = int (*)(const char*,const char*,const char*,const char*,const char*,const char*,const char*,const char*,const char*,const char*,unsigned,HANDLE,int*,char*,unsigned,unsigned*);
     using SsEcho = int (*)(const char*,const char*,const char*,const char*,const char*,const char*,const char*,unsigned,HANDLE,int*,char*,unsigned,unsigned*);
+    using SsV2 = int (*)(const char*,const char*,const char*,unsigned,const char*,const char*,const char*,const char*,const char*,unsigned,HANDLE,int*);
+    using SsEchoV2 = int (*)(const char*,const char*,const char*,unsigned,const char*,const char*,const char*,const char*,const char*,unsigned,HANDLE,int*,char*,unsigned,unsigned*);
+    SsV2 ssV2{};
+    SsEchoV2 ssEchoV2{};
     SsEcho ssEcho{};
     AnyEcho anyEcho{};
     MieruEcho mieruEcho{};
@@ -450,13 +462,20 @@ struct Adapters {
         }
         if (needed(Protocol::Shadowsocks) && shadowsocks.load(root / L"ProxyPartner.NativeProbe.dll", ca))
             ss = shadowsocks.entry<Shadowsocks>("ProbeWebsite");
-        if(echo && ss) ssEcho=shadowsocks.entry<SsEcho>("ProbeEcho");
+        if(ss) {
+            ssV2=shadowsocks.entry<SsV2>("ProbeShadowsocksWebsiteV2");
+            if(echo) {
+                ssEcho=shadowsocks.entry<SsEcho>("ProbeEcho");
+                ssEchoV2=shadowsocks.entry<SsEchoV2>("ProbeShadowsocksEchoV2");
+            }
+        }
     }
+    static bool legacy_ss(const Node& n) {return n.cipher=="chacha20-ietf-poly1305" && !n.obfs.empty() && n.password.find('\0')==std::string::npos;}
     bool ready(const Node& n) const {
         switch (n.protocol) {
         case Protocol::AnyTls: return any != nullptr;
         case Protocol::Mieru: return n.pattern.empty() ? basic != nullptr : shaped != nullptr;
-        case Protocol::Shadowsocks: return ss != nullptr;
+        case Protocol::Shadowsocks: return ssV2 || ss && legacy_ss(n);
         default: return false;
         }
     }
@@ -478,7 +497,8 @@ struct Adapters {
                     t.host, t.path, t.headers, remaining, cancelEvent, &status);
             break;
         case Protocol::Shadowsocks:
-            result = ss(ip, port, password, n.obfs.c_str(), t.host, t.path, t.headers, remaining, cancelEvent, &status);
+            result = ssV2?ssV2(ip,port,password,static_cast<unsigned>(n.password.size()),n.cipher.c_str(),n.obfs.c_str(),t.host,t.path,t.headers,remaining,cancelEvent,&status) :
+                ss(ip,port,password,n.obfs.c_str(),t.host,t.path,t.headers,remaining,cancelEvent,&status);
             break;
         default: break;
         }
