@@ -1,4 +1,5 @@
 #include "shadowsocks.hpp"
+#include "echo_request.hpp"
 
 extern "C" __int64 _time64(__int64*);
 
@@ -299,7 +300,7 @@ BioMethod* createTransportMethod() {
 }
 
 Result measureSite(const Profile& profile, const Site& site, Tick deadline, SslContext* context, const BioMethod* method,
-    Handle stop) {
+    Handle stop, char* body, unsigned capacity, unsigned* used, bool* echoOk) {
     const Tick start = GetTickCount64();
     if (start >= deadline) return {0, 0, true};
     Channel channel{dial(profile, deadline, stop), profile, deadline, stop};
@@ -311,7 +312,10 @@ Result measureSite(const Profile& profile, const Site& site, Tick deadline, SslC
                 BIO_set_init(bio, 1);
                 SSL_set_bio(ssl, bio, bio);
                 if (SSL_set1_host(ssl, site.host) && SSL_ctrl(ssl, 55, 0, const_cast<char*>(site.host)) &&
-                    SSL_connect(ssl) == 1) status = request(ssl, site);
+                    SSL_connect(ssl) == 1) {
+                    if(body) *echoOk=request_echo(ssl,site.host,site.path,body,capacity,used,&status)!=0;
+                    else status=request(ssl,site);
+                }
             }
             SSL_free(ssl);
         }

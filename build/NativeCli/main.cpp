@@ -422,13 +422,19 @@ struct Adapters {
         const char*, const char*, const char*, const char*, unsigned, HANDLE, int*);
     using Shadowsocks = int (*)(const char*, const char*, const char*, const char*, const char*, const char*,
         const char*, unsigned, HANDLE, int*);
+    using AnyEcho = int (*)(const char*,const char*,const char*,const char*,const char*,const char*,const char*,const char*,unsigned,HANDLE,int*,int*,char*,unsigned,unsigned*);
+    using MieruEcho = int (*)(const char*,const char*,const char*,const char*,const char*,const char*,const char*,const char*,const char*,const char*,unsigned,HANDLE,int*,char*,unsigned,unsigned*);
+    using SsEcho = int (*)(const char*,const char*,const char*,const char*,const char*,const char*,const char*,unsigned,HANDLE,int*,char*,unsigned,unsigned*);
+    SsEcho ssEcho{};
+    AnyEcho anyEcho{};
+    MieruEcho mieruEcho{};
     Library anytls, mieru, shadowsocks;
     AnyTls any{};
     Mieru basic{};
     MieruV2 shaped{};
     Shadowsocks ss{};
 
-    Adapters(const fs::path& root, const std::vector<Node>& nodes) {
+    Adapters(const fs::path& root, const std::vector<Node>& nodes,bool echo=false) {
         auto needed = [&nodes](Protocol type) { return std::any_of(nodes.begin(), nodes.end(),
             [type](const Node& n) { return n.protocol == type; }); };
         const auto ca = root / L"probe-ca-bundle.crt";
@@ -438,8 +444,13 @@ struct Adapters {
             basic = mieru.entry<Mieru>("ProbeMieruWebsite");
             shaped = mieru.entry<MieruV2>("ProbeMieruWebsiteV2");
         }
+        if (echo) {
+            if(any) anyEcho=anytls.entry<AnyEcho>("ProbeAnyTlsEcho");
+            if(basic) mieruEcho=mieru.entry<MieruEcho>("ProbeMieruEchoV2");
+        }
         if (needed(Protocol::Shadowsocks) && shadowsocks.load(root / L"ProxyPartner.NativeProbe.dll", ca))
             ss = shadowsocks.entry<Shadowsocks>("ProbeWebsite");
+        if(echo && ss) ssEcho=shadowsocks.entry<SsEcho>("ProbeEcho");
     }
     bool ready(const Node& n) const {
         switch (n.protocol) {
@@ -476,16 +487,17 @@ struct Adapters {
 };
 
 struct Options {
-    fs::path profile, identity;
+    fs::path profile, identity, exitState;
     std::string node;
-    bool inspect{}, all{}, kernel{};
+    bool inspect{}, all{}, kernel{}, exitIp{};
     unsigned minimum = 4, maximum = 8, rounds = 1, timeout = 0;
 };
 std::optional<Options> arguments(int argc, wchar_t** argv) {
     Options out;
     const std::wstring_view command = argv[1];
-    if (command != L"probe" && command != L"inspect") return std::nullopt;
+    if (command != L"probe" && command != L"inspect" && command != L"exit-ip") return std::nullopt;
     out.inspect = command == L"inspect";
+    out.exitIp = command == L"exit-ip";
     std::set<std::wstring_view> seen;
     for (int index = 2; index < argc; ++index) {
         std::wstring_view option = argv[index];
@@ -496,6 +508,7 @@ std::optional<Options> arguments(int argc, wchar_t** argv) {
         std::wstring_view value = argv[index];
         if (option == L"--profile") out.profile = value;
         else if (option == L"--age-identity") out.identity = value;
+        else if (option == L"--exit-state") out.exitState = value;
         else if (option == L"--node") out.node = utf8(value);
         else {
             const auto n = integer(utf8(value));
@@ -512,9 +525,11 @@ std::optional<Options> arguments(int argc, wchar_t** argv) {
         (seen.contains(L"--parallel") && (seen.contains(L"--min-parallel") || seen.contains(L"--max-parallel"))) ||
         (out.inspect && seen.size() != (out.identity.empty() ? 1u : 2u)) ||
         (!out.inspect && out.all == !out.node.empty())) return std::nullopt;
+    if(!out.exitIp && !out.exitState.empty()) return std::nullopt;
+    if(out.exitIp && (out.all || out.node.empty() || out.kernel || seen.contains(L"--parallel") || seen.contains(L"--min-parallel") || seen.contains(L"--max-parallel"))) return std::nullopt;
     return out;
 }
-
+#include "exit_command.hpp"
 struct Sample { int status{}, elapsed{}; bool attempted{}, timedOut{}; };
 struct Quality { std::optional<int> score; unsigned stable{}; };
 Quality score(const std::array<std::vector<Sample>, 5>& history) {
@@ -645,7 +660,8 @@ int run_current_path(int argc, wchar_t** argv);
 int wmain(int argc, wchar_t** argv) {
     if (argc > 1 && std::wstring_view(argv[1]) == L"current-path") return run_current_path(argc, argv);
     if (argc == 1 || (argc == 2 && (std::wstring_view(argv[1]) == L"--help" || std::wstring_view(argv[1]) == L"-h"))) {
-        std::cout << "ProxyPartner.Cli inspect --profile <file> [--age-identity <identity>]\n"
+        std::cout << "ProxyPartner.Cli exit-ip --profile <file> [--age-identity <identity>] --node <name> [--rounds 1-6] [--exit-state <file>]\n"
+            "ProxyPartner.Cli inspect --profile <file> [--age-identity <identity>]\n"
             "ProxyPartner.Cli probe --profile <file> [--age-identity <identity>] (--all | --node <name>) "
             "[--rounds 1-6] [--min-parallel 1-12 --max-parallel 1-12 | --parallel 1-12] "
             "[--node-timeout-ms 1-6000] [--kernel-latency]\n";
@@ -656,6 +672,13 @@ int wmain(int argc, wchar_t** argv) {
     if (!options) return fail("invalid_arguments");
     auto bytes = read_file(options->profile);
     if (!bytes) return fail("missing_or_invalid_yaml_proxies");
+    std::string profileRevision;
+    if(options->exitIp) {
+        unsigned char digest[32]; unsigned length=0;
+        if(!EVP_Digest(bytes->data(),bytes->size(),digest,&length,EVP_sha256(),nullptr) || length!=32) return fail("profile_digest_failed");
+        constexpr char hex[]="0123456789abcdef";
+        for(auto b:digest){profileRevision+=hex[b>>4];profileRevision+=hex[b&15];}
+    }
     std::string plaintext;
     bool encrypted = age_envelope(*bytes);
     if (encrypted && options->identity.empty()) return fail("age_identity_required");
@@ -673,7 +696,8 @@ int wmain(int argc, wchar_t** argv) {
     WSADATA winsock{};
     if (WSAStartup(MAKEWORD(2, 2), &winsock)) return fail("network_initialization_failed");
     struct Sockets { ~Sockets() { WSACleanup(); } } sockets;
-    Adapters adapters(fs::path(executable).parent_path(), profile->nodes);
+    if(options->exitIp) std::erase_if(profile->nodes,[&](const Node& node){return node.name!=options->node;});
+    Adapters adapters(fs::path(executable).parent_path(), profile->nodes,options->exitIp);
     size_t count = 0, eligible = 0;
     for (const auto& node : profile->nodes) if (options->node.empty() || options->node == node.name) {
         ++count;
@@ -691,6 +715,10 @@ int wmain(int argc, wchar_t** argv) {
     SetConsoleCtrlHandler(interrupt, TRUE);
     const auto start = Clock::now();
     Resolver resolver(profile->dns);
+    if(options->exitIp) {
+        int code=run_exit_ip(*options,profile->nodes,resolver,adapters,profileRevision);
+        SetConsoleCtrlHandler(interrupt,FALSE);CloseHandle(cancelEvent);cancelEvent=nullptr;return code;
+    }
     Stats stats;
     const auto host = options->kernel ? read_native_host(wide(profile->pipe)) : NativeHost{};
     if (options->kernel) {

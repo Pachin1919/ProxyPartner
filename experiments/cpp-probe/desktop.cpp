@@ -42,3 +42,16 @@ extern "C" __declspec(dllexport) int ProbeWebsite(const char* address, const cha
     *status = result.status;
     return result.connected ? 1 : 0;
 }
+
+extern "C" __declspec(dllexport) int ProbeEcho(const char* address,const char* port,const char* password,
+    const char* obfsHost,const char* host,const char* path,const char* headers,
+    unsigned remaining,Handle stop,int* status,char* body,unsigned capacity,unsigned* used) {
+    *status=0;*used=0;
+    if(capacity<65 || *headers)return 0;
+    Profile profile{address,port,obfsHost,{},true};
+    if(EVP_BytesToKey(EVP_chacha20_poly1305(),EVP_md5(),nullptr,reinterpret_cast<const Byte*>(password),
+        static_cast<int>(strlen(password)),1,profile.key,nullptr)!=keySize) {OPENSSL_cleanse(profile.key,keySize);return 0;}
+    bool ok=false;
+    const auto result=measureSite(profile,{nullptr,host,path,""},GetTickCount64()+remaining,context,method,stop,body,capacity,used,&ok);
+    OPENSSL_cleanse(profile.key,keySize);*status=result.status;return ok?1:0;
+}
