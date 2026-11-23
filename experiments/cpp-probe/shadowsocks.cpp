@@ -79,20 +79,20 @@ constexpr Byte extensions[] = {
     0x02, 0x02, 0x02, 0x03, 0x00, 0x16, 0x00, 0x00, 0x00, 0x17, 0x00, 0x00
 };
 
-bool derive(Byte* output, const Byte* salt, const Byte* master) {
+bool derive(Byte* output, const Byte* salt, const Byte* master,int length) {
     constexpr Byte info[] = {'s','s','-','s','u','b','k','e','y',1};
     Byte prk[20], blocks[30], tail[20];
     unsigned n;
-    bool ok = HMAC(EVP_sha1(), salt, keySize, master, keySize, prk, &n) &&
+    bool ok = HMAC(EVP_sha1(), salt, length, master, length, prk, &n) &&
         HMAC(EVP_sha1(), prk, sizeof(prk), info, sizeof(info), blocks, &n);
-    if (ok) {
+    if (ok && length>20) {
         memcpy(blocks + 20, info, sizeof(info));
         blocks[29] = 2;
         ok = HMAC(EVP_sha1(), prk, sizeof(prk), blocks, sizeof(blocks), tail, &n) != nullptr;
     }
     if (ok) {
-        memcpy(output, blocks, 20);
-        memcpy(output + 20, tail, 12);
+        memcpy(output, blocks, length<20?length:20);
+        if(length>20) memcpy(output + 20, tail, length-20);
     }
     OPENSSL_cleanse(prk, sizeof(prk));
     OPENSSL_cleanse(blocks, sizeof(blocks));
@@ -135,6 +135,7 @@ struct Channel {
     }
 
     bool read(Byte* data, int length) {
+        if(!profile.tlsObfs) return transfer(data,length,false);
         while (length) {
             if (!recordLeft) {
                 Byte header[5];
@@ -166,7 +167,7 @@ struct Channel {
         Byte* nonce = encrypt ? encryptNonce : decryptNonce;
         int out = 0, last = 0;
         if (!EVP_CIPHER_CTX_reset(crypto) ||
-            !EVP_CipherInit_ex(crypto, EVP_chacha20_poly1305(), nullptr, key, nonce, encrypt ? 1 : 0) ||
+            !EVP_CipherInit_ex(crypto, profile.cipher?profile.cipher:EVP_chacha20_poly1305(), nullptr, key, nonce, encrypt ? 1 : 0) ||
             (!encrypt && !EVP_CIPHER_CTX_ctrl(crypto, chachaSetTag, tagSize, bytes + size)) ||
             !EVP_CipherUpdate(crypto, bytes, &out, bytes, size) ||
             !EVP_CipherFinal_ex(crypto, bytes + out, &last) || out + last != size ||
@@ -187,7 +188,12 @@ struct Channel {
         memcpy(target + 2, destination, nameLength);
         put16(target + 2 + nameLength, 443);
         const int size = nameLength + 4;
-        const int payload = keySize + size + 2 + 2 * tagSize;
+        const int payload = profile.keyLength + size + 2 + 2 * tagSize;
+        if(!profile.tlsObfs) {
+            Byte initial[keySize+sizeof(target)+2+2*tagSize];
+            return RAND_bytes(initial,profile.keyLength)==1 && derive(encryptKey,initial,profile.key,profile.keyLength) &&
+                frame(initial+profile.keyLength,target,size) && transfer(initial,payload,true);
+        }
         const int host = static_cast<int>(strlen(profile.obfsHost));
         const int variable = payload + host;
         Byte hello[217 + keySize + sizeof(target) + 2 + 2 * tagSize + 253]{};
@@ -203,8 +209,8 @@ struct Channel {
         put16(hello + 136, 79 + variable);
         hello[139] = 0x23; put16(hello + 140, payload);
         Byte* salt = hello + 142;
-        if (!RAND_bytes(salt, keySize) || !derive(encryptKey, salt, profile.key) ||
-            !frame(salt + keySize, target, size)) return false;
+        if (!RAND_bytes(salt, profile.keyLength) || !derive(encryptKey, salt, profile.key,profile.keyLength) ||
+            !frame(salt + profile.keyLength, target, size)) return false;
         Byte* sni = salt + payload;
         put16(sni + 2, host + 5); put16(sni + 4, host + 3); put16(sni + 7, host);
         memcpy(sni + 9, profile.obfsHost, host);
@@ -215,15 +221,16 @@ struct Channel {
     int writeTls(const char* input, int length) {
         Byte encoded[5 + maxChunk + 2 + 2 * tagSize];
         // The TLS-obfs record payload is capped at 16 KiB.
-        constexpr int writeLimit = 16384 - 2 - 2 * tagSize;
+        const int writeLimit = profile.tlsObfs?16384-2-2*tagSize:maxChunk;
         int written = 0;
         while (written < length) {
             const int size = length - written < writeLimit ? length - written : writeLimit;
             const int payload = size + 2 + 2 * tagSize;
             encoded[0] = 0x17; encoded[1] = 3; encoded[2] = 3;
             put16(encoded + 3, payload);
-            if (!frame(encoded + 5, reinterpret_cast<const Byte*>(input + written), size) ||
-                !transfer(encoded, 5 + payload, true)) return -1;
+            const int prefix=profile.tlsObfs?5:0;
+            if (!frame(encoded + prefix, reinterpret_cast<const Byte*>(input + written), size) ||
+                !transfer(encoded, prefix + payload, true)) return -1;
             written += size;
         }
         return written;
@@ -232,7 +239,7 @@ struct Channel {
     int readTls(char* output, int length) {
         if (!hasReadSalt) {
             Byte salt[keySize];
-            if (!read(salt, sizeof(salt)) || !derive(decryptKey, salt, profile.key)) return -1;
+            if (!read(salt, profile.keyLength) || !derive(decryptKey, salt, profile.key,profile.keyLength)) return -1;
             hasReadSalt = true;
         }
         if (!available) {

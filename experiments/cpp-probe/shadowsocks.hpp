@@ -13,6 +13,9 @@ struct Profile {
     const char* obfsHost;
     Byte key[keySize];
     bool numericAddress = false;
+    const Cipher* cipher = nullptr;
+    int keyLength = keySize;
+    bool tlsObfs = true;
 };
 
 struct Site { const char* name; const char* host; const char* path; const char* headers; };
