@@ -151,7 +151,8 @@ int wmain(int argc,wchar_t** argv) {
     Check(app.nodes.size()==1 && app.nodes[0].probing && app.nodes[0].sites[4].active,"All five pending sites");
     Json sites=Json::array();
     for(int i=0;i<5;++i)sites.push_back({{"target",Utf8(SiteIds[i])},{"attempted",true},{"httpStatus",i==2?401:i==3?403:200},{"latencyMs",120+i},{"timedOut",false}});
-    Check(app.Event(Json{{"event","round"},{"node",Utf8(L"香港节点")},{"score",74},{"round",1},{"stableTargets",0},{"sites",sites}}),"Round accepted");
+    Check(app.Event(Json{{"event","round"},{"node",Utf8(L"香港节点")},{"score",74},{"round",1},{"stableTargets",0},
+        {"kernelLatencyMs",88},{"kernelObservedUtc","2026-11-23T00:00:00Z"},{"sites",sites}}),"Round accepted");
     auto& node=app.nodes[0];
     Check(node.score==74 && !node.probing && !node.sites[4].active,"Score and completed activity");
     Check(CompleteCoverage(app.nodes,1,true,1,1),"Complete coverage permits HTTP 401 and 403");
@@ -166,6 +167,11 @@ int wmain(int argc,wchar_t** argv) {
     Check(CompleteCoverage(incomplete,1,true,1,1),"Attempted timeout with complete score can finish");
     Check(SiteText(node.sites[2],false,true).find(L"401")!=std::wstring::npos,"401 retained in detail");
     Check(SiteText(node.sites[3],false,true).find(L"403")!=std::wstring::npos,"403 retained in detail");
+    Check(SiteText(node.sites[2],false)==L"122 ms" && SiteText(node.sites[3],false)==L"123 ms","401 and 403 responses display actual timing");
+    Check(CoreText(node)==L"88 ms" && CoreText(node,true).find(L"2026-11-23T00:00:00Z")!=std::wstring::npos &&
+        CoreText(node,true).find(L"Mihomo")!=std::wstring::npos,"Core timing retains source and sample time");
+    Node missingCore;
+    Check(CoreText(missingCore)==L"无数据","Missing kernel sample remains missing");
     Check(node.sites[0].http==200 && node.sites[1].http==200 && node.sites[4].latency==124,"All five target positions");
     SetWindowTextW(app.search,L"香港");
     app.Filter();

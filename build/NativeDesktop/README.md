@@ -67,3 +67,10 @@ The baseline has `--tray` and in-process history windows. It does not include
 automatic logon installation or a SQLite-backed desktop history path. These are
 not prerequisites for preserving that baseline. Current-route and exit/history
 fields will be connected once the backend's actual JSONL contract is frozen.
+
+Website cells show actual response timing when HTTP status and timing are present,
+including 401 and 403. Details and native hover hints retain the status semantics.
+Cards and the separate core-history table column display existing kernel latency,
+with source/sample time in the hint and details. Missing samples display no data.
+The default core sample option passes `--kernel-latency`, which reads existing
+history through the CLI. Explicit saved preferences retain their selected option.

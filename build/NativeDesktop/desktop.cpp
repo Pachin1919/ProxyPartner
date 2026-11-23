@@ -90,7 +90,7 @@ struct RegisteredTarget {
 struct Preferences {
     std::wstring profile, identity;
     int rounds = 1, parallel = 0, deadline = 0, minimum = 4, maximum = 8;
-    bool english = false, light = false, kernel = false;
+    bool english = false, light = false, kernel = true;
     std::array<int,3> components{50,35,15}, targets{60,30,10};
     std::vector<RegisteredTarget> customTargets;
 };
@@ -156,13 +156,20 @@ struct App {
 std::wstring SiteText(const Site& site, bool english, bool full = false) {
     if (site.active) return english ? L"Testing" : L"测试中";
     if (!site.attempted) return english ? L"Untested" : L"待测";
-    if (site.timeout) return english ? L"Timeout" : L"超时";
-    if (site.http == 403) return full ? L"403 · " + std::wstring(english ? L"Restricted" : L"服务受限") : english ? L"Blocked" : L"受限";
     std::wstring timing = site.latency >= 0 ? std::to_wstring(site.latency) + L" ms" : L"—";
-    if (site.http == 401) return full ? L"401 · " + std::wstring(english ? L"Auth response · " : L"鉴权响应 · ") + timing : L"401";
-    if (site.http >= 400) return L"HTTP " + std::to_wstring(site.http);
-    if (site.http < 100) return english ? L"Failed" : L"失败";
-    return full ? L"HTTP " + std::to_wstring(site.http) + L" · " + timing : timing;
+    if (site.http == 401) return full ? L"401 · " + std::wstring(english ? L"Auth response · " : L"鉴权响应 · ") + timing :
+        site.latency>=0?timing:english?L"Auth":L"鉴权";
+    if (site.http == 403) return full ? L"403 · " + std::wstring(english ? L"Restricted · " : L"服务受限 · ") + timing :
+        site.latency>=0?timing:english?L"Blocked":L"受限";
+    if (site.http >= 100) return full ? L"HTTP " + std::to_wstring(site.http) + L" · " + timing : timing;
+    if (site.timeout) return english ? L"Timeout" : L"超时";
+    return english ? L"Failed" : L"失败";
+}
+std::wstring CoreText(const Node& node,bool full = false) {
+    std::wstring value=node.kernel>=0?std::to_wstring(node.kernel)+L" ms":app.L(L"无数据",L"No data");
+    if(full && node.kernel>=0)value+=std::wstring(L" · ")+app.L(L"Mihomo 历史样本 · ",L"Mihomo history sample · ")+
+        (node.kernelObserved.empty()?app.L(L"时间未知",L"Time unknown"):node.kernelObserved);
+    return value;
 }
 COLORREF ScoreColor(int score) {
     if (score < 0) return app.Text();
@@ -218,8 +225,8 @@ void App::Theme() {
         L(L"取消",L"Cancel"),L(L"设置",L"Settings"),L(L"详情",L"Details")};
     for (int i = 0; i < 6; ++i) SetWindowTextW(GetDlgItem(window, View + i), labels[i]);
     SetWindowTextW(GetDlgItem(window,TestSelected),L(L"测所选",L"Test selected"));
-    const wchar_t* headings[] = {L(L"节点",L"Node"),L(L"协议",L"Protocol"),L(L"评分",L"Score"),L"GO",L"YT",L"OPENAI",L"GPT",L"ANT",L(L"状态",L"State"),L(L"轮次",L"Round")};
-    for (int i = 0; i < 10; ++i) { LVCOLUMNW col{};
+    const wchar_t* headings[] = {L(L"节点",L"Node"),L(L"协议",L"Protocol"),L(L"评分",L"Score"),L"GO",L"YT",L"OPENAI",L"GPT",L"ANT",L(L"状态",L"State"),L(L"轮次",L"Round"),L(L"内核历史延迟",L"Core history latency")};
+    for (int i = 0; i < 11; ++i) { LVCOLUMNW col{};
         col.mask = LVCF_TEXT;
         col.pszText = const_cast<wchar_t*>(headings[i]);
         ListView_SetColumn(table,i,&col);
@@ -269,6 +276,7 @@ void App::Filter() {
         else if(sort>=3 && sort<=7)comparison=nodes[a].sites[sort-3].latency-nodes[b].sites[sort-3].latency;
         else if(sort==8)comparison=nodes[a].state.compare(nodes[b].state);
         else if(sort==9)comparison=nodes[a].round-nodes[b].round;
+        else if(sort==10)comparison=nodes[a].kernel-nodes[b].kernel;
         else comparison=nodes[a].name.compare(nodes[b].name);
         return descending ? comparison > 0 : comparison < 0;
     });
@@ -584,7 +592,9 @@ void App::PaintCards(HDC dc) {
             COLORREF ink=result.http==403?RGB(210,165,90):result.timeout || result.attempted && result.http<100?ScoreColor(0):Text();
             Label(dc,SiteText(result,prefs.english),{first,at(75),last,at(75)+Px(19)},siteFont,ink,DT_CENTER|DT_SINGLELINE|DT_END_ELLIPSIS|DT_VCENTER);
         }
-        Label(dc,node.protocol,{left,at(90),right,at(90)+Px(17)},font,Muted());
+        std::wstring core=std::wstring(L(L"内核 ",L"Core "))+CoreText(node);
+        Label(dc,core,{left,at(86),right,at(86)+Px(17)},siteFont,Muted());
+        Label(dc,node.protocol,{left,at(93),right,at(93)+Px(14)},siteFont,Muted());
     }
 }
 
@@ -609,7 +619,7 @@ void App::ShowDetails() {
     L"\r\n"+L(L"评分 ",L"Score ")+(node.score>=0?std::to_wstring(node.score):L"—")+L"  |  "+L(L"轮次 ",L"Round ")+std::to_wstring(node.round)+L"\r\n";
     for(int i=0;i<5;++i) report+=std::wstring(SiteNames[i])+L" · "+SiteText(node.sites[i],prefs.english,true)+L"\r\n";
     for(const auto& target:prefs.customTargets)report+=target.symbol+L" "+target.shortName+L" · "+L(L"登记目标，待测",L"Registered target, untested")+L" · "+target.url+L"\r\n";
-    if(node.kernel>=0)report+=L(L"内核历史样本 ",L"Core history sample ")+std::to_wstring(node.kernel)+L" ms · "+node.kernelObserved+L"\r\n";
+    report+=std::wstring(L(L"内核 ",L"Core "))+CoreText(node,true)+L"\r\n";
     report+=std::wstring(L"\r\n")+L(L"结果接收时间 ",L"Result received ")+node.observed+L"\r\n"+L(L"401 表示已到达鉴权，403 表示服务受限。耗时与评分不能证明登录或模型业务可用。\r\n首轮即时评分尚无跨轮稳定性依据。",L"401 reached authentication. 403 indicates restriction. Timing and score do not verify login or model access.\r\nThe first round has no cross-round stability evidence.");
     SetWindowTextW(detailText,report.c_str());
     ShowWindow(details,SW_SHOW);
@@ -880,7 +890,11 @@ LRESULT CALLBACK WindowProc(HWND hwnd,UINT msg,WPARAM w,LPARAM l) {
                 auto& node=app.nodes[app.visible[index]];
                 int x=point.x-column*(app.cardWidth+app.Px(20))-app.Px(17);
                 int site=x*5/std::max(1,app.cardWidth-app.Px(34));
-                app.tipText=site>=0 && site<5?std::wstring(SiteNames[site])+L" · "+SiteText(node.sites[site],app.prefs.english,true):node.name;
+                int relativeY=(point.y+app.scroll)%pitch;
+                if(relativeY>=app.cardHeight*85/100)app.tipText=std::wstring(app.L(L"内核 ",L"Core "))+CoreText(node,true);
+                else if(relativeY>=app.cardHeight*52/100 && site>=0 && site<5)
+                    app.tipText=std::wstring(SiteNames[site])+L" · "+SiteText(node.sites[site],app.prefs.english,true);
+                else app.tipText=node.name;
             }
             reinterpret_cast<NMTTDISPINFOW*>(l)->lpszText=app.tipText.data();
             return 0;
@@ -901,6 +915,8 @@ LRESULT CALLBACK WindowProc(HWND hwnd,UINT msg,WPARAM w,LPARAM l) {
                         case 8:value=node.probing?app.L(L"测速中",L"Testing"):node.state==L"queued"?app.L(L"排队中",L"Queued"):node.round?app.L(L"已回填",L"Received"):node.state==L"ready"?app.L(L"待测",L"Untested"):app.L(L"不可用",L"Unavailable");
                         break;
                         case 9:value=std::to_wstring(node.round);
+                        break;
+                        case 10:value=CoreText(node);
                         break;
                         default:if(item.iSubItem>=3 && item.iSubItem<=7)value=SiteText(node.sites[item.iSubItem-3],app.prefs.english);
                         break;
@@ -978,8 +994,8 @@ int WINAPI wWinMain(HINSTANCE instance,HINSTANCE,PWSTR,int) {
     Child(app.window,L"BUTTON",L"",TestSelected,WS_TABSTOP|BS_OWNERDRAW);
     app.table=Child(app.window,WC_LISTVIEWW,L"",List,LVS_REPORT|LVS_OWNERDATA|LVS_SHOWSELALWAYS|WS_TABSTOP);
     ListView_SetExtendedListViewStyle(app.table,LVS_EX_FULLROWSELECT|LVS_EX_DOUBLEBUFFER);
-    int widths[]={230,95,75,105,105,125,115,105,135,70};
-    for(int i=0;i<10;++i){LVCOLUMNW col{};
+    int widths[]={230,95,75,105,105,125,115,105,135,70,150};
+    for(int i=0;i<11;++i){LVCOLUMNW col{};
         col.mask=LVCF_WIDTH|LVCF_TEXT;
         col.cx=app.Px(widths[i]);
         col.pszText=const_cast<wchar_t*>(L"");
