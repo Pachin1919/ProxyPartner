@@ -641,7 +641,9 @@ bool probe_node(const Node& node, const Options& options, Resolver& resolver, co
 }
 }
 
+int run_current_path(int argc, wchar_t** argv);
 int wmain(int argc, wchar_t** argv) {
+    if (argc > 1 && std::wstring_view(argv[1]) == L"current-path") return run_current_path(argc, argv);
     if (argc == 1 || (argc == 2 && (std::wstring_view(argv[1]) == L"--help" || std::wstring_view(argv[1]) == L"-h"))) {
         std::cout << "ProxyPartner.Cli inspect --profile <file> [--age-identity <identity>]\n"
             "ProxyPartner.Cli probe --profile <file> [--age-identity <identity>] (--all | --node <name>) "

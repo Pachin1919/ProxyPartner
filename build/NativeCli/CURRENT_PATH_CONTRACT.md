@@ -1,0 +1,21 @@
+# Native current-path JSONL contract
+
+Baseline78cf8daf84068f073174f352bd31df2c907cddfa. Owner scope build/NativeCli only. Native CONNECT, certificate-verified TLS, exact TCP-owner checks and single-shot connection matching are implemented. Default inspect/probe and all-node independent transports remain unchanged. build03 live run returned five verified correlations with real HTTP statuses 200/401/302/200/401. Final-source rebuild and acceptance evidence are recorded separately.
+
+Explicit command: `ProxyPartner.Cli current-path [--proxy-port <existing loopback HTTP proxy>] [--pipe <existing verified Mihomo pipe>]`. A supplied endpoint is never trusted merely because it is loopback: verify listener owner, then exact connected socket tuple against the discovered core PID and existing verified process identity. Service mode revalidates the registered service/core relationship without requiring administrator-only process handles. Without supplied port only an unambiguous manual loopback endpoint with no PAC/autodetect/bypass is accepted. Complex system settings require the explicit port; no guessed port or direct fallback.
+
+Old af29444 CurrentPathProbe.cs actual behavior: five fixed sites concurrently; each7s; HTTP1.1 exact, cookies/redirects disabled, Anthropic header retained. DefaultProxy must resolve to unauthenticated HTTP127.0.0.1 endpoint. VerifyTcp before dial and after connect; one dial only. Start a single verified named-pipe GET/connections while the TLS tunnel is alive; lookup deadline2s, body2MiB, headers16KiB, no content encoding. Exact metadata strings network=tcp/sourceIP=127.0.0.1/sourcePort=owned-port/host=target/destinationPort=443. Resolve one roster leaf from chains, otherwise DIRECT, otherwise unknown. Multiple distinct leaves in a chain are unknown. Anchor is the earliest verified target in configured target order, not the fastest response. GLOBAL selection is never used as route proof. No delay/healthcheck or host writes.
+
+JSONL (unknown fields are null, never fabricated0):
+
+```json
+{"event":"current_path_begin","targets":5,"method":"owned-http-proxy-verified-socket","timeoutMs":7000}
+{"event":"current_path_result","target":"chatgpt_web","attempted":true,"httpStatus":403,"elapsedMs":123,"timedOut":false,"routeStatus":"verified","node":"roster leaf","direct":false,"sourcePort":50001,"destinationHost":"chatgpt.com","destinationPort":443}
+{"event":"current_path_result","target":"google","attempted":true,"httpStatus":200,"elapsedMs":55,"timedOut":false,"routeStatus":"unknown","node":null,"direct":false,"sourcePort":50002,"destinationHost":"www.google.com","destinationPort":443}
+{"event":"current_path_summary","targets":5,"attempted":5,"verified":1,"anchorTarget":"chatgpt_web","node":"roster leaf","direct":false}
+```
+
+Identity rejection reports routeStatus=rejected and no node/direct attribution. HTTP success alone never verifies route. Route failure may coexist with a real HTTP status. No raw connections snapshots, credentials, authorization headers or subscription values are output. A source port is transient correlation evidence, not a persistent identity. Exit status0 should require at least one verified route; no verified route exits1; invalid invocation exits2. The begin/result/summary schema is separate from all-node score events.
+
+Exit/history next slice is intentionally separate. Actual compiled C# implementation uses ipv4.icanhazip.com and api.ipify.org, accepts only public addresses, corroborates two responses only when families match, keeps per-family observations and five-minute recheck scheduling. Different-family second responses produce separate uncorroborated facts. UpdateExitObservation tracks changes, prior verified address, consistent-since and confirmed count. Existing C++ transport ABI returns HTTP status only and cannot return echo response bytes. Native exit support therefore requires a bounded-body ABI (or a new owned HTTP transport returning at most65bytes) and faithful public-address classification. Do not infer exit IP from destination IP or promise IPv6 based on an IPv4-only endpoint. First exit work should inspect exact shipped C# behavior and measure two echo requests/retention cost, then implement typed observations; SQLite/history retention is a later separately measured step. No exit/history source is changed in this slice.
+

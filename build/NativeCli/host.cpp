@@ -1,6 +1,8 @@
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
+#include <winsock2.h>
 #include <windows.h>
+#include <iphlpapi.h>
 #include <tlhelp32.h>
 #include <winternl.h>
 #include <nlohmann/json.hpp>
@@ -139,7 +141,7 @@ Peer service_core(const Peer& ui) {
     return serviceFound && child ? Peer{child, status.dwProcessId, {}, 0, true} : Peer{};
 }
 
-bool transfer(HANDLE pipe, bool writing, char* data, DWORD capacity, DWORD& bytes, uint64_t deadline) {
+bool transfer(HANDLE pipe, bool writing, char* data, DWORD capacity, DWORD& bytes, uint64_t deadline, HANDLE stop = nullptr) {
     Handle event(CreateEventW(nullptr, TRUE, FALSE, nullptr));
     if (!event) return false;
     OVERLAPPED operation{};
@@ -150,7 +152,8 @@ bool transfer(HANDLE pipe, bool writing, char* data, DWORD capacity, DWORD& byte
     const auto error = GetLastError();
     if (error != ERROR_IO_PENDING) return !writing && error == ERROR_BROKEN_PIPE;
     auto now = GetTickCount64();
-    if (now < deadline && WaitForSingleObject(event.get(), static_cast<DWORD>(deadline - now)) == WAIT_OBJECT_0)
+    HANDLE waits[]{event.get(),stop};
+    if (now < deadline && WaitForMultipleObjects(stop ? 2 : 1, waits, FALSE, static_cast<DWORD>(deadline - now)) == WAIT_OBJECT_0)
         return GetOverlappedResult(pipe, &operation, &bytes, FALSE) || (!writing && GetLastError() == ERROR_BROKEN_PIPE);
     CancelIoEx(pipe, &operation);
     GetOverlappedResult(pipe, &operation, &bytes, TRUE);
@@ -174,7 +177,7 @@ std::string dechunk(std::string_view body, size_t limit) {
     }
     return {};
 }
-Json read_route(const std::wstring& name, const Peer& ui, const Peer& core, const SidBytes& user, DWORD session, bool version) {
+Json read_route(const std::wstring& name, const Peer& ui, const Peer& core, const SidBytes& user, DWORD session, bool version, bool connections = false, HANDLE stop = nullptr, uint64_t outerDeadline = UINT64_MAX) {
     auto pipe = valid(CreateFileW(name.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr,
         OPEN_EXISTING, FILE_FLAG_OVERLAPPED | SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION, nullptr));
     if (!pipe) return {};
@@ -189,18 +192,18 @@ Json read_route(const std::wstring& name, const Peer& ui, const Peer& core, cons
         const auto current = identity(pid, core.parent, user, session);
         if (current.started != core.started || current.image != core.image) return {};
     }
-    std::string request = version ? "GET /version" : "GET /proxies";
+    std::string request = connections ? "GET /connections" : version ? "GET /version" : "GET /proxies";
     request += " HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n";
-    const auto deadline = GetTickCount64() + 5000;
+    const auto deadline = (std::min)(GetTickCount64() + (connections ? 2000 : 5000), outerDeadline);
     DWORD sent{};
-    if (!transfer(pipe.get(), true, request.data(), static_cast<DWORD>(request.size()), sent, deadline) ||
+    if (!transfer(pipe.get(), true, request.data(), static_cast<DWORD>(request.size()), sent, deadline, stop) ||
         sent != request.size()) return {};
-    const size_t limit = version ? 4096 : 8 * 1024 * 1024;
+    const size_t limit = connections ? 2 * 1024 * 1024 : version ? 4096 : 8 * 1024 * 1024;
     std::string response;
     std::array<char, 8192> buffer{};
     for (;;) {
         DWORD count{};
-        if (!transfer(pipe.get(), false, buffer.data(), static_cast<DWORD>(buffer.size()), count, deadline)) return {};
+        if (!transfer(pipe.get(), false, buffer.data(), static_cast<DWORD>(buffer.size()), count, deadline, stop)) return {};
         if (!count) break;
         if (response.size() + count > limit + 16384) return {};
         response.append(buffer.data(), count);
@@ -244,7 +247,7 @@ bool valid_time(const std::string& stamp) {
 }
 }
 
-NativeHost read_native_host(std::wstring_view configuredPipe) {
+NativeHost read_native_host(std::wstring_view configuredPipe, CurrentHostAccess* access) {
     NativeHost output;
     const auto user = owner(GetCurrentProcess());
     DWORD session{};
@@ -282,6 +285,42 @@ NativeHost read_native_host(std::wstring_view configuredPipe) {
     if (!payload.is_object()) return output;
     const auto roster = payload.find("proxies");
     if (roster == payload.end() || !roster->is_object() || roster->size() > 2005) return output;
+    if (access) {
+        for (auto item = roster->begin(); item != roster->end(); ++item) {
+            const auto type = text(item.value(),"type");
+            if (!type.empty() && type != "Direct" && type != "Reject" && type != "RejectDrop" && type != "Pass" && type != "Compatible" &&
+                !item.value().contains("all")) access->leaves.insert(item.key());
+        }
+        auto alive = [core,ui,user,session]() {
+            if (core.service) { auto current=service_core(ui); return current.pid==core.pid && current.parent==core.parent; }
+            auto current=identity(core.pid,core.parent,user,session); return current.started==core.started && current.image==core.image;
+        };
+        access->verifyTcp = [alive,core](unsigned proxyPort,unsigned localPort) {
+            if (!alive()) return false;
+            DWORD size{};
+            const auto kind = localPort ? TCP_TABLE_OWNER_PID_CONNECTIONS : TCP_TABLE_OWNER_PID_LISTENER;
+            if (GetExtendedTcpTable(nullptr,&size,FALSE,AF_INET,kind,0) != ERROR_INSUFFICIENT_BUFFER || size < 4 || size > 4*1024*1024-4096) return false;
+            std::vector<unsigned char> bytes(size+4096); size=static_cast<DWORD>(bytes.size());
+            if (GetExtendedTcpTable(bytes.data(),&size,FALSE,AF_INET,kind,0) != NO_ERROR) return false;
+            const auto* table=reinterpret_cast<const MIB_TCPTABLE_OWNER_PID*>(bytes.data());
+            if (table->dwNumEntries > (size-4)/sizeof(MIB_TCPROW_OWNER_PID)) return false;
+            unsigned matches=0;
+            for (DWORD i=0;i<table->dwNumEntries;++i) {
+                const auto& row=table->table[i];
+                if (row.dwLocalAddr != htonl(INADDR_LOOPBACK) || ntohs(static_cast<u_short>(row.dwLocalPort)) != proxyPort) continue;
+                if (localPort && (row.dwState != MIB_TCP_STATE_ESTAB || row.dwRemoteAddr != htonl(INADDR_LOOPBACK) || ntohs(static_cast<u_short>(row.dwRemotePort)) != localPort)) continue;
+                if (row.dwOwningPid != core.pid) return false;
+                ++matches;
+            }
+            return matches==1 && alive();
+        };
+        const auto leaves=access->leaves;
+        access->lookup=[alive,pipe,ui,core,user,session,leaves](const std::string& host,unsigned destination,unsigned source,void* stop,uint64_t deadline) -> std::optional<MatchedCurrentRoute> {
+            if (!alive() || !source) return {};
+            auto body=read_route(pipe,ui,core,user,session,false,true,stop,deadline);
+            return alive() ? match_current_route(body,host,destination,source,leaves) : std::nullopt;
+        };
+    }
     for (auto item = roster->begin(); item != roster->end(); ++item) {
         const auto& entry = item.value();
         if (!entry.is_object()) continue;

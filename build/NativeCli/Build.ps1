@@ -27,8 +27,9 @@ try {
     $cl = Join-Path $native 'bin/cl.exe'
     & $cl /nologo /std:c++20 /EHsc /O2 /MT /utf-8 /W4 /DYAML_DECLARE_STATIC /D_CRT_SECURE_NO_WARNINGS `
         "/Fe:$publish/ProxyPartner.Cli.exe" (Join-Path $PSScriptRoot 'main.cpp') (Join-Path $PSScriptRoot 'age.cpp') (Join-Path $PSScriptRoot 'host.cpp') `
-        /link /INCREMENTAL:NO /STACK:1048576,16384 ws2_32.lib dnsapi.lib winhttp.lib advapi32.lib `
-        (Join-Path $openssl 'libcrypto.lib') (Join-Path $deps 'x64/yaml.lib')
+        (Join-Path $PSScriptRoot 'current_path.cpp') `
+        /link /INCREMENTAL:NO /STACK:1048576,16384 ws2_32.lib dnsapi.lib winhttp.lib advapi32.lib iphlpapi.lib `
+        (Join-Path $openssl 'libssl.lib') (Join-Path $openssl 'libcrypto.lib') (Join-Path $deps 'x64/yaml.lib')
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 } finally { Pop-Location }
 foreach ($name in 'libcrypto-4-x64.dll','libssl-4-x64.dll') {
