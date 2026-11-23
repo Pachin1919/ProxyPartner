@@ -53,17 +53,19 @@ Json probe(const Target& t,unsigned port,CurrentHostAccess& access,SSL_CTX* ctx,
     BIO* bio=BIO_new(method);if(!ssl||!bio){BIO_free(bio);return result;}
     BIO_set_data(bio,&wire);BIO_set_init(bio,1);SSL_set_bio(ssl.get(),bio,bio);
     if(SSL_set_tlsext_host_name(ssl.get(),t.host)!=1 || SSL_set1_host(ssl.get(),t.host)!=1 || SSL_connect(ssl.get())!=1)return result;
-    auto route=std::async(std::launch::async,[&]{return access.lookup(t.host,443,source,stopEvent,wire.deadline);});
+    const auto lookupStarted=GetTickCount64();
+    auto matched=access.lookup(t.host,443,source,stopEvent,wire.deadline);
+    const auto lookupMs=GetTickCount64()-lookupStarted;
     std::string request="GET "+std::string(t.path)+" HTTP/1.1\r\nHost: "+t.host+"\r\nConnection: close\r\n";
     if(std::string_view(t.id)=="anthropic_api")request+="anthropic-version: 2026-10-21\r\n";
     request+="\r\n";header.clear();
     if(SSL_write(ssl.get(),request.data(),static_cast<int>(request.size()))>0){
         while(header.size()<32768 && !header.ends_with("\r\n\r\n")){if(SSL_read(ssl.get(),&c,1)!=1)break;header+=c;}
         if(header.starts_with("HTTP/1.1 ")||header.starts_with("HTTP/1.0 ")){
-            if(header.size()>12 && header[9]>='1' && header[9]<='5' && isdigit(static_cast<unsigned char>(header[10])) && isdigit(static_cast<unsigned char>(header[11]))){result["httpStatus"]=(header[9]-'0')*100+(header[10]-'0')*10+header[11]-'0';result["elapsedMs"]=GetTickCount64()-start;}
+            if(header.size()>12 && header[9]>='1' && header[9]<='5' && isdigit(static_cast<unsigned char>(header[10])) && isdigit(static_cast<unsigned char>(header[11]))){result["httpStatus"]=(header[9]-'0')*100+(header[10]-'0')*10+header[11]-'0';result["elapsedMs"]=GetTickCount64()-start-lookupMs;}
         }
     }
-    auto matched=route.get();if(matched){result["routeStatus"]="verified";result["node"]=matched->direct?Json(nullptr):Json(matched->node);result["direct"]=matched->direct;}
+    if(matched){result["routeStatus"]="verified";result["node"]=matched->direct?Json(nullptr):Json(matched->node);result["direct"]=matched->direct;}
     result["timedOut"]=GetTickCount64()>=wire.deadline;return result;
 }
 }

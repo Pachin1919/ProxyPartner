@@ -14,6 +14,8 @@
 #include <cstdio>
 #include <filesystem>
 #include <memory>
+#include <mutex>
+#include <chrono>
 #include <set>
 #include <string_view>
 #include <vector>
@@ -315,9 +317,15 @@ NativeHost read_native_host(std::wstring_view configuredPipe, CurrentHostAccess*
             return matches==1 && alive();
         };
         const auto leaves=access->leaves;
-        access->lookup=[alive,pipe,ui,core,user,session,leaves](const std::string& host,unsigned destination,unsigned source,void* stop,uint64_t deadline) -> std::optional<MatchedCurrentRoute> {
-            if (!alive() || !source) return {};
-            auto body=read_route(pipe,ui,core,user,session,false,true,stop,deadline);
+        auto routeMutex=std::make_shared<std::timed_mutex>();
+        access->lookup=[alive,pipe,ui,core,user,session,leaves,routeMutex](const std::string& host,unsigned destination,unsigned source,void* stop,uint64_t deadline) -> std::optional<MatchedCurrentRoute> {
+            const auto now=GetTickCount64();
+            const auto lookupDeadline=(std::min)(deadline,now+2000);
+            if (now>=lookupDeadline || !source) return {};
+            if (!routeMutex->try_lock_for(std::chrono::milliseconds(lookupDeadline-now))) return {};
+            std::unique_lock<std::timed_mutex> lock(*routeMutex,std::adopt_lock);
+            if (GetTickCount64()>=lookupDeadline || (stop && WaitForSingleObject(stop,0)==WAIT_OBJECT_0) || !alive()) return {};
+            auto body=read_route(pipe,ui,core,user,session,false,true,stop,lookupDeadline);
             return alive() ? match_current_route(body,host,destination,source,leaves) : std::nullopt;
         };
     }
