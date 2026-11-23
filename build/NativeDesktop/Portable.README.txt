@@ -28,7 +28,12 @@ Registered targets remain untested. Live scores continue to come from the CLI.
 When native preferences do not exist, the desktop reads the legacy current-user
 LocalAppData\ProxyPartner\Desktop\settings.json. Saving writes only the new native
 preferences file, preserving the legacy file. The baseline history was held in memory.
-The baseline startup entry --tray is preserved. Current-route and exit/history
-events await the backend contract. Its CLI parameters include rounds, adaptive concurrency
+The baseline startup entry --tray is preserved. Verify route explicitly checks the
+current path in a separate result window. Only a verified unique node or DIRECT
+matching the summary anchor is labelled as the last verified route. Settings can
+specify an existing local HTTP proxy port from 1 to 65535; empty uses system rules.
+Unknown, rejected and bypassed results remain unverified. Independent scores and
+samples remain separate. Exit/history events await the backend contract.
+Its CLI parameters include rounds, adaptive concurrency
 limits, fixed concurrency/deadline overrides, and read-only existing core samples.
 Real resource and host non-interference gates remain required.

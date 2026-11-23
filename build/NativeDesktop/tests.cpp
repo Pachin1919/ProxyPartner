@@ -26,6 +26,7 @@ void InitializeHiddenApp() {
     app.status=Child(app.window,L"STATIC",L"",100);
     app.search=Child(app.window,L"EDIT",L"",Search);
     for(int id=View;id<=Details;++id)Child(app.window,L"BUTTON",L"",id);
+    Child(app.window,L"BUTTON",L"",VerifyCurrent);
     app.Theme();
     if(!app.directory.empty())for(int i=0;i<5;++i){
         auto path=app.directory/L"TargetIcons"/(std::wstring(SiteIds[i])+L".ico");
@@ -71,10 +72,16 @@ int Acceptance(int argc,wchar_t** argv) {
     size_t eligible=std::count_if(app.nodes.begin(),app.nodes.end(),[](const Node& node){return node.state==L"ready";});
     if(catalog)run(false);
     Json counts=Json::object();
-    int scored=0,received=0;
+    int scored=0,received=0,scoreMinimum=101,scoreMaximum=-1,scoreSum=0,kernelSamples=0;
     for(const auto& node:app.nodes){
         if(node.round)++received;
-        if(node.score>=0)++scored;
+        if(node.score>=0){
+            ++scored;
+            scoreMinimum=std::min(scoreMinimum,node.score);
+            scoreMaximum=std::max(scoreMaximum,node.score);
+            scoreSum+=node.score;
+        }
+        if(node.kernel>=0)++kernelSamples;
         for(const auto& site:node.sites){
             std::string state=site.timeout?"timeout":!site.attempted?"unattempted":std::to_string(site.http);
             if(!counts.contains(state))counts[state]=0;
@@ -88,6 +95,9 @@ int Acceptance(int argc,wchar_t** argv) {
     bool finished=catalog && !app.Running() && CompleteCoverage(app.nodes,eligible,app.sawSummary,app.completed,app.scored);
     Json result={{"status",finished && accounting?"COMPLETE":"INCOMPLETE"},{"nodes",app.nodes.size()},
         {"eligible_nodes",eligible},{"received_nodes",received},{"scored_nodes",scored},{"cli_completed",app.completed},{"attempts",app.attempts},
+        {"score_min",scored?Json(scoreMinimum):Json(nullptr)},{"score_max",scored?Json(scoreMaximum):Json(nullptr)},
+        {"score_average",scored?Json(static_cast<double>(scoreSum)/scored):Json(nullptr)},
+        {"kernel_samples",kernelSamples?Json(kernelSamples):Json(nullptr)},
         {"http_counts",counts},{"wall_ms",GetTickCount64()-started},{"deadline_ms",6000},
         {"peak_job_commit_bytes",memory.PeakJobMemoryUsed},{"total_job_processes",processes.TotalProcesses},
         {"active_job_processes_at_report",processes.ActiveProcesses},{"accounting",accounting},
@@ -103,6 +113,18 @@ int Acceptance(int argc,wchar_t** argv) {
 int wmain(int argc,wchar_t** argv) {
     if(argc>1 && wcscmp(argv[1],L"--acceptance")==0)return Acceptance(argc,argv);
     if(argc>1 && wcscmp(argv[1],L"--fixture-grandchild")==0){Sleep(60000);
+        return 0;
+    }
+    if(argc>1 && wcscmp(argv[1],L"current-path")==0){
+        std::cout<<Json{{"event","current_path_begin"},{"targets",5}}.dump()<<'\n';
+        for(int i=0;i<5;++i){
+            std::cout<<Json{{"event","current_path_result"},{"target",Utf8(SiteIds[i])},{"attempted",true},
+                {"httpStatus",i==2?401:200},{"elapsedMs",55+i},{"timedOut",false},{"routeStatus",i==0?"verified":"unknown"},
+                {"node",i==0?Json("test-node"):Json(nullptr)},{"direct",false}}.dump()<<'\n'<<std::flush;
+            if(i==0 && argc>3 && wcscmp(argv[3],L"12346")==0)Sleep(60000);
+        }
+        std::cout<<Json{{"event","current_path_summary"},{"targets",5},{"attempted",5},{"verified",1},
+            {"anchorTarget","google"},{"node","test-node"},{"direct",false}}.dump()<<'\n';
         return 0;
     }
     if(argc>1 && (wcscmp(argv[1],L"inspect")==0 || wcscmp(argv[1],L"probe")==0)) {
@@ -194,8 +216,8 @@ int wmain(int argc,wchar_t** argv) {
     Check(CompleteCoverage(incomplete,1,true,1,1),"Attempted timeout with complete score can finish");
     Check(SiteText(node.sites[2],false,true).find(L"401")!=std::wstring::npos,"401 retained in detail");
     Check(SiteText(node.sites[3],false,true).find(L"403")!=std::wstring::npos,"403 retained in detail");
-    Check(SiteText(node.sites[2],false)==L"122 ms" && SiteText(node.sites[3],false)==L"123 ms","401 and 403 responses display actual timing");
-    Check(CoreText(node)==L"88 ms" && CoreText(node,true).find(L"2026-11-23T00:00:00Z")!=std::wstring::npos &&
+    Check(SiteText(node.sites[2],false)==L"122ms" && SiteText(node.sites[3],false)==L"123ms","401 and 403 responses display actual timing");
+    Check(CoreText(node)==L"88ms" && CoreText(node,true).find(L"2026-11-23T00:00:00Z")!=std::wstring::npos &&
         CoreText(node,true).find(L"Mihomo")!=std::wstring::npos,"Core timing retains source and sample time");
     Node missingCore;
     Check(CoreText(missingCore)==L"无数据","Missing kernel sample remains missing");
@@ -253,6 +275,50 @@ int wmain(int argc,wchar_t** argv) {
         std::getline(observed,identity);
         Check(!app.Running() && identity.empty(),"Imported profile does not borrow a runtime key");
     }
+    app.nodes[0].score=74;
+    app.nodes[0].sites[2]={401,122,true,false,false};
+    app.prefs.proxyPort=12345;
+    std::wstring independentProfile=app.prefs.profile;
+    app.prefs.profile.clear();
+    app.Start(false,{},true);
+    app.prefs.profile=independentProfile;
+    HANDLE currentProcess=app.process;
+    app.Start(false);
+    Check(app.process==currentProcess && app.currentMode,"Current path prevents overlapping sweep");
+    deadline=GetTickCount64()+10000;
+    while(app.Running() && GetTickCount64()<deadline){app.Drain();Sleep(10);}
+    Check(!app.Running() && app.verifiedCurrent && app.currentNode==L"test-node","Current path verified anchor lifecycle");
+    Check(app.nodes[0].score==74 && app.nodes[0].sites[2].http==401 && app.nodes[0].sites[2].latency==122,"Current path does not overwrite independent score or sites");
+    auto attribution=[&](const char* route,const char* nodeName,bool direct,const char* summaryName){
+        app.currentMode=true;app.currentResults={};app.currentSeen={};app.verifiedCurrent=false;app.currentSummary=false;
+        Check(app.Event(Json{{"event","current_path_result"},{"target","google"},{"attempted",true},{"httpStatus",200},
+            {"elapsedMs",55},{"routeStatus",route},{"node",nodeName},{"direct",direct}}),"Current result parsed");
+        int verified=std::string(route)=="verified"?1:0;
+        Check(app.Event(Json{{"event","current_path_summary"},{"targets",5},{"verified",verified},{"anchorTarget","google"},
+            {"node",summaryName},{"direct",direct}}),"Current summary parsed");
+    };
+    attribution("unknown","forged",false,"forged");
+    Check(!app.verifiedCurrent && app.CurrentPathReport().find(L"forged")==std::wstring::npos,"HTTP response alone does not attribute a route");
+    attribution("rejected","forged",false,"forged");
+    Check(!app.verifiedCurrent,"Rejected identity cannot mark a current node");
+    attribution("verified","test-node",false,"different-node");
+    Check(!app.verifiedCurrent,"Mismatching summary cannot mark a current node");
+    attribution("verified","test-node",true,"test-node");
+    Check(!app.verifiedCurrent,"Ambiguous DIRECT and node attribution rejected");
+    attribution("verified","",true,"");
+    Check(app.verifiedCurrent && app.currentDirect,"Verified unique DIRECT accepted");
+    attribution("bypassed","",false,"");
+    Check(!app.verifiedCurrent && app.CurrentPathReport().find(app.L(L"已跳过",L"Skipped"))!=std::wstring::npos,"System bypass remains skipped and unverified");
+    Check(app.Event(Json{{"event","current_path_error"},{"reason","explicit_verified_proxy_port_required"}}) &&
+        !app.currentNotice.empty() && !app.verifiedCurrent,"Missing endpoint exposes an unverified notice");
+    app.prefs.proxyPort=12346;
+    app.Start(false,{},true);
+    deadline=GetTickCount64()+5000;
+    while(app.Running() && !app.currentSeen[0] && GetTickCount64()<deadline){app.Drain();Sleep(10);}
+    Check(app.Running() && app.currentSeen[0],"Partial current result received before cancellation");
+    app.Finish(true);
+    Check(app.currentSeen[0] && app.currentResults[0].site.http==200 && !app.verifiedCurrent && app.nodes[0].score==74,"Cancellation retains partial route results without aggregate attribution");
+    app.prefs.proxyPort=0;
     app.Start(false);
     Check(app.Running(),"Child probe started");
     fs::path pidFile=root/L"grandchild.pid";
@@ -281,6 +347,9 @@ int wmain(int argc,wchar_t** argv) {
     std::ifstream saved(app.preferencePath);
     Json value=Json::parse(saved,nullptr,false);
     Check(value.is_object() && value["profile"]==Utf8(prefs.profile) && value["parallel"]==3,"Persisted values");
+    Preferences decodedPort;
+    Check(DecodePreferences(Json{{"proxyPort",65535}},decodedPort,false) && decodedPort.proxyPort==65535,"Maximum explicit proxy port accepted");
+    Check(!DecodePreferences(Json{{"proxyPort",65536}},decodedPort,false),"Out-of-range proxy port rejected");
     bool realCliInspect=false;
     if(argc==3){
         app.directory=fs::path(argv[2]);
