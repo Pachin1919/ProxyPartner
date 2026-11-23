@@ -1,6 +1,7 @@
 // AnyTLS framing adapted from Mihomo v1.19.21 transport/anytls (GPL-3.0).
 // Single fixed-destination stream per test; no listener, routing or pooling.
 #include "shadowsocks.cpp"
+#include "echo_request.hpp"
 extern "C" Byte* SHA256(const Byte*, unsigned __int64, Byte*);
 extern "C" int BIO_free(Bio*);
 extern "C" __declspec(dllexport) void ProbeShutdown();
@@ -130,7 +131,7 @@ extern "C" __declspec(dllexport) void ProbeShutdown() {
 }
 static int probeAnyTLS(const char* address, const char* port, const char* password,
     const char* serverName, const char* echConfig, const char* host, const char* path, const char* headers,
-    unsigned remaining, Handle stop, int* status, int* echStatus) {
+    unsigned remaining, Handle stop, int* status, int* echStatus, char* body=nullptr, unsigned capacity=0, unsigned* echoUsed=nullptr) {
     *status = 0;
     *echStatus = -103;
     Tick deadline = GetTickCount64() + remaining;
@@ -171,7 +172,9 @@ static int probeAnyTLS(const char* address, const char* port, const char* passwo
     Ssl* inner = tlsOver(channel, streamMethod, host);
     if (!inner) return 0;
     int ok = 0;
-    if (SSL_connect(inner) == 1) {
+    if (body && SSL_connect(inner) == 1) {
+        ok=request_echo(inner,host,path,body,capacity,echoUsed,status);
+    } else if (!body && SSL_connect(inner) == 1) {
         char request[4096];
         const char* parts[]{"GET ", path, " HTTP/1.1\r\nHost: ", host, "\r\nConnection: close\r\n", headers, "\r\n"};
         int size = 0;
@@ -207,4 +210,12 @@ extern "C" __declspec(dllexport) int ProbeAnyTlsWebsite(const char* address, con
     const char* serverName, const char* echConfig, const char* host, const char* path, const char* headers,
     unsigned remaining, Handle stop, int* status, int* echStatus) {
     return probeAnyTLS(address, port, password, serverName, echConfig, host, path, headers, remaining, stop, status, echStatus);
+}
+
+extern "C" __declspec(dllexport) int ProbeAnyTlsEcho(const char* address,const char* port,const char* password,
+    const char* serverName,const char* echConfig,const char* host,const char* path,const char* headers,
+    unsigned remaining,Handle stop,int* status,int* echStatus,char* body,unsigned capacity,unsigned* used) {
+    *used=0;
+    if(capacity<65 || *headers) { *status=0;*echStatus=-103;return 0; }
+    return probeAnyTLS(address,port,password,serverName,echConfig,host,path,headers,remaining,stop,status,echStatus,body,capacity,used);
 }

@@ -1,5 +1,6 @@
 // Mieru v3.29.0 TCP framing/key derivation adapted from official GPL-3.0-or-later source.
 #include "shadowsocks.cpp"
+#include "echo_request.hpp"
 extern "C" {
 Byte* SHA256(const Byte*, unsigned __int64, Byte*);
 int strcmp(const char*, const char*);
@@ -192,7 +193,7 @@ extern "C" __declspec(dllexport) void ProbeShutdown() {
 }
 static int measureMieru(const char* address, const char* port,
     const char* username, const char* password, const char* host, const char* path, const char* headers,
-    unsigned remaining, Handle stop, int* status, bool shaped) {
+    unsigned remaining, Handle stop, int* status, bool shaped, char* body=nullptr, unsigned capacity=0, unsigned* used=nullptr) {
     *status = 0;
     Tick deadline = GetTickCount64() + remaining;
     int userLen = static_cast<int>(strlen(username)), passLen = static_cast<int>(strlen(password)),
@@ -280,8 +281,11 @@ static int measureMieru(const char* address, const char* port,
     int ok = 0;
     if (SSL_set1_host(ssl, host) == 1 && SSL_ctrl(ssl, 55, 0, const_cast<char*>(host)) == 1 && SSL_connect(ssl) == 1) {
         // Same fixed-target HTTP request as the existing native probe, bounded at this ABI boundary.
-        if (strlen(path) + strlen(host) + strlen(headers) < 400) *status = request(ssl, {nullptr, host, path, headers});
-        ok = *status > 0 ? 1 : 0;
+        if (body) ok=request_echo(ssl,host,path,body,capacity,used,status);
+        else {
+            if (strlen(path) + strlen(host) + strlen(headers) < 400) *status = request(ssl, {nullptr, host, path, headers});
+            ok = *status > 0 ? 1 : 0;
+        }
     }
     SSL_free(ssl);
     return ok;
@@ -301,4 +305,15 @@ extern "C" __declspec(dllexport) int ProbeMieruWebsiteV2(const char* address, co
         (*multiplexing && strcmp(multiplexing, "MULTIPLEXING_HIGH") != 0 && strcmp(multiplexing, "MULTIPLEXING_LOW") != 0) ||
         *handshakeMode) return 0;
     return measureMieru(address, port, username, password, host, path, headers, remaining, stop, status, true);
+}
+
+extern "C" __declspec(dllexport) int ProbeMieruEchoV2(const char* address,const char* port,
+    const char* username,const char* password,const char* trafficPattern,const char* multiplexing,
+    const char* handshakeMode,const char* host,const char* path,const char* headers,
+    unsigned remaining,Handle stop,int* status,char* body,unsigned capacity,unsigned* used) {
+    *used=0; *status=0;
+    constexpr char supported[]="CKPfirUDEAAaBAgAEAAiCAgCEAEYCSAJKgUIABD/ATICCAA=";
+    if(capacity<65 || *headers || (*trafficPattern && strcmp(trafficPattern,supported)!=0) ||
+        (*multiplexing && strcmp(multiplexing,"MULTIPLEXING_HIGH")!=0 && strcmp(multiplexing,"MULTIPLEXING_LOW")!=0) || *handshakeMode) return 0;
+    return measureMieru(address,port,username,password,host,path,headers,remaining,stop,status,*trafficPattern!=0,body,capacity,used);
 }

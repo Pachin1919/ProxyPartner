@@ -21,4 +21,4 @@ struct Result { int status = 0; Dword elapsed = 0; bool timeout = false; bool co
 void put16(Byte* target, int value);
 BioMethod* createTransportMethod();
 Result measureSite(const Profile& profile, const Site& site, Tick deadline,
-    SslContext* sslContext, const BioMethod* method, Handle stop = nullptr);
+    SslContext* sslContext, const BioMethod* method, Handle stop = nullptr, char* body = nullptr, unsigned capacity = 0, unsigned* used = nullptr, bool* echoOk = nullptr);
