@@ -12,6 +12,8 @@
 
 #include "age.hpp"
 #include "host.hpp"
+#include "share_links.hpp"
+#include "trojan.hpp"
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -92,10 +94,11 @@ std::optional<unsigned> integer(std::string_view value) {
     return number;
 }
 
-enum class Protocol { AnyTls, Mieru, Shadowsocks, Unsupported };
+enum class Protocol { AnyTls, Mieru, Shadowsocks, Trojan, Unsupported };
 struct Node {
     std::string name, server, port, username, password, sni, ech, pattern, multiplexing, handshake, obfs, cipher;
     Protocol protocol = Protocol::Unsupported;
+    std::unique_ptr<TrojanSettings> trojan;
     Node() = default;
     Node(Node&&) noexcept = default;
     Node& operator=(Node&&) noexcept = default;
@@ -106,6 +109,7 @@ const char* protocol_name(Protocol protocol) {
     case Protocol::AnyTls: return "AnyTLS";
     case Protocol::Mieru: return "Mieru";
     case Protocol::Shadowsocks: return "Shadowsocks";
+    case Protocol::Trojan: return "Trojan";
     default: return "Unsupported";
     }
 }
@@ -137,6 +141,137 @@ bool port_ok(std::string_view value) {
     const auto port = integer(value);
     return port && *port >= 1 && *port <= 65535;
 }
+bool password_ok(std::string_view password) {
+    if (password.empty() || password.size() > 12288) return false;
+    const auto units = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, password.data(), static_cast<int>(password.size()), nullptr, 0);
+    return units > 0 && units <= 4096;
+}
+bool header_value(std::string_view value, size_t limit) {
+    return value.size() <= limit && std::all_of(value.begin(), value.end(), [](unsigned char ch) { return ch > 32 && ch < 127; });
+}
+std::unique_ptr<TrojanSettings> trojan_settings(const Node& node, std::string_view network, std::string_view path,
+    std::string_view host, std::string_view sni, const std::vector<std::string>& alpn) {
+    if (node.server.empty() || !port_ok(node.port) || !password_ok(node.password) ||
+        !header_value(node.server, 253) || !header_value(sni, 253) || !header_value(host, 512) ||
+        !header_value(path, 2048) || (!path.empty() && path.front() != '/')) return {};
+    TrojanTransport transport;
+    if (network.empty() || network == "tcp" || network == "raw") transport = TrojanTransport::Tcp;
+    else if (network == "ws" || network == "websocket") transport = TrojanTransport::WebSocket;
+    else if (network == "httpupgrade") transport = TrojanTransport::HttpUpgrade;
+    else return {};
+    auto settings = std::make_unique<TrojanSettings>();
+    settings->transport = transport;
+    settings->peerName = sni.empty() ? node.server : sni;
+    settings->path = path.empty() ? "/" : path;
+    settings->host = host.empty() ? node.server : host;
+    for (const auto& item : alpn) {
+        if (item.empty() || !header_value(item, 255)) return {};
+        settings->alpn.push_back(static_cast<char>(item.size()));
+        settings->alpn += item;
+    }
+    if (settings->alpn.empty()) settings->alpn = transport == TrojanTransport::Tcp
+        ? "\x02h2\x08http/1.1" : "\x08http/1.1";
+    return settings;
+}
+std::unique_ptr<TrojanSettings> yaml_trojan(yaml_document_t& doc, const yaml_node_t* entry, const Node& node) {
+    if (!fields(doc, entry, {"name","type","server","port","password","tls","sni","network","ws-opts","alpn","skip-cert-verify","udp"})) return {};
+    auto value = [&](std::string_view key) { return scalar(field(doc, entry, key)); };
+    const auto tls = value("tls"), insecure = value("skip-cert-verify");
+    if ((!tls.empty() && _stricmp(tls.c_str(), "true")) || (!insecure.empty() && _stricmp(insecure.c_str(), "false"))) return {};
+    auto network = value("network");
+    if (!network.empty() && network != "tcp" && network != "ws") return {};
+    std::string host, path;
+    if (auto* ws = field(doc, entry, "ws-opts")) {
+        if (!fields(doc, ws, {"path","headers","max-early-data","v2ray-http-upgrade","v2ray-http-upgrade-fast-open"})) return {};
+        const auto early = scalar(field(doc, ws, "max-early-data")), fast = scalar(field(doc, ws, "v2ray-http-upgrade-fast-open"));
+        if ((!early.empty() && early != "0") || (!fast.empty() && _stricmp(fast.c_str(), "false"))) return {};
+        const auto upgrade = scalar(field(doc, ws, "v2ray-http-upgrade"));
+        if (network == "ws" && !_stricmp(upgrade.c_str(), "true")) network = "httpupgrade";
+        path = scalar(field(doc, ws, "path"));
+        if (auto* headers = field(doc, ws, "headers")) {
+            if (!fields(doc, headers, {"Host","host"}) || headers->data.mapping.pairs.top - headers->data.mapping.pairs.start > 1) return {};
+            const auto upper = field(doc, headers, "Host");
+            host = scalar(upper ? upper : field(doc, headers, "host"));
+        }
+    }
+    std::vector<std::string> alpn;
+    if (auto* protocols = field(doc, entry, "alpn")) {
+        if (protocols->type != YAML_SEQUENCE_NODE || protocols->data.sequence.items.top - protocols->data.sequence.items.start > 16) return {};
+        for (auto item = protocols->data.sequence.items.start; item != protocols->data.sequence.items.top; ++item)
+            alpn.push_back(scalar(yaml_document_get_node(&doc, *item)));
+    }
+    return trojan_settings(node, network, path, host, value("sni"), alpn);
+}
+
+void decode_share_link(Node& node, std::string_view link) {
+    const auto split = link.find("://");
+    if (split == link.npos) return;
+    const auto scheme = link.substr(0, split);
+    auto body = link.substr(split + 3);
+    if (scheme != "ss" && scheme != "trojan") return;
+    body = body.substr(0, body.find('#'));
+    std::optional<std::string> legacy;
+    auto endpoint = share_links::endpoint(body);
+    if (!endpoint && scheme == "ss") {
+        legacy = share_links::base64(body);
+        if (legacy) endpoint = share_links::endpoint(*legacy);
+    }
+    if (endpoint && port_ok(endpoint->port)) {
+        node.server = endpoint->server;
+        node.port = endpoint->port;
+        auto credentials = share_links::unescape(endpoint->credentials);
+        if (credentials && scheme == "ss" && endpoint->query.empty()) {
+            if (credentials->find(':') == credentials->npos) credentials = share_links::base64(*credentials);
+            if (credentials) {
+                const auto colon = credentials->find(':');
+                if (colon != credentials->npos) {
+                    node.cipher = credentials->substr(0, colon);
+                    node.password = credentials->substr(colon + 1);
+                    if (password_ok(node.password) && (node.cipher == "aes-128-gcm" || node.cipher == "aes-192-gcm" ||
+                        node.cipher == "aes-256-gcm" || node.cipher == "chacha20-ietf-poly1305")) node.protocol = Protocol::Shadowsocks;
+                }
+            }
+        } else if (credentials && scheme == "trojan") {
+            node.password = std::move(*credentials);
+            auto options = share_links::query(endpoint->query);
+            const auto allowed = [](const auto& option) {
+                return option.first == "type" || option.first == "sni" || option.first == "host" || option.first == "path" ||
+                    option.first == "alpn" || option.first == "allowInsecure" || option.first == "security";
+            };
+            if (options && std::all_of(options->begin(), options->end(), allowed)) {
+                auto& value = *options;
+                if ((value["allowInsecure"].empty() || value["allowInsecure"] == "0" || value["allowInsecure"] == "false") &&
+                    (value["security"].empty() || value["security"] == "tls")) {
+                    std::vector<std::string> alpn;
+                    std::string_view items = value["alpn"];
+                    while (!items.empty()) {
+                        auto end = items.find(',');
+                        alpn.emplace_back(items.substr(0, end));
+                        if (end == items.npos) break;
+                        items.remove_prefix(end + 1);
+                    }
+                    if (alpn.size() <= 16) node.trojan = trojan_settings(node, value["type"], value["path"], value["host"], value["sni"], alpn);
+                    if (node.trojan) node.protocol = Protocol::Trojan;
+                }
+            }
+        }
+        if (credentials) OPENSSL_cleanse(credentials->data(), credentials->size());
+    }
+    if (legacy) OPENSSL_cleanse(legacy->data(), legacy->size());
+}
+std::optional<Profile> parse_link_index(std::string_view text) {
+    share_links::Index input;
+    if (!Json::sax_parse(text.begin(), text.end(), &input)) return std::nullopt;
+    Profile profile;
+    profile.nodes.reserve(input.rows.size());
+    for (auto& row : input.rows) {
+        Node node;
+        node.name = std::move(row.name);
+        if (password_ok(row.link)) decode_share_link(node, row.link);
+        profile.nodes.push_back(std::move(node));
+    }
+    return profile;
+}
 std::optional<Profile> parse_profile(std::string_view text) {
     yaml_parser_t parser{};
     yaml_document_t document{};
@@ -164,6 +299,10 @@ std::optional<Profile> parse_profile(std::string_view text) {
         node.port = value("port");
         node.password = value("password");
         const auto type = value("type");
+        if (type == "trojan") {
+            node.trojan = yaml_trojan(document, entry, node);
+            if (node.trojan) node.protocol = Protocol::Trojan;
+        }
         if (!node.server.empty() && node.server.size() <= 253 && !node.password.empty() &&
             node.password.size() <= (type=="ss"?12288u:4096u) && (type=="ss" || node.password.find('\0') == std::string::npos)) {
             if (type == "anytls" && port_ok(node.port) &&
@@ -445,11 +584,13 @@ struct Adapters {
     Mieru basic{};
     MieruV2 shaped{};
     Shadowsocks ss{};
+    std::optional<TrojanProbe> trojan;
 
     Adapters(const fs::path& root, const std::vector<Node>& nodes,bool echo=false) {
         auto needed = [&nodes](Protocol type) { return std::any_of(nodes.begin(), nodes.end(),
             [type](const Node& n) { return n.protocol == type; }); };
         const auto ca = root / L"probe-ca-bundle.crt";
+        if (needed(Protocol::Trojan)) trojan.emplace(ca);
         if (needed(Protocol::AnyTls) && anytls.load(root / L"ProxyPartner.AnyTlsProbe.dll", ca))
             any = anytls.entry<AnyTls>("ProbeAnyTlsWebsite");
         if (needed(Protocol::Mieru) && mieru.load(root / L"ProxyPartner.MieruProbe.dll", ca)) {
@@ -476,6 +617,7 @@ struct Adapters {
         case Protocol::AnyTls: return any != nullptr;
         case Protocol::Mieru: return n.pattern.empty() ? basic != nullptr : shaped != nullptr;
         case Protocol::Shadowsocks: return ssV2 || ss && legacy_ss(n);
+        case Protocol::Trojan: return trojan && trojan->ready();
         default: return false;
         }
     }
@@ -485,6 +627,8 @@ struct Adapters {
         const char* port = n.port.c_str();
         const char* password = n.password.c_str();
         switch (n.protocol) {
+        case Protocol::Trojan:
+            return trojan->request(*n.trojan, ip, port, n.password, t.host, t.path, t.headers, remaining, cancelEvent);
         case Protocol::AnyTls:
             result = any(ip, port, password, n.sni.c_str(), n.ech.c_str(), t.host, t.path, t.headers,
                 remaining, cancelEvent, &status, &ech);
@@ -705,7 +849,10 @@ int wmain(int argc, wchar_t** argv) {
     if (encrypted && !age_open(*bytes, options->identity, plaintext)) return fail("age_decrypt_failed");
     if (bytes->starts_with("#KJXENC1")) return fail("encrypted_profile");
     auto& input = encrypted ? plaintext : *bytes;
-    auto profile = parse_profile(input);
+    std::string_view contents(input);
+    if (contents.starts_with("\xef\xbb\xbf")) contents.remove_prefix(3);
+    const bool jsonInput = _wcsicmp(fs::path(options->profile).extension().c_str(), L".json") == 0;
+    auto profile = jsonInput ? parse_link_index(contents) : parse_profile(contents);
     OPENSSL_cleanse(input.data(), input.size());
     if (!profile || profile->nodes.empty()) return fail("missing_or_invalid_yaml_proxies");
 
@@ -746,7 +893,7 @@ int wmain(int argc, wchar_t** argv) {
         for (const auto& group : host.groups)
             write_event({{"event","group"},{"name",group.name},{"type",group.type},{"selected",group.selected}});
     }
-    std::array<Budget, 3> budgets{Budget(options->timeout), Budget(options->timeout), Budget(options->timeout)};
+    std::array<Budget, 4> budgets{Budget(options->timeout), Budget(options->timeout), Budget(options->timeout), Budget(options->timeout)};
     std::vector<const Node*> queue;
     for (const auto& node : profile->nodes) {
         if (!options->node.empty() && options->node != node.name) continue;

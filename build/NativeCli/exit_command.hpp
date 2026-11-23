@@ -6,7 +6,8 @@ int run_exit_ip(const Options& options,const std::vector<Node>& nodes,Resolver& 
     const auto found=std::find_if(nodes.begin(),nodes.end(),[&](const Node& node){return node.name==options.node;});
     if(found==nodes.end()) return fail("node_not_found");
     const Node& node=*found;
-    if(!(node.protocol==Protocol::AnyTls && adapters.anyEcho || node.protocol==Protocol::Mieru && adapters.mieruEcho || node.protocol==Protocol::Shadowsocks && (adapters.ssEchoV2 || adapters.ssEcho && Adapters::legacy_ss(node))))
+    if(!(node.protocol==Protocol::AnyTls && adapters.anyEcho || node.protocol==Protocol::Mieru && adapters.mieruEcho || node.protocol==Protocol::Shadowsocks && (adapters.ssEchoV2 || adapters.ssEcho && Adapters::legacy_ss(node)) ||
+        node.protocol==Protocol::Trojan && adapters.ready(node)))
         return fail("exit_transport_unavailable");
     const auto address=resolver(node.server);
     if(address.empty()) return fail("entry_dns_failed");
@@ -35,6 +36,11 @@ int run_exit_ip(const Options& options,const std::vector<Node>& nodes,Resolver& 
                 ok=adapters.mieruEcho(address.c_str(),node.port.c_str(),node.username.c_str(),node.password.c_str(),
                     node.pattern.c_str(),node.multiplexing.c_str(),node.handshake.c_str(),sources[source],"/","",timeout,cancelEvent,
                     &status,body,sizeof(body),&used);
+            else if(node.protocol==Protocol::Trojan) {
+                status=adapters.trojan->request(*node.trojan,address.c_str(),node.port.c_str(),node.password,
+                    sources[source],"/","",timeout,cancelEvent,body,&used);
+                ok=status==200 && used!=0;
+            }
             else if(adapters.ssEchoV2)
                 ok=adapters.ssEchoV2(address.c_str(),node.port.c_str(),node.password.c_str(),static_cast<unsigned>(node.password.size()),node.cipher.c_str(),node.obfs.c_str(),
                     sources[source],"/","",timeout,cancelEvent,&status,body,sizeof(body),&used);
