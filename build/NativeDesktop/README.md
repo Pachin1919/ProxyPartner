@@ -74,3 +74,10 @@ Cards and the separate core-history table column display existing kernel latency
 with source/sample time in the hint and details. Missing samples display no data.
 The default core sample option passes `--kernel-latency`, which reads existing
 history through the CLI. Explicit saved preferences retain their selected option.
+
+Active cards render an eight-dot rotating indicator beside the testing state.
+A 200 ms native timer runs only while the card view is visible, the window is not
+minimized, and a probing node intersects the viewport. Queue state does not count
+as activity. Timer ticks invalidate only the active status strips and allocate no
+bitmap. Hidden controls, viewport transitions and changing dot pixels are covered
+by the offline regression harness. Real-screen motion acceptance remains separate.

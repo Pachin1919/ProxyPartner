@@ -20,7 +20,7 @@
 
 using Json = nlohmann::json;
 namespace fs = std::filesystem;
-constexpr UINT Poll = 1, TrayMessage = WM_APP + 1;
+constexpr UINT Poll = 1, Spinner = 2, TrayMessage = WM_APP + 1;
 constexpr int MaxNodes = 1000;
 enum Control { Search = 101, View, Refresh, TestAll, Cancel, Settings, Details, List, Cards,
     TestSelected = 150,
@@ -107,6 +107,8 @@ struct App {
     int selected = -1, sort = -1, scroll = 0, columns = 1, cardWidth = 0, cardHeight = 0;
     UINT dpi = 96;
     bool tableMode = false, descending = false, inspect = false, sawSummary = false, autoTest = false, filtering = false;
+    bool animationTimer = false;
+    unsigned spinnerPhase = 0;
     int completed = 0, total = 0, scored = 0, attempts = 0;
     HANDLE process{}, pipe{}, job{};
     ULONGLONG started = 0, lastOutput = 0;
@@ -142,6 +144,10 @@ struct App {
     bool Event(const Json& event);
     void Drain();
     void PaintCards(HDC dc);
+    std::pair<int,int> VisibleCards() const;
+    bool HasVisibleActivity() const;
+    void SyncAnimation();
+    void AnimateCards();
     void ShowSettings();
     void ShowDetails();
     void Load(fs::path native = {},fs::path legacy = {});
@@ -187,6 +193,20 @@ void Label(HDC dc, const std::wstring& value, RECT rect, HFONT face, COLORREF co
 void Fill(HDC dc, RECT rect, COLORREF color) {
     SetDCBrushColor(dc, color);
     FillRect(dc, &rect, static_cast<HBRUSH>(GetStockObject(DC_BRUSH)));
+}
+void DrawSpinner(HDC dc,int centerX,int centerY,unsigned phase) {
+    const int x[]={0,4,6,4,0,-4,-6,-4};
+    const int y[]={-6,-4,0,4,6,4,0,-4};
+    SelectObject(dc,GetStockObject(DC_BRUSH));
+    SelectObject(dc,GetStockObject(DC_PEN));
+    for(unsigned point=0;point<8;++point){
+        unsigned distance=(point+8-phase)%8;
+        COLORREF color=distance==0?app.Text():distance<3?app.Muted():RGB(106,126,148);
+        SetDCBrushColor(dc,color);
+        SetDCPenColor(dc,color);
+        int left=centerX+app.Px(x[point])-app.Px(1),top=centerY+app.Px(y[point])-app.Px(1);
+        Ellipse(dc,left,top,left+app.Px(3),top+app.Px(3));
+    }
 }
 void DrawButton(const DRAWITEMSTRUCT& item) {
     wchar_t text[80]{};
@@ -262,6 +282,7 @@ void App::Layout() {
     SCROLLINFO bar{sizeof bar,SIF_RANGE|SIF_PAGE|SIF_POS,0,std::max(0,extent-1),static_cast<UINT>(area.bottom),scroll,0};
     SetScrollInfo(cards,SB_VERT,&bar,TRUE);
     InvalidateRect(cards,nullptr,TRUE);
+    SyncAnimation();
 }
 void App::Filter() {
     std::wstring query = Field(window,Search);
@@ -298,6 +319,7 @@ void App::Update() {
     EnableWindow(GetDlgItem(window,Cancel),Running());
     InvalidateRect(cards,nullptr,FALSE);
     InvalidateRect(table,nullptr,FALSE);
+    SyncAnimation();
 }
 void App::Load(fs::path native,fs::path legacy) {
     PWSTR local = nullptr;
@@ -557,15 +579,48 @@ void App::Drain() {
     }
 }
 
+std::pair<int,int> App::VisibleCards() const {
+    RECT area{};
+    GetClientRect(cards,&area);
+    int gap=Px(20),pitch=cardHeight+gap;
+    if(area.bottom<=0 || area.right<=0 || pitch<=0)return {0,0};
+    int first=std::max(0,(scroll+gap)/pitch*columns);
+    int last=std::min(static_cast<int>(visible.size()),(scroll+static_cast<int>(area.bottom)+pitch-1)/pitch*columns);
+    return {first,last};
+}
+bool App::HasVisibleActivity() const {
+    auto range=VisibleCards();
+    for(int i=range.first;i<range.second;++i)if(nodes[visible[i]].probing)return true;
+    return false;
+}
+void App::SyncAnimation() {
+    bool needed=Running() && !tableMode && IsWindowVisible(cards) && !IsIconic(window) && HasVisibleActivity();
+    if(needed && !animationTimer)animationTimer=SetTimer(window,Spinner,200,nullptr)!=0;
+    else if(!needed && animationTimer){
+        KillTimer(window,Spinner);
+        animationTimer=false;
+        spinnerPhase=0;
+    }
+}
+void App::AnimateCards() {
+    SyncAnimation();
+    if(!animationTimer)return;
+    spinnerPhase=(spinnerPhase+1)%8;
+    auto range=VisibleCards();
+    for(int i=range.first;i<range.second;++i)if(nodes[visible[i]].probing){
+        int x=i%columns*(cardWidth+Px(20)),y=i/columns*(cardHeight+Px(20))-scroll;
+        RECT statusArea{x+Px(17),y+cardHeight*40/100,x+cardWidth-Px(17),y+cardHeight*40/100+Px(19)};
+        InvalidateRect(cards,&statusArea,FALSE);
+    }
+}
 void App::PaintCards(HDC dc) {
     RECT area{};
     GetClientRect(cards,&area);
     Fill(dc,area,Background());
     int pitch=cardHeight+Px(20);
-    if(pitch<=0) return;
-    for(int i=std::max(0,scroll/pitch*columns);i<static_cast<int>(visible.size());++i) {
+    auto range=VisibleCards();
+    for(int i=range.first;i<range.second;++i) {
         int x=i%columns*(cardWidth+Px(20)),y=i/columns*pitch-scroll;
-        if(y>=area.bottom) break;
         auto& node=nodes[visible[i]];
         RECT bounds{x,y,x+cardWidth,y+cardHeight};
         SelectObject(dc,GetStockObject(DC_BRUSH));
@@ -582,7 +637,8 @@ void App::PaintCards(HDC dc) {
         std::wstring state=node.probing?L(L"测速中",L"Testing"):node.state==L"queued"?L(L"排队中",L"Queued"):
         node.round?L(L"即时评分 · 稳定性样本 ",L"Initial score · stability ")+std::to_wstring(node.stable)+L"/5":
         node.state==L"ready"?L(L"待测速",L"Untested"):L(L"协议或配置不可用",L"Protocol / configuration unavailable");
-        Label(dc,state,{left,at(40),right,at(40)+Px(19)},font,Muted());
+        if(node.probing)DrawSpinner(dc,left+Px(7),at(40)+Px(9),spinnerPhase);
+        Label(dc,state,{left+(node.probing?Px(22):0),at(40),right,at(40)+Px(19)},font,Muted());
         for(int site=0;site<5;++site) {
             int first=left+(right-left)*site/5,last=left+(right-left)*(site+1)/5;
             int size=Px(19),ix=(first+last-size)/2;
@@ -806,6 +862,11 @@ LRESULT CALLBACK CardsProc(HWND hwnd,UINT msg,WPARAM w,LPARAM l) {
     return DefWindowProcW(hwnd,msg,w,l);
 }
 LRESULT CALLBACK WindowProc(HWND hwnd,UINT msg,WPARAM w,LPARAM l) {
+    if(msg==WM_WINDOWPOSCHANGED){
+        LRESULT result=DefWindowProcW(hwnd,msg,w,l);
+        app.SyncAnimation();
+        return result;
+    }
     if(msg==WM_SIZE){if(app.table)app.Layout();
         return 0;
     }
@@ -819,6 +880,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd,UINT msg,WPARAM w,LPARAM l) {
     if(msg==WM_TIMER && w==Poll){app.Drain();
         return 0;
     }
+    if(msg==WM_TIMER && w==Spinner){app.AnimateCards();return 0;}
     if(msg==WM_CLOSE){ShowWindow(hwnd,SW_HIDE);
         return 0;
     }
