@@ -23,9 +23,9 @@ namespace fs = std::filesystem;
 constexpr UINT Poll = 1, Spinner = 2, TrayMessage = WM_APP + 1;
 constexpr int MaxNodes = 1000;
 enum Control { Search = 101, View, Refresh, TestAll, Cancel, Settings, Details, List, Cards,
-    TestSelected = 150,
+    TestSelected = 150, VerifyCurrent,
     Profile = 201, BrowseProfile, Identity, BrowseIdentity, Rounds, Parallel, Deadline, English, Light, Save, CloseSettings,
-    MinParallel = 230, MaxParallel, Kernel, PreferencesButton,
+    MinParallel = 230, MaxParallel, Kernel, PreferencesButton, ProxyPort,
     WeightFirst = 400, RegisteredList = 410, TargetUrl, TargetShort, TargetSymbol, AddTarget, EditTarget, RemoveTarget,
     SaveTargets, CancelTargets, DemoExample, TargetStatus };
 const wchar_t* SiteIds[] = { L"google", L"youtube", L"openai_api", L"chatgpt_web", L"anthropic_api" };
@@ -84,12 +84,18 @@ struct Node {
     bool probing = false;
     std::wstring observed, kernelObserved;
 };
+struct CurrentPathResult {
+    Site site;
+    std::wstring node, routeStatus;
+    bool direct = false;
+    bool Unique() const { return site.attempted && routeStatus==L"verified" && (direct != !node.empty()); }
+};
 struct RegisteredTarget {
     std::wstring url, shortName, symbol;
 };
 struct Preferences {
     std::wstring profile, identity;
-    int rounds = 1, parallel = 0, deadline = 0, minimum = 4, maximum = 8;
+    int rounds = 1, parallel = 0, deadline = 0, minimum = 4, maximum = 8, proxyPort = 0;
     bool english = false, light = false, kernel = true;
     std::array<int,3> components{50,35,15}, targets{60,30,10};
     std::vector<RegisteredTarget> customTargets;
@@ -109,6 +115,12 @@ struct App {
     bool tableMode = false, descending = false, inspect = false, sawSummary = false, autoTest = false, filtering = false;
     bool animationTimer = false;
     unsigned spinnerPhase = 0;
+    bool currentMode = false, currentSummary = false, verifiedCurrent = false;
+    std::array<CurrentPathResult,5> currentResults;
+    std::array<bool,5> currentSeen{};
+    std::wstring currentNode, currentAnchor, currentCheckedAt, currentNotice;
+    bool currentDirect = false;
+    HWND currentWindow{}, currentText{};
     int completed = 0, total = 0, scored = 0, attempts = 0;
     HANDLE process{}, pipe{}, job{};
     ULONGLONG started = 0, lastOutput = 0;
@@ -140,7 +152,7 @@ struct App {
     void Filter();
     void Update();
     void Finish(bool stop);
-    void Start(bool catalog, const std::wstring& node = {});
+    void Start(bool catalog, const std::wstring& node = {}, bool current = false);
     bool Event(const Json& event);
     void Drain();
     void PaintCards(HDC dc);
@@ -158,11 +170,13 @@ struct App {
     void RefreshRegistered(int selection);
     void ChangeRegistered(int action);
     bool ReadDemoWeights(Preferences& value);
+    std::wstring CurrentPathReport() const;
+    void ShowCurrentPath(bool show = true);
 } app;
 std::wstring SiteText(const Site& site, bool english, bool full = false) {
     if (site.active) return english ? L"Testing" : L"测试中";
     if (!site.attempted) return english ? L"Untested" : L"待测";
-    std::wstring timing = site.latency >= 0 ? std::to_wstring(site.latency) + L" ms" : L"—";
+    std::wstring timing = site.latency >= 0 ? std::to_wstring(site.latency) + (full?L" ms":L"ms") : L"—";
     if (site.http == 401) return full ? L"401 · " + std::wstring(english ? L"Auth response · " : L"鉴权响应 · ") + timing :
         site.latency>=0?timing:english?L"Auth":L"鉴权";
     if (site.http == 403) return full ? L"403 · " + std::wstring(english ? L"Restricted · " : L"服务受限 · ") + timing :
@@ -172,7 +186,7 @@ std::wstring SiteText(const Site& site, bool english, bool full = false) {
     return english ? L"Failed" : L"失败";
 }
 std::wstring CoreText(const Node& node,bool full = false) {
-    std::wstring value=node.kernel>=0?std::to_wstring(node.kernel)+L" ms":app.L(L"无数据",L"No data");
+    std::wstring value=node.kernel>=0?std::to_wstring(node.kernel)+(full?L" ms":L"ms"):app.L(L"无数据",L"No data");
     if(full && node.kernel>=0)value+=std::wstring(L" · ")+app.L(L"Mihomo 历史样本 · ",L"Mihomo history sample · ")+
         (node.kernelObserved.empty()?app.L(L"时间未知",L"Time unknown"):node.kernelObserved);
     return value;
@@ -245,6 +259,7 @@ void App::Theme() {
         L(L"取消",L"Cancel"),L(L"设置",L"Settings"),L(L"详情",L"Details")};
     for (int i = 0; i < 6; ++i) SetWindowTextW(GetDlgItem(window, View + i), labels[i]);
     SetWindowTextW(GetDlgItem(window,TestSelected),L(L"测所选",L"Test selected"));
+    SetWindowTextW(GetDlgItem(window,VerifyCurrent),L(L"验证线路",L"Verify route"));
     const wchar_t* headings[] = {L(L"节点",L"Node"),L(L"协议",L"Protocol"),L(L"评分",L"Score"),L"GO",L"YT",L"OPENAI",L"GPT",L"ANT",L(L"状态",L"State"),L(L"轮次",L"Round"),L(L"内核历史延迟",L"Core history latency")};
     for (int i = 0; i < 11; ++i) { LVCOLUMNW col{};
         col.mask = LVCF_TEXT;
@@ -253,6 +268,10 @@ void App::Theme() {
     }
     InvalidateRect(window,nullptr,TRUE);
     InvalidateRect(cards,nullptr,TRUE);
+    if(currentWindow){
+        SetWindowTextW(currentWindow,L(L"验证当前线路",L"Verify current route"));
+        ShowCurrentPath(false);
+    }
 }
 void App::Layout() {
     RECT client{};
@@ -261,10 +280,10 @@ void App::Layout() {
     bool compact=width<Px(1000);
     int top=compact?Px(161):Px(122);
     MoveWindow(status,pad,Px(43),width,Px(24),TRUE);
-    MoveWindow(search,pad,Px(78),compact?width:std::max(Px(100),width-Px(770)),Px(29),TRUE);
-    int x=compact?pad:std::max(pad+Px(110),static_cast<int>(client.right)-pad-Px(756));
-    int slot=compact?std::max(1,(width-Px(36))/7):Px(102);
-    int buttons[]={View,Refresh,TestAll,TestSelected,Cancel,Settings,Details};
+    MoveWindow(search,pad,Px(78),compact?width:std::max(Px(100),width-Px(878)),Px(29),TRUE);
+    int x=compact?pad:std::max(pad+Px(110),static_cast<int>(client.right)-pad-Px(864));
+    int slot=compact?std::max(1,(width-Px(42))/8):Px(102);
+    int buttons[]={View,Refresh,TestAll,TestSelected,VerifyCurrent,Cancel,Settings,Details};
     for(int id:buttons){MoveWindow(GetDlgItem(window,id),x,compact?Px(117):Px(78),slot,Px(29),TRUE);
         x+=slot+Px(6);
     }
@@ -310,12 +329,13 @@ void App::Filter() {
     Layout();
 }
 void App::Update() {
-    std::wstring line = Running() ? inspect ? L(L"读取节点中",L"Reading nodes") : L(L"测速中",L"Testing") : message;
+    std::wstring line = Running() ? currentMode ? L(L"核对当前线路中",L"Verifying current route") : inspect ? L(L"读取节点中",L"Reading nodes") : L(L"测速中",L"Testing") : message;
     line += L"  |  " + std::to_wstring(visible.size()) + L(L" 个节点",L" nodes");
-    if (!inspect && total) line += L"  |  " + std::to_wstring(completed) + L"/" + std::to_wstring(total) +
+    if (!inspect && !currentMode && total) line += L"  |  " + std::to_wstring(completed) + L"/" + std::to_wstring(total) +
     L"  |  " + L(L"已评分 ",L"Scored ") + std::to_wstring(scored);
+    if(verifiedCurrent)line+=std::wstring(L"  |  ")+L(L"上次核对 ",L"Last verified ")+(currentDirect?L"DIRECT":currentNode);
     SetWindowTextW(status,line.c_str());
-    for (int id : {Refresh,TestAll,TestSelected,Settings}) EnableWindow(GetDlgItem(window,id),!Running());
+    for (int id : {Refresh,TestAll,TestSelected,VerifyCurrent,Settings}) EnableWindow(GetDlgItem(window,id),!Running());
     EnableWindow(GetDlgItem(window,Cancel),Running());
     InvalidateRect(cards,nullptr,FALSE);
     InvalidateRect(table,nullptr,FALSE);
@@ -368,6 +388,60 @@ bool App::Event(const Json& value) {
         return field!=object.end() && field->is_boolean() && field->get<bool>();
     };
     std::wstring kind=string(value,"event");
+    if(kind==L"current_path_error"){
+        if(!currentMode)return false;
+        std::wstring reason=string(value,"reason");
+        currentNotice=reason==L"explicit_verified_proxy_port_required"?
+            L(L"未验证 / 已跳过 · 系统规则无法确定端点，请填写现有本机 HTTP 代理端口。",L"Unverified / skipped · System rules could not identify an endpoint. Enter the existing local HTTP proxy port."):
+            reason==L"verified_host_unavailable"?L(L"未验证 · 未取得已验证的宿主。",L"Unverified · A verified host was unavailable."):
+            reason==L"ca_bundle_unavailable"?L(L"未验证 · 缺少可用证书包。",L"Unverified · A usable CA bundle was unavailable."):
+            L(L"未验证 · CLI 未能完成线路核对。",L"Unverified · The CLI could not complete the route check.");
+        return true;
+    }
+    if(kind==L"current_path_begin"){
+        if(!currentMode || integer(value,"targets",0,5)!=5)return false;
+        for(auto& result:currentResults)result.site.active=true;
+        return true;
+    }
+    if(kind==L"current_path_result"){
+        if(!currentMode)return false;
+        std::wstring target=string(value,"target");
+        int index=-1;
+        for(int i=0;i<5;++i)if(target==SiteIds[i])index=i;
+        if(index<0 || currentSeen[index])return false;
+        CurrentPathResult result;
+        result.site={integer(value,"httpStatus",-1,599),integer(value,"elapsedMs",-1,3600000),
+            boolean(value,"attempted"),boolean(value,"timedOut"),false};
+        result.node=string(value,"node");
+        if(result.node.size()>4096 || result.node.find_first_of(L"\r\n\t")!=std::wstring::npos)return false;
+        result.direct=boolean(value,"direct");
+        result.routeStatus=string(value,"routeStatus");
+        if(result.routeStatus!=L"verified" && result.routeStatus!=L"unknown" && result.routeStatus!=L"rejected" && result.routeStatus!=L"bypassed")return false;
+        currentResults[index]=std::move(result);
+        currentSeen[index]=true;
+        return true;
+    }
+    if(kind==L"current_path_summary"){
+        if(!currentMode || integer(value,"targets",0,5)!=5)return false;
+        int verified=integer(value,"verified",-1,5),unique=0;
+        for(int i=0;i<5;++i)if(currentSeen[i] && currentResults[i].Unique())++unique;
+        currentAnchor=string(value,"anchorTarget");
+        currentNode=string(value,"node");
+        currentDirect=boolean(value,"direct");
+        currentSummary=true;
+        verifiedCurrent=false;
+        for(int i=0;i<5;++i)if(currentAnchor==SiteIds[i] && currentSeen[i]){
+            const auto& anchor=currentResults[i];
+            verifiedCurrent=verified>0 && verified==unique && anchor.Unique() &&
+                currentNode==anchor.node && currentDirect==anchor.direct;
+        }
+        for(auto& result:currentResults)result.site.active=false;
+        SYSTEMTIME now{};GetSystemTime(&now);
+        wchar_t stamp[64]{};swprintf_s(stamp,L"%02u-%02u %02u:%02u:%02u UTC",now.wMonth,now.wDay,now.wHour,now.wMinute,now.wSecond);
+        currentCheckedAt=stamp;
+        return true;
+    }
+    if(currentMode && kind!=L"error")return false;
     if (kind==L"catalog") { total=integer(value,"nodes",0,MaxNodes);
         return total>0;
     }
@@ -439,15 +513,24 @@ void App::Finish(bool stop) {
     if (pipe) CloseHandle(pipe);
     process=pipe=job=nullptr;
     pending.clear();
+    if(currentMode){
+        for(auto& result:currentResults)result.site.active=false;
+        if(currentWindow)ShowCurrentPath(false);
+    }
     for (auto& node:nodes) { node.probing=false;
         for(auto& site:node.sites) site.active=false;
     }
     Update();
 }
-void App::Start(bool catalog,const std::wstring& node) {
+void App::Start(bool catalog,const std::wstring& node,bool current) {
     if (Running()) return;
-    if (!LocalFile(prefs.profile) || !prefs.identity.empty() && !LocalFile(prefs.identity)) { ShowSettings();
+    if (!current && (!LocalFile(prefs.profile) || !prefs.identity.empty() && !LocalFile(prefs.identity))) { ShowSettings();
         return;
+    }
+    currentMode=current;
+    if(current){
+        currentResults={};currentSeen={};currentSummary=false;verifiedCurrent=false;
+        currentNode.clear();currentAnchor.clear();currentCheckedAt.clear();currentNotice.clear();currentDirect=false;
     }
     fs::path executable=directory/L"ProxyPartner.Cli.exe";
     if (GetFileAttributesW(executable.c_str())==INVALID_FILE_ATTRIBUTES) {
@@ -455,16 +538,22 @@ void App::Start(bool catalog,const std::wstring& node) {
         Update();
         return;
     }
-    std::wstring args=Quote(executable.wstring())+(catalog?L" inspect --profile ":L" probe --profile ")+Quote(prefs.profile);
-    std::wstring identity=prefs.identity;
-    if(identity.empty() && !standardProfile.empty()){
-        auto profile=fs::path(prefs.profile).lexically_normal().make_preferred();
-        auto standard=standardProfile.lexically_normal().make_preferred();
-        auto key=standard.parent_path()/L".runtime_key";
-        if(_wcsicmp(profile.c_str(),standard.c_str())==0 && LocalFile(key.wstring()))identity=key.wstring();
+    std::wstring args=Quote(executable.wstring());
+    if(current){
+        args+=L" current-path";
+        if(prefs.proxyPort)args+=L" --proxy-port "+std::to_wstring(prefs.proxyPort);
+    } else {
+        args+=(catalog?L" inspect --profile ":L" probe --profile ")+Quote(prefs.profile);
+        std::wstring identity=prefs.identity;
+        if(identity.empty() && !standardProfile.empty()){
+            auto profile=fs::path(prefs.profile).lexically_normal().make_preferred();
+            auto standard=standardProfile.lexically_normal().make_preferred();
+            auto key=standard.parent_path()/L".runtime_key";
+            if(_wcsicmp(profile.c_str(),standard.c_str())==0 && LocalFile(key.wstring()))identity=key.wstring();
+        }
+        if (!identity.empty()) args+=L" --age-identity "+Quote(identity);
     }
-    if (!identity.empty()) args+=L" --age-identity "+Quote(identity);
-    if (!catalog) {
+    if (!catalog && !current) {
         args+=(node.empty()?L" --all":L" --node "+Quote(node))+L" --rounds "+std::to_wstring(prefs.rounds);
         args+=prefs.parallel?L" --parallel "+std::to_wstring(prefs.parallel):
         L" --min-parallel "+std::to_wstring(prefs.minimum)+L" --max-parallel "+std::to_wstring(prefs.maximum);
@@ -515,16 +604,16 @@ void App::Start(bool catalog,const std::wstring& node) {
         return;
     }
     inspect=catalog;
-    sawSummary=false;
-    completed=scored=attempts=0;
+    if(!current)sawSummary=false;
+    if(!current)completed=scored=attempts=0;
     pending.clear();
     message.clear();
-    if (catalog) { nodes.clear();
+    if (catalog && !current) { nodes.clear();
         visible.clear();
         selected=-1;
         total=0;
     }
-    else for(auto& entry:nodes) if(node.empty() || node==entry.name) entry.state=L"queued";
+    else if(!current)for(auto& entry:nodes) if(node.empty() || node==entry.name) entry.state=L"queued";
     started=lastOutput=GetTickCount64();
     ResumeThread(child.hThread);
     CloseHandle(child.hThread);
@@ -559,6 +648,7 @@ void App::Drain() {
     }
     if (changed) { Filter();
         Update();
+        if(currentWindow)ShowCurrentPath(false);
         if(details) ShowDetails();
     }
     if (WaitForSingleObject(process,0)==WAIT_OBJECT_0) {
@@ -567,10 +657,12 @@ void App::Drain() {
         DWORD code=0;
         GetExitCodeProcess(process,&code);
         if (!pending.empty()) message=L(L"测速结果不完整",L"Incomplete CLI output");
+        else if (currentMode)message=currentSummary && verifiedCurrent && code==0?
+            L(L"当前线路核对完成",L"Current route verified"):L(L"当前线路未核实，请查看核对结果",L"Current route unverified. Review the results");
         else if (inspect && code==0) message=L(L"节点已读取",L"Nodes loaded");
         else if (!inspect && sawSummary) message=code==0?L(L"测速完成",L"Test completed"):L(L"测速结束，含失败或不可用节点",L"Test ended with failed or unavailable nodes");
         else if (message.empty()) message=L(L"测速程序异常结束",L"CLI ended without a summary");
-        bool startSweep=inspect && code==0 && autoTest && !nodes.empty();
+        bool startSweep=!currentMode && inspect && code==0 && autoTest && !nodes.empty();
         Finish(false);
         if(startSweep)Start(false);
     } else if (GetTickCount64()-lastOutput>120000) {
@@ -650,7 +742,9 @@ void App::PaintCards(HDC dc) {
         }
         std::wstring core=std::wstring(L(L"内核 ",L"Core "))+CoreText(node);
         Label(dc,core,{left,at(86),right,at(86)+Px(17)},siteFont,Muted());
-        Label(dc,node.protocol,{left,at(93),right,at(93)+Px(14)},siteFont,Muted());
+        std::wstring footer=node.protocol;
+        if(verifiedCurrent && !currentDirect && node.name==currentNode)footer+=std::wstring(L" · ")+L(L"上次核对线路",L"Last verified route");
+        Label(dc,footer,{left,at(93),right,at(93)+Px(14)},siteFont,Muted());
     }
 }
 
@@ -660,6 +754,44 @@ HWND Child(HWND parent,const wchar_t* type,const wchar_t* text,int id,DWORD styl
     return result;
 }
 #include "settings.hpp"
+std::wstring App::CurrentPathReport() const {
+    std::wstring report=L(L"当前线路核对 · 独立于节点评分",L"Current route check · separate from node scores");
+    report+=L"\r\n"+std::wstring(prefs.proxyPort?L(L"显式本机 HTTP 代理端口 ",L"Explicit local HTTP proxy port "):L(L"使用系统代理规则",L"Using system proxy rules"));
+    if(prefs.proxyPort)report+=std::to_wstring(prefs.proxyPort);
+    report+=L"\r\n\r\n";
+    if(verifiedCurrent)report+=std::wstring(L(L"上次核对锚点线路 · ",L"Last verified anchor route · "))+(currentDirect?L"DIRECT":currentNode);
+    else report+=currentSummary || !currentNotice.empty()?L(L"未核实当前线路",L"Current route unverified"):L(L"核对尚未完成",L"Route check not completed");
+    for(int i=0;i<5;++i)if(currentAnchor==SiteIds[i])report+=std::wstring(L" · ")+SiteNames[i];
+    if(!currentCheckedAt.empty())report+=L"\r\n"+currentCheckedAt;
+    if(!currentNotice.empty())report+=L"\r\n"+currentNotice;
+    report+=L"\r\n\r\n";
+    for(int i=0;i<5;++i){
+        const auto& result=currentResults[i];
+        report+=std::wstring(SiteNames[i])+L" · ";
+        report+=result.routeStatus==L"bypassed"?L(L"已跳过 · 系统代理绕过",L"Skipped · system proxy bypass"):
+            currentSeen[i]?SiteText(result.site,prefs.english,true):result.site.active?L(L"测试中",L"Testing"):L(L"未返回结果",L"No result received");
+        if(currentSeen[i]){
+            if(result.Unique())report+=std::wstring(L" · ")+L(L"已验证 ",L"Verified ")+(result.direct?L"DIRECT":result.node);
+            else report+=std::wstring(L" · ")+(result.routeStatus==L"rejected"?L(L"验证拒绝",L"Identity rejected"):L(L"链路未验证",L"Route unverified"));
+        }
+        report+=L"\r\n";
+    }
+    report+=L"\r\n"+std::wstring(L(L"各站链路可能不同，汇总取配置顺序中的首个已验证锚点。HTTP 响应不会单独证明节点归属。",L"Routes may differ by target. The summary uses the first verified anchor in target order. HTTP responses alone do not prove node attribution."));
+    if(!message.empty())report+=L"\r\n"+message;
+    return report;
+}
+void App::ShowCurrentPath(bool show) {
+    if(!currentWindow){
+        if(!show)return;
+        currentWindow=CreateWindowExW(0,L"ProxyPartner.NativeAux",L(L"验证当前线路",L"Verify current route"),WS_OVERLAPPEDWINDOW,
+            CW_USEDEFAULT,CW_USEDEFAULT,Px(800),Px(550),window,nullptr,instance,nullptr);
+        currentText=Child(currentWindow,L"EDIT",L"",1,ES_MULTILINE|ES_READONLY|ES_AUTOVSCROLL|WS_VSCROLL);
+        RECT rect{};GetClientRect(currentWindow,&rect);
+        MoveWindow(currentText,10,10,rect.right-20,rect.bottom-20,TRUE);
+    }
+    SetWindowTextW(currentText,CurrentPathReport().c_str());
+    if(show)ShowWindow(currentWindow,SW_SHOW);
+}
 void App::ShowDetails() {
     if(selected<0 || selected>=static_cast<int>(nodes.size())) return;
     if(!details) {
@@ -681,15 +813,16 @@ void App::ShowDetails() {
     ShowWindow(details,SW_SHOW);
 }
 LRESULT CALLBACK AuxProc(HWND hwnd,UINT msg,WPARAM w,LPARAM l) {
-    if(msg==WM_SIZE && hwnd==app.details && app.detailText) { RECT r{};
+    if(msg==WM_SIZE && (hwnd==app.details || hwnd==app.currentWindow)) { RECT r{};
         GetClientRect(hwnd,&r);
-        MoveWindow(app.detailText,10,10,r.right-20,r.bottom-20,TRUE);
+        MoveWindow(hwnd==app.details?app.detailText:app.currentText,10,10,r.right-20,r.bottom-20,TRUE);
         return 0;
     }
     if(msg==WM_CLOSE){DestroyWindow(hwnd);
         return 0;
     }
     if(msg==WM_DESTROY){if(hwnd==app.settings)app.settings=nullptr;
+        else if(hwnd==app.currentWindow)app.currentWindow=app.currentText=nullptr;
         else app.details=app.detailText=nullptr;
         return 0;
     }
@@ -724,11 +857,12 @@ LRESULT CALLBACK AuxProc(HWND hwnd,UINT msg,WPARAM w,LPARAM l) {
             value.minimum=number(MinParallel,12);
             value.maximum=number(MaxParallel,12);
             value.kernel=IsDlgButtonChecked(hwnd,Kernel)==BST_CHECKED;
+            value.proxyPort=Field(hwnd,ProxyPort).empty()?0:number(ProxyPort,65535);
             value.english=IsDlgButtonChecked(hwnd,English)==BST_CHECKED;
             value.light=IsDlgButtonChecked(hwnd,Light)==BST_CHECKED;
-            if(value.rounds<1 || value.parallel<0 || value.deadline<0 || value.minimum<1 || value.maximum<value.minimum ||
-            !LocalFile(value.profile) || !value.identity.empty() && !LocalFile(value.identity)) {
-                MessageBoxW(hwnd,app.L(L"请选择存在的本机文件。轮次 1–6，并发上下限 1–12，固定并发与超时填 0 使用自适应。",L"Choose local files. Rounds 1–6, parallel limits 1–12. Set fixed parallel and timeout to 0 for adaptive mode."),L"ProxyPartner",MB_ICONWARNING);
+            if(value.rounds<1 || value.parallel<0 || value.deadline<0 || value.minimum<1 || value.maximum<value.minimum || value.proxyPort<0 ||
+            !value.profile.empty() && !LocalFile(value.profile) || !value.identity.empty() && !LocalFile(value.identity)) {
+                MessageBoxW(hwnd,app.L(L"请选择存在的本机文件。轮次 1–6，并发上下限 1–12，固定并发与超时填 0 使用自适应。线路端口留空或为 1–65535。",L"Choose local files. Rounds 1–6, parallel limits 1–12. Fixed parallel / timeout 0 uses adaptive mode. Route port must be empty or 1–65535."),L"ProxyPartner",MB_ICONWARNING);
                 return 0;
             }
             if(!app.SavePreferences(value)){MessageBoxW(hwnd,app.L(L"无法保存偏好",L"Cannot save preferences"),L"ProxyPartner",MB_ICONERROR);
@@ -740,7 +874,7 @@ LRESULT CALLBACK AuxProc(HWND hwnd,UINT msg,WPARAM w,LPARAM l) {
             app.Theme();
             app.Filter();
             app.Update();
-            if(changed)app.Start(true);
+            if(changed && !app.prefs.profile.empty())app.Start(true);
         }
     }
     if(msg==WM_DRAWITEM){DrawButton(*reinterpret_cast<DRAWITEMSTRUCT*>(l));
@@ -790,7 +924,10 @@ void App::ShowSettings() {
     CheckDlgButton(settings,English,prefs.english?BST_CHECKED:BST_UNCHECKED);
     CheckDlgButton(settings,Light,prefs.light?BST_CHECKED:BST_UNCHECKED);
     if(!prefs.light)for(int id:{English,Light,Kernel})SetWindowTheme(GetDlgItem(settings,id),L"",L"");
-    field(L"STATIC",L(L"路径只保存在本机偏好中；测速由独立 CLI 完成。",L"Paths stay in local preferences. An independent CLI runs probes."),0,18,325,620,22);
+    field(L"STATIC",L(L"线路核对端口（可留空）",L"Route check port (optional)"),0,18,325,250,22);
+    field(L"EDIT",prefs.proxyPort?std::to_wstring(prefs.proxyPort):L"",ProxyPort,275,321,80,26,WS_BORDER|WS_TABSTOP|ES_NUMBER);
+    SendDlgItemMessageW(settings,ProxyPort,EM_SETLIMITTEXT,5,0);
+    field(L"STATIC",L(L"留空使用系统代理规则",L"Empty uses system proxy rules"),0,370,325,270,22);
     field(L"BUTTON",L(L"保存",L"Save"),Save,430,370,100,29,WS_TABSTOP);
     field(L"BUTTON",L(L"取消",L"Cancel"),CloseSettings,540,370,100,29,WS_TABSTOP);
     field(L"BUTTON",L(L"评分算例与登记目标",L"Score demo / registered targets"),PreferencesButton,18,370,350,29,WS_TABSTOP);
@@ -923,6 +1060,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd,UINT msg,WPARAM w,LPARAM l) {
             break;
             case TestSelected:if(app.selected>=0 && app.selected<static_cast<int>(app.nodes.size()))app.Start(false,app.nodes[app.selected].name);
             break;
+            case VerifyCurrent:app.Start(false,{},true);app.ShowCurrentPath();break;
             case Cancel:app.message=app.L(L"测速已取消，已完成结果保留",L"Test cancelled. Completed results retained");
             app.Finish(true);
             break;
@@ -1054,6 +1192,7 @@ int WINAPI wWinMain(HINSTANCE instance,HINSTANCE,PWSTR,int) {
     app.search=Child(app.window,L"EDIT",L"",Search,WS_BORDER|WS_TABSTOP|ES_AUTOHSCROLL);
     for(int id=View;id<=Details;++id)Child(app.window,L"BUTTON",L"",id,WS_TABSTOP|BS_OWNERDRAW);
     Child(app.window,L"BUTTON",L"",TestSelected,WS_TABSTOP|BS_OWNERDRAW);
+    Child(app.window,L"BUTTON",L"",VerifyCurrent,WS_TABSTOP|BS_OWNERDRAW);
     app.table=Child(app.window,WC_LISTVIEWW,L"",List,LVS_REPORT|LVS_OWNERDATA|LVS_SHOWSELALWAYS|WS_TABSTOP);
     ListView_SetExtendedListViewStyle(app.table,LVS_EX_FULLROWSELECT|LVS_EX_DOUBLEBUFFER);
     int widths[]={230,95,75,105,105,125,115,105,135,70,150};
@@ -1092,6 +1231,7 @@ int WINAPI wWinMain(HINSTANCE instance,HINSTANCE,PWSTR,int) {
     MSG message{};
     while(GetMessageW(&message,nullptr,0,0)>0){if(app.preferencesWindow && IsDialogMessageW(app.preferencesWindow,&message))continue;
         if(app.settings && IsDialogMessageW(app.settings,&message))continue;
+        if(app.currentWindow && IsDialogMessageW(app.currentWindow,&message))continue;
         if(IsDialogMessageW(app.window,&message))continue;
         TranslateMessage(&message);
         DispatchMessageW(&message);

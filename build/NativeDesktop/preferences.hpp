@@ -76,7 +76,7 @@ bool DecodePreferences(const Json& data,Preferences& destination,bool legacy) {
     };
     if(!legacy && (!number("rounds",value.rounds,1,6) || !number("parallel",value.parallel,0,12) ||
         !number("deadline",value.deadline,0,6000) || !number("minimum",value.minimum,1,12) ||
-        !number("maximum",value.maximum,1,12) || value.minimum>value.maximum))return false;
+        !number("maximum",value.maximum,1,12) || !number("proxyPort",value.proxyPort,0,65535) || value.minimum>value.maximum))return false;
     destination=std::move(value);
     return true;
 }
@@ -95,6 +95,6 @@ Json EncodePreferences(const Preferences& value) {
         {"shortName",Utf8(target.shortName)},{"symbol",Utf8(target.symbol)}});
     return {{"profile",Utf8(value.profile)},{"identity",Utf8(value.identity)},{"rounds",value.rounds},
         {"parallel",value.parallel},{"deadline",value.deadline},{"minimum",value.minimum},{"maximum",value.maximum},
-        {"kernel",value.kernel},{"english",value.english},{"light",value.light},
+        {"kernel",value.kernel},{"english",value.english},{"light",value.light},{"proxyPort",value.proxyPort},
         {"components",value.components},{"targets",value.targets},{"customTargets",targets}};
 }

@@ -65,8 +65,8 @@ preferences fall back to defaults without overwriting either file.
 
 The baseline has `--tray` and in-process history windows. It does not include
 automatic logon installation or a SQLite-backed desktop history path. These are
-not prerequisites for preserving that baseline. Current-route and exit/history
-fields will be connected once the backend's actual JSONL contract is frozen.
+not prerequisites for preserving that baseline. Exit/history fields will be
+connected once the backend's actual JSONL contract is frozen.
 
 Website cells show actual response timing when HTTP status and timing are present,
 including 401 and 403. Details and native hover hints retain the status semantics.
@@ -81,3 +81,17 @@ minimized, and a probing node intersects the viewport. Queue state does not coun
 as activity. Timer ticks invalidate only the active status strips and allocate no
 bitmap. Hidden controls, viewport transitions and changing dot pixels are covered
 by the offline regression harness. Real-screen motion acceptance remains separate.
+
+The explicit Verify route action invokes `current-path` through the same owned
+CLI lifecycle. It is mutually exclusive with a sweep and uses an independent
+result window. Settings accepts an optional existing local HTTP proxy port from
+1 to 65535. Empty uses the backend's system proxy rules, with no guessed port.
+The separate result stream consumes begin, result, summary and error events.
+Rejected, unknown and bypassed results remain unverified. Only an attempted,
+verified, unique node-or-DIRECT result matching the summary anchor can mark the
+last verified route. Per-target routes and anchor/time are displayed explicitly.
+These observations never replace independent website samples or scores. Cancel
+retains received observations without manufacturing a terminal route summary.
+The acceptance report also provides `score_min`, `score_max`, `score_average` and
+`kernel_samples`. Missing score/kernel data is null. These are aggregates only,
+without node names or additional logs.
