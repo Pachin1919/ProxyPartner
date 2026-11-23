@@ -6,6 +6,7 @@
 #include <iostream>
 #include <array>
 #include "host.hpp"
+#include "manual_proxy.hpp"
 
 namespace {
 using Json=nlohmann::json;
@@ -28,12 +29,13 @@ int bio_write(BIO* b,const char* p,int n){return static_cast<Wire*>(BIO_get_data
 long bio_ctrl(BIO*,int op,long,void*){return op==BIO_CTRL_FLUSH?1:0;}
 struct Target{const char* id;const char* host;const char* path;};
 constexpr Target targets[]={{"chatgpt_web","chatgpt.com","/"},{"openai_api","api.openai.com","/v1/models"},{"google","www.google.com","/"},{"youtube","www.youtube.com","/"},{"anthropic_api","api.anthropic.com","/v1/models"}};
-Json probe(const Target& t,unsigned port,CurrentHostAccess& access,SSL_CTX* ctx,BIO_METHOD* method){
+Json probe(const Target& t,unsigned port,CurrentHostAccess& access,SSL_CTX* ctx,BIO_METHOD* method,bool bypassed){
     Wire wire;auto start=GetTickCount64();unsigned source=0;
     Json result={{"event","current_path_result"},{"target",t.id},{"attempted",false},{"httpStatus",nullptr},{"elapsedMs",nullptr},{"timedOut",false},{"routeStatus","unknown"},{"node",nullptr},{"direct",false},{"sourcePort",nullptr},{"destinationHost",t.host},{"destinationPort",443}};
+    if(bypassed){result["routeStatus"]="bypassed";result["reason"]="system_proxy_bypass";return result;}
     if(!access.verifyTcp(port,0)){result["routeStatus"]="rejected";return result;}
     wire.socket=socket(AF_INET,SOCK_STREAM,IPPROTO_TCP);if(wire.socket==INVALID_SOCKET)return result;
-    u_long nonblock=1;ioctlsocket(wire.socket,FIONBIO,&nonblock);
+    u_long nonblock=1;if(ioctlsocket(wire.socket,FIONBIO,&nonblock))return result;
     sockaddr_in endpoint{};endpoint.sin_family=AF_INET;endpoint.sin_addr.s_addr=htonl(INADDR_LOOPBACK);endpoint.sin_port=htons(static_cast<u_short>(port));
     int connected=connect(wire.socket,reinterpret_cast<sockaddr*>(&endpoint),sizeof(endpoint));
     if(connected && WSAGetLastError()!=WSAEWOULDBLOCK)return result;
@@ -45,7 +47,7 @@ Json probe(const Target& t,unsigned port,CurrentHostAccess& access,SSL_CTX* ctx,
     std::string connectRequest="CONNECT "+std::string(t.host)+":443 HTTP/1.1\r\nHost: "+t.host+":443\r\n\r\n";
     if(wire.write(connectRequest.data(),static_cast<int>(connectRequest.size()))<0)return result;
     std::string header;char c;
-    while(header.size()<16384 && header.find("\r\n\r\n")==std::string::npos){if(wire.read(&c,1)!=1)return result;header+=c;}
+    while(header.size()<16384 && !header.ends_with("\r\n\r\n")){if(wire.read(&c,1)!=1)return result;header+=c;}
     if(!header.starts_with("HTTP/1.1 200 ") && !header.starts_with("HTTP/1.0 200 "))return result;
     std::unique_ptr<SSL,decltype(&SSL_free)> ssl(SSL_new(ctx),SSL_free);
     BIO* bio=BIO_new(method);if(!ssl||!bio){BIO_free(bio);return result;}
@@ -56,7 +58,7 @@ Json probe(const Target& t,unsigned port,CurrentHostAccess& access,SSL_CTX* ctx,
     if(std::string_view(t.id)=="anthropic_api")request+="anthropic-version: 2026-10-21\r\n";
     request+="\r\n";header.clear();
     if(SSL_write(ssl.get(),request.data(),static_cast<int>(request.size()))>0){
-        while(header.size()<32768 && header.find("\r\n\r\n")==std::string::npos){if(SSL_read(ssl.get(),&c,1)!=1)break;header+=c;}
+        while(header.size()<32768 && !header.ends_with("\r\n\r\n")){if(SSL_read(ssl.get(),&c,1)!=1)break;header+=c;}
         if(header.starts_with("HTTP/1.1 ")||header.starts_with("HTTP/1.0 ")){
             if(header.size()>12 && header[9]>='1' && header[9]<='5' && isdigit(static_cast<unsigned char>(header[10])) && isdigit(static_cast<unsigned char>(header[11]))){result["httpStatus"]=(header[9]-'0')*100+(header[10]-'0')*10+header[11]-'0';result["elapsedMs"]=GetTickCount64()-start;}
         }
@@ -70,15 +72,19 @@ int run_current_path(int argc,wchar_t** argv){
     for(int i=2;i<argc;++i){std::wstring_view key=argv[i];if(i+1>=argc)return 2;
         if(key==L"--proxy-port"){wchar_t* end=nullptr;auto n=wcstoul(argv[++i],&end,10);if(*end||n==0||n>65535)return 2;port=static_cast<unsigned>(n);}
         else if(key==L"--pipe")pipe=argv[++i];else return 2;}
-    if(!port){WINHTTP_CURRENT_USER_IE_PROXY_CONFIG config{};
-        if(WinHttpGetIEProxyConfigForCurrentUser(&config)){
-            std::wstring value=config.lpszProxy?config.lpszProxy:L"";
-            // Read only a single explicit loopback HTTP endpoint; ambiguous/PAC/bypass configurations fail closed.
-            if(!config.fAutoDetect && !config.lpszAutoConfigUrl && (!config.lpszProxyBypass||!*config.lpszProxyBypass)){
-                if(value.starts_with(L"http="))value.erase(0,5);
-                if(value.starts_with(L"127.0.0.1:")){wchar_t* end=nullptr;auto n=wcstoul(value.c_str()+10,&end,10);if(!*end && n>0 && n<=65535)port=static_cast<unsigned>(n);}
+    ManualProxyPolicy policy;
+    const bool systemProxy = !port;
+    if (systemProxy) {
+        WINHTTP_CURRENT_USER_IE_PROXY_CONFIG config{};
+        if (WinHttpGetIEProxyConfigForCurrentUser(&config)) {
+            if (!config.fAutoDetect && (!config.lpszAutoConfigUrl || !*config.lpszAutoConfigUrl)) {
+                auto parsed=parse_manual_proxy(config.lpszProxy ? config.lpszProxy : L"",
+                    config.lpszProxyBypass ? config.lpszProxyBypass : L"");
+                if (parsed) { policy=std::move(*parsed); port=policy.port; }
             }
-            GlobalFree(config.lpszProxy);GlobalFree(config.lpszProxyBypass);GlobalFree(config.lpszAutoConfigUrl);
+            GlobalFree(config.lpszProxy);
+            GlobalFree(config.lpszProxyBypass);
+            GlobalFree(config.lpszAutoConfigUrl);
         }
     }
     if(!port){std::cout<<Json({{"event","current_path_error"},{"reason","explicit_verified_proxy_port_required"}}).dump()<<std::endl;return 1;}
@@ -93,8 +99,8 @@ int run_current_path(int argc,wchar_t** argv){
     if(!ca){std::cout<<Json({{"event","current_path_error"},{"reason","ca_bundle_unavailable"}}).dump()<<std::endl;WSACleanup();return 1;}
     SSL_CTX_set_verify(ctx.get(),SSL_VERIFY_PEER,nullptr);SSL_CTX_set_min_proto_version(ctx.get(),TLS1_2_VERSION);
     BIO_METHOD* method=BIO_meth_new(BIO_TYPE_SOURCE_SINK,"owned-verified-socket");BIO_meth_set_read(method,bio_read);BIO_meth_set_write(method,bio_write);BIO_meth_set_ctrl(method,bio_ctrl);
-    std::cout<<Json({{"event","current_path_begin"},{"targets",5},{"method","owned-http-proxy-verified-socket"},{"timeoutMs",7000}}).dump()<<std::endl;
-    std::array<std::future<Json>,5> jobs;for(size_t i=0;i<5;++i)jobs[i]=std::async(std::launch::async,[&,i]{auto started=GetTickCount64(); auto row=probe(targets[i],port,access,ctx.get(),method); row["timedOut"]=GetTickCount64()-started>=7000; return row;});
+    std::cout<<Json({{"event","current_path_begin"},{"targets",5},{"method","owned-http-proxy-verified-socket"},{"timeoutMs",7000},{"proxySource",systemProxy?"system_manual":"explicit_port"}}).dump()<<std::endl;
+    std::array<std::future<Json>,5> jobs;for(size_t i=0;i<5;++i)jobs[i]=std::async(std::launch::async,[&,i]{auto started=GetTickCount64(); std::string_view host=targets[i].host; bool bypassed=systemProxy && policy.bypasses(std::wstring(host.begin(),host.end())); auto row=probe(targets[i],port,access,ctx.get(),method,bypassed); row["timedOut"]=GetTickCount64()-started>=7000; return row;});
     unsigned verified=0,attempted=0;Json anchor=nullptr;
     for(auto& job:jobs){auto row=job.get();attempted+=row["attempted"].get<bool>();if(row["routeStatus"]=="verified"){++verified;if(anchor.is_null())anchor=row;}std::cout<<row.dump()<<std::endl;}
     Json summary={{"event","current_path_summary"},{"targets",5},{"attempted",attempted},{"verified",verified},{"anchorTarget",nullptr},{"node",nullptr},{"direct",false}};
