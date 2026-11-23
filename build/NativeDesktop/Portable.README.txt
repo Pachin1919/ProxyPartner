@@ -11,6 +11,9 @@ A profile elsewhere can also be specified with
 ProxyPartner.exe --profile "D:\profiles\nodes.yaml". For AGE profiles, select the
 identity file in Settings. Paths and display/probe preferences stay in the current
 user's LocalAppData\ProxyPartner\NativeDesktop\preferences.json.
+Settings also accepts a legacy JSON object mapping node names to share links.
+PROXYPARTNER_NODE_PROBES can select a local file for this session. An adjacent
+ProbeNodes.json can supply the default when no profile has been selected.
 
 Startup inspects the profile, then runs the first independent node sweep. Refresh
 reloads the catalog and starts a new sweep. Use Test all / Test selected to retest.

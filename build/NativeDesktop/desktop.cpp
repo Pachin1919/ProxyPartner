@@ -383,7 +383,15 @@ void App::Load(fs::path native,fs::path legacy) {
     wchar_t data[32768]{};
     if (GetEnvironmentVariableW(L"APPDATA",data,32768)) {
         standardProfile=fs::path(data)/L"io.github.clash-verge-rev.clash-verge-rev"/L"clash-verge.yaml";
-        if(prefs.profile.empty() && LocalFile(standardProfile.wstring()))prefs.profile=standardProfile.wstring();
+    }
+    const DWORD configured=GetEnvironmentVariableW(L"PROXYPARTNER_NODE_PROBES",data,32768);
+    if(configured && configured<32768){
+        auto path=fs::path(data).make_preferred().wstring();
+        if(path!=prefs.profile){prefs.profile=std::move(path);prefs.identity.clear();}
+    } else if(prefs.profile.empty()) {
+        const auto links=(directory/L"ProbeNodes.json").wstring();
+        if(LocalFile(links))prefs.profile=links;
+        else if(LocalFile(standardProfile.wstring()))prefs.profile=standardProfile.wstring();
     }
 }
 bool App::SavePreferences(const Preferences& value) {
