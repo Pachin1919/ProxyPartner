@@ -23,7 +23,7 @@ namespace fs = std::filesystem;
 constexpr UINT Poll = 1, Spinner = 2, TrayMessage = WM_APP + 1;
 constexpr int MaxNodes = 1000;
 enum Control { Search = 101, View, Refresh, TestAll, Cancel, Settings, Details, List, Cards,
-    TestSelected = 150, VerifyCurrent,
+    TestSelected = 150, VerifyCurrent, Groups,
     Profile = 201, BrowseProfile, Identity, BrowseIdentity, Rounds, Parallel, Deadline, English, Light, Save, CloseSettings,
     MinParallel = 230, MaxParallel, Kernel, PreferencesButton, ProxyPort,
     WeightFirst = 400, RegisteredList = 410, TargetUrl, TargetShort, TargetSymbol, AddTarget, EditTarget, RemoveTarget,
@@ -90,6 +90,7 @@ struct CurrentPathResult {
     bool direct = false;
     bool Unique() const { return site.attempted && routeStatus==L"verified" && (direct != !node.empty()); }
 };
+struct PolicyGroup { std::wstring name, type, selected; };
 struct RegisteredTarget {
     std::wstring url, shortName, symbol;
 };
@@ -109,6 +110,7 @@ struct App {
     HICON appIcon{}, icons[5]{};
     Preferences prefs;
     std::vector<Node> nodes;
+    std::vector<PolicyGroup> groups;
     std::vector<int> visible;
     int selected = -1, sort = -1, scroll = 0, columns = 1, cardWidth = 0, cardHeight = 0;
     UINT dpi = 96;
@@ -121,6 +123,7 @@ struct App {
     std::wstring currentNode, currentAnchor, currentCheckedAt, currentNotice;
     bool currentDirect = false;
     HWND currentWindow{}, currentText{};
+    HWND groupsWindow{}, groupsText{};
     int completed = 0, total = 0, scored = 0, attempts = 0;
     HANDLE process{}, pipe{}, job{};
     ULONGLONG started = 0, lastOutput = 0;
@@ -156,6 +159,7 @@ struct App {
     bool Event(const Json& event);
     void Drain();
     void PaintCards(HDC dc);
+    void ShowGroups(bool show = true);
     std::pair<int,int> VisibleCards() const;
     bool HasVisibleActivity() const;
     void SyncAnimation();
@@ -260,6 +264,7 @@ void App::Theme() {
     for (int i = 0; i < 6; ++i) SetWindowTextW(GetDlgItem(window, View + i), labels[i]);
     SetWindowTextW(GetDlgItem(window,TestSelected),L(L"测所选",L"Test selected"));
     SetWindowTextW(GetDlgItem(window,VerifyCurrent),L(L"验证线路",L"Verify route"));
+    SetWindowTextW(GetDlgItem(window,Groups),L(L"策略组",L"Groups"));
     const wchar_t* headings[] = {L(L"节点",L"Node"),L(L"协议",L"Protocol"),L(L"评分",L"Score"),L"GO",L"YT",L"OPENAI",L"GPT",L"ANT",L(L"状态",L"State"),L(L"轮次",L"Round"),L(L"内核历史延迟",L"Core history latency")};
     for (int i = 0; i < 11; ++i) { LVCOLUMNW col{};
         col.mask = LVCF_TEXT;
@@ -272,6 +277,7 @@ void App::Theme() {
         SetWindowTextW(currentWindow,L(L"验证当前线路",L"Verify current route"));
         ShowCurrentPath(false);
     }
+    if(groupsWindow)ShowGroups(false);
 }
 void App::Layout() {
     RECT client{};
@@ -280,10 +286,11 @@ void App::Layout() {
     bool compact=width<Px(1000);
     int top=compact?Px(161):Px(122);
     MoveWindow(status,pad,Px(43),width,Px(24),TRUE);
-    MoveWindow(search,pad,Px(78),compact?width:std::max(Px(100),width-Px(878)),Px(29),TRUE);
-    int x=compact?pad:std::max(pad+Px(110),static_cast<int>(client.right)-pad-Px(864));
-    int slot=compact?std::max(1,(width-Px(42))/8):Px(102);
-    int buttons[]={View,Refresh,TestAll,TestSelected,VerifyCurrent,Cancel,Settings,Details};
+    int buttons[]={View,Refresh,TestAll,TestSelected,VerifyCurrent,Cancel,Groups,Settings,Details};
+    int slot=compact?std::max(1,(width-8*Px(6))/9):Px(94);
+    int strip=9*slot+8*Px(6);
+    MoveWindow(search,pad,Px(78),compact?width:std::max(Px(70),width-strip-Px(10)),Px(29),TRUE);
+    int x=compact?pad:pad+width-strip;
     for(int id:buttons){MoveWindow(GetDlgItem(window,id),x,compact?Px(117):Px(78),slot,Px(29),TRUE);
         x+=slot+Px(6);
     }
@@ -455,7 +462,13 @@ bool App::Event(const Json& value) {
     if (kind==L"error") { message=L(L"CLI 无法完成操作，请检查配置与身份文件",L"CLI could not complete. Check profile and identity files");
         return true;
     }
-    if (kind==L"kernel") return true;
+    if (kind==L"kernel") { groups.clear(); return true; }
+    if (kind==L"group") {
+        auto name=string(value,"name"), type=string(value,"type");
+        if (!name.empty() && !type.empty() && groups.size()<2005)
+            groups.push_back({std::move(name),std::move(type),string(value,"selected")});
+        return true;
+    }
     if (kind!=L"node" && kind!=L"round") return false;
     std::wstring name=string(value,"node");
     if (name.empty() || name.size()>4096 || name.find_first_of(L"\r\n\t")!=std::wstring::npos) return false;
@@ -649,6 +662,7 @@ void App::Drain() {
     if (changed) { Filter();
         Update();
         if(currentWindow)ShowCurrentPath(false);
+        if(groupsWindow)ShowGroups(false);
         if(details) ShowDetails();
     }
     if (WaitForSingleObject(process,0)==WAIT_OBJECT_0) {
@@ -792,6 +806,23 @@ void App::ShowCurrentPath(bool show) {
     SetWindowTextW(currentText,CurrentPathReport().c_str());
     if(show)ShowWindow(currentWindow,SW_SHOW);
 }
+void App::ShowGroups(bool show) {
+    if(!groupsWindow){
+        groupsWindow=CreateWindowExW(0,L"ProxyPartner.NativeAux",L"",WS_OVERLAPPEDWINDOW,
+            CW_USEDEFAULT,CW_USEDEFAULT,Px(630),Px(465),window,nullptr,instance,nullptr);
+        if(!groupsWindow)return;
+        groupsText=Child(groupsWindow,L"EDIT",L"",1,ES_MULTILINE|ES_READONLY|ES_AUTOVSCROLL|WS_VSCROLL);
+        RECT rect{};GetClientRect(groupsWindow,&rect);
+        MoveWindow(groupsText,10,10,rect.right-20,rect.bottom-20,TRUE);
+    }
+    SetWindowTextW(groupsWindow,L(L"Mihomo 策略组",L"Mihomo policy groups"));
+    std::wstring report=L(L"策略组当前选择 · 来自最后一次 Mihomo 只读快照\r\n\r\n",L"Policy group selections from the latest read-only Mihomo snapshot\r\n\r\n");
+    if(groups.empty())report+=L(L"暂无策略组数据",L"No policy group data");
+    for(const auto& group:groups)
+        report+=group.name+L" · "+group.type+L" · "+(group.selected.empty()?L"—":group.selected)+L"\r\n";
+    SetWindowTextW(groupsText,report.c_str());
+    if(show)ShowWindow(groupsWindow,SW_SHOW);
+}
 void App::ShowDetails() {
     if(selected<0 || selected>=static_cast<int>(nodes.size())) return;
     if(!details) {
@@ -813,9 +844,9 @@ void App::ShowDetails() {
     ShowWindow(details,SW_SHOW);
 }
 LRESULT CALLBACK AuxProc(HWND hwnd,UINT msg,WPARAM w,LPARAM l) {
-    if(msg==WM_SIZE && (hwnd==app.details || hwnd==app.currentWindow)) { RECT r{};
+    if(msg==WM_SIZE && (hwnd==app.details || hwnd==app.currentWindow || hwnd==app.groupsWindow)) { RECT r{};
         GetClientRect(hwnd,&r);
-        MoveWindow(hwnd==app.details?app.detailText:app.currentText,10,10,r.right-20,r.bottom-20,TRUE);
+        MoveWindow(GetDlgItem(hwnd,1),10,10,r.right-20,r.bottom-20,TRUE);
         return 0;
     }
     if(msg==WM_CLOSE){DestroyWindow(hwnd);
@@ -823,6 +854,7 @@ LRESULT CALLBACK AuxProc(HWND hwnd,UINT msg,WPARAM w,LPARAM l) {
     }
     if(msg==WM_DESTROY){if(hwnd==app.settings)app.settings=nullptr;
         else if(hwnd==app.currentWindow)app.currentWindow=app.currentText=nullptr;
+        else if(hwnd==app.groupsWindow)app.groupsWindow=app.groupsText=nullptr;
         else app.details=app.detailText=nullptr;
         return 0;
     }
@@ -1061,6 +1093,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd,UINT msg,WPARAM w,LPARAM l) {
             case TestSelected:if(app.selected>=0 && app.selected<static_cast<int>(app.nodes.size()))app.Start(false,app.nodes[app.selected].name);
             break;
             case VerifyCurrent:app.Start(false,{},true);app.ShowCurrentPath();break;
+            case Groups:app.ShowGroups();break;
             case Cancel:app.message=app.L(L"测速已取消，已完成结果保留",L"Test cancelled. Completed results retained");
             app.Finish(true);
             break;
@@ -1193,6 +1226,7 @@ int WINAPI wWinMain(HINSTANCE instance,HINSTANCE,PWSTR,int) {
     for(int id=View;id<=Details;++id)Child(app.window,L"BUTTON",L"",id,WS_TABSTOP|BS_OWNERDRAW);
     Child(app.window,L"BUTTON",L"",TestSelected,WS_TABSTOP|BS_OWNERDRAW);
     Child(app.window,L"BUTTON",L"",VerifyCurrent,WS_TABSTOP|BS_OWNERDRAW);
+    Child(app.window,L"BUTTON",L"",Groups,WS_TABSTOP|BS_OWNERDRAW);
     app.table=Child(app.window,WC_LISTVIEWW,L"",List,LVS_REPORT|LVS_OWNERDATA|LVS_SHOWSELALWAYS|WS_TABSTOP);
     ListView_SetExtendedListViewStyle(app.table,LVS_EX_FULLROWSELECT|LVS_EX_DOUBLEBUFFER);
     int widths[]={230,95,75,105,105,125,115,105,135,70,150};
@@ -1232,6 +1266,7 @@ int WINAPI wWinMain(HINSTANCE instance,HINSTANCE,PWSTR,int) {
     while(GetMessageW(&message,nullptr,0,0)>0){if(app.preferencesWindow && IsDialogMessageW(app.preferencesWindow,&message))continue;
         if(app.settings && IsDialogMessageW(app.settings,&message))continue;
         if(app.currentWindow && IsDialogMessageW(app.currentWindow,&message))continue;
+        if(app.groupsWindow && IsDialogMessageW(app.groupsWindow,&message))continue;
         if(IsDialogMessageW(app.window,&message))continue;
         TranslateMessage(&message);
         DispatchMessageW(&message);

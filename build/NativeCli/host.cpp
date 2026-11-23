@@ -332,7 +332,13 @@ NativeHost read_native_host(std::wstring_view configuredPipe, CurrentHostAccess*
     for (auto item = roster->begin(); item != roster->end(); ++item) {
         const auto& entry = item.value();
         if (!entry.is_object()) continue;
+        const auto type = text(entry, "type");
+        const auto members = entry.find("all");
         if (item.key() == "GLOBAL") output.current = text(entry, "now");
+        if (!type.empty() && item.key().size() <= 4096 && members != entry.end() && members->is_array() && !members->empty()) {
+            auto selected = text(entry, "now");
+            output.groups.push_back({item.key(), type, std::move(selected)});
+        }
         const auto history = entry.find("history");
         if (history == entry.end() || !history->is_array() || history->empty()) continue;
         const auto& sample = history->back();
@@ -342,7 +348,6 @@ NativeHost read_native_host(std::wstring_view configuredPipe, CurrentHostAccess*
         if (delay == sample.end() || !delay->is_number_integer() || !valid_time(observed)) continue;
         const auto value = delay->get<int64_t>();
         if (value <= 0 || value >= 65535) continue;
-        const auto type = text(entry, "type");
         if (!type.empty()) output.samples.emplace(std::make_pair(item.key(), type), NativeSample{static_cast<int>(value),std::move(observed)});
     }
     output.version = version;

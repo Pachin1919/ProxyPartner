@@ -4,13 +4,16 @@
 #include <string>
 #include <string_view>
 #include <functional>
+#include <vector>
 #include "current_path.hpp"
 
 struct NativeSample { int delay; std::string observed; };
+struct NativeGroup { std::string name, type, selected; };
 struct NativeHost {
     const char* state = "HostUnavailable";
     std::string version, current;
     std::map<std::pair<std::string, std::string>, NativeSample> samples;
+    std::vector<NativeGroup> groups;
 };
 struct CurrentHostAccess {
     std::set<std::string> leaves;

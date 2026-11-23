@@ -14,6 +14,7 @@ user's LocalAppData\ProxyPartner\NativeDesktop\preferences.json.
 
 Startup inspects the profile, then runs the first independent node sweep. Refresh
 reloads the catalog and starts a new sweep. Use Test all / Test selected to retest.
+Groups lists the selections from the latest read-only Mihomo snapshot.
 Cancel stops the owned CLI process tree and retains already received results.
 Closing the window hides it in the tray. The tray menu opens the window or exits.
 Use --tray to start hidden. The CLI performs the actual network requests and scoring.

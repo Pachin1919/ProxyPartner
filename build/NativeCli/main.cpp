@@ -693,8 +693,11 @@ int wmain(int argc, wchar_t** argv) {
     Resolver resolver(profile->dns);
     Stats stats;
     const auto host = options->kernel ? read_native_host(wide(profile->pipe)) : NativeHost{};
-    if (options->kernel) write_event({{"event","kernel"},{"state",host.state},{"version",host.version},
-        {"globalSelection",host.current}});
+    if (options->kernel) {
+        write_event({{"event","kernel"},{"state",host.state},{"version",host.version},{"globalSelection",host.current}});
+        for (const auto& group : host.groups)
+            write_event({{"event","group"},{"name",group.name},{"type",group.type},{"selected",group.selected}});
+    }
     std::array<Budget, 3> budgets{Budget(options->timeout), Budget(options->timeout), Budget(options->timeout)};
     std::vector<const Node*> queue;
     for (const auto& node : profile->nodes) {

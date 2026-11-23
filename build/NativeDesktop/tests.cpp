@@ -169,6 +169,10 @@ int wmain(int argc,wchar_t** argv) {
     Check(!app.Event(Json::array()),"Reject invalid root");
     Check(!app.Event(Json{{"event","node"},{"node","invalid\nnode"}}),"Reject multiline name");
     Check(app.Event(Json{{"event","catalog"},{"nodes",2}}),"Catalog");
+    Check(app.Event(Json{{"event","kernel"},{"state","ConnectedPipe"}}) &&
+        app.Event(Json{{"event","group"},{"name",Utf8(L"策略组")},{"type","Selector"},{"selected",Utf8(L"香港节点")}}) &&
+        app.groups.size()==1 && app.groups.front().selected==L"香港节点" && app.nodes.empty(),"Policy groups stay outside the test roster");
+    Check(app.Event(Json{{"event","kernel"},{"state","HostUnavailable"}}) && app.groups.empty(),"New host snapshot replaces policy groups");
     Check(app.Event(Json{{"event","node"},{"node",Utf8(L"香港节点")},{"protocol","ss"},{"state","probing"}}),"Node probing");
     Check(app.nodes.size()==1 && app.nodes[0].probing && app.nodes[0].sites[4].active,"All five pending sites");
     Json sites=Json::array();
